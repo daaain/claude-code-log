@@ -1654,6 +1654,7 @@ class HtmlRenderer(Renderer):
         # allocate, and a fragment can only exist because a prior pass this
         # conversion already wrote (or placeholdered) that file.
         fragment_store = self.fragment_store
+        from .utils import footnote_scope
 
         def visit(msg: TemplateMessage) -> None:
             # Store key = source-entry identity + a signature of the
@@ -1666,6 +1667,7 @@ class HtmlRenderer(Renderer):
             # the key gives each variant its own slot instead of letting
             # one tree's render leak into another's output.
             fragment_key = None
+            stable = None
             if fragment_store is not None and msg.content.fragment_key is not None:
                 # The stamped key carries id(entry); translate it to the
                 # entry's master-list ordinal so the key means the same
@@ -1694,8 +1696,18 @@ class HtmlRenderer(Renderer):
             else:
                 # Update current message ID for timing tracking
                 set_timing_var("_current_msg_id", msg.message_id)
-                title = self.title_content(msg)
-                html = self.format_content(msg)
+                # Footnote ids are scoped to the message (utils.footnote_scope):
+                # by its store key, which every tree and pass agrees on, so a
+                # reused fragment never repeats a fresh one's ids; else by its
+                # index in this tree, unique on the page it renders.
+                scope = (
+                    f"e{stable[0]}-{stable[1]}"
+                    if stable is not None
+                    else f"m{msg.message_index}"
+                )
+                with footnote_scope(scope):
+                    title = self.title_content(msg)
+                    html = self.format_content(msg)
                 formatted_ts = format_timestamp(
                     msg.meta.timestamp if msg.meta else None
                 )

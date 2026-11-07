@@ -31,7 +31,10 @@ from ..models import (
     UserTextMessage,
 )
 from .tool_formatters import render_params_table
+from contextlib import nullcontext
+
 from .utils import (
+    footnote_subscope,
     is_well_formed_html,
     escape_html,
     render_collapsible_code,
@@ -263,7 +266,7 @@ def format_user_text_model_content(
     formatter = image_formatter or format_image_content
     parts: list[str] = []
 
-    for item in content.items:
+    for index, item in enumerate(content.items):
         if isinstance(item, IdeNotificationContent):
             notifications = format_ide_notification_content(item)
             parts.extend(notifications)
@@ -272,9 +275,11 @@ def format_user_text_model_content(
         elif isinstance(item, ImageContent):
             parts.append(formatter(item))
         else:  # TextContent
-            # Regular user text as preformatted
+            # Regular user text as preformatted; a second text item's
+            # footnote ids get a suffix of their own (utils.footnote_scope).
             if item.text.strip():
-                parts.append(format_user_text_content(item.text))
+                with footnote_subscope(f"i{index}") if index else nullcontext():
+                    parts.append(format_user_text_content(item.text))
 
     return "\n".join(parts)
 
@@ -420,7 +425,7 @@ def format_workflow_sidechannel_user_content(
 
     formatter = image_formatter or format_image_content
     parts: list[str] = []
-    for item in content.items:
+    for index, item in enumerate(content.items):
         if isinstance(item, IdeNotificationContent):
             parts.extend(format_ide_notification_content(item))
         elif isinstance(item, SystemReminderContent):
@@ -429,7 +434,8 @@ def format_workflow_sidechannel_user_content(
             parts.append(formatter(item))
         else:  # TextContent
             if item.text.strip():
-                parts.append(format_workflow_sidechannel_user_text(item.text))
+                with footnote_subscope(f"i{index}") if index else nullcontext():
+                    parts.append(format_workflow_sidechannel_user_text(item.text))
     return "\n".join(parts)
 
 

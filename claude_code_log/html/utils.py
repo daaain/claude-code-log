@@ -13,6 +13,8 @@ The functions here transform format-neutral TemplateMessage data into
 HTML-specific output.
 """
 
+import contextlib
+import contextvars
 import functools
 import html
 import json
@@ -22,6 +24,7 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
+from collections.abc import Iterator
 from urllib.parse import urlsplit
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -608,7 +611,7 @@ def render_markdown_document(text: str, user: bool = False) -> str:
     memo_key = ("document", current_render_repo_cwd(), text)
     cached = markdown_cache.get(memo_key)
     if cached is not None:
-        return cached
+        return _scoped(cached)
     with timing_stat("_markdown_timings"):
         renderer = _get_document_markdown_renderer()
         root = renderer.parse(text)
@@ -617,7 +620,61 @@ def render_markdown_document(text: str, user: bool = False) -> str:
         if "frontmatter" in data:
             body = _frontmatter_html(data["frontmatter"]) + body
     markdown_cache.put(memo_key, body)
-    return body
+    return _scoped(body)
+
+
+# Footnote ids are scoped per message. wenmode gives every rendered body the
+# same GitHub-style ids (``user-content-fn-1``, ``user-content-fnref-1``, the
+# ``footnote-label`` heading), and a page holds many bodies: without a scope
+# the second answer's ``[1]`` jumps to the first answer's note. The HTML
+# renderer sets the scope around each message's formatting; the ids are
+# rewritten after the memoized render, so the memo stays keyed on the text.
+_footnote_scope: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_footnote_scope", default=None
+)
+# Only the attribute values wenmode emits (`id="…"`, `href="#…"`,
+# `aria-describedby="…"`): a body that merely mentions an id in a code span
+# or a fence must keep it verbatim.
+_FOOTNOTE_ID_RE = re.compile(r'((?:id|href)="#?user-content-fn(?:ref)?-)')
+_FOOTNOTE_LABEL_RE = re.compile(r'((?:id|aria-describedby)="footnote-label)"')
+
+
+@contextlib.contextmanager
+def footnote_scope(scope: Optional[str]) -> Iterator[None]:
+    """Scope the footnote ids of every Markdown rendered inside the block.
+
+    ``scope`` is an id-safe token unique to the message on its page (the HTML
+    renderer passes its fragment-store key, else its message index); None
+    leaves the ids as wenmode emits them.
+    """
+    token = _footnote_scope.set(scope)
+    try:
+        yield
+    finally:
+        _footnote_scope.reset(token)
+
+
+@contextlib.contextmanager
+def footnote_subscope(suffix: str) -> Iterator[None]:
+    """A nested scope inside the message's: for a second render of the same
+    text (a preview), or a second text item of the message, so their ids do
+    not repeat the first's on the same card. A no-op outside a scope."""
+    scope = _footnote_scope.get()
+    with footnote_scope(None if scope is None else f"{scope}-{suffix}"):
+        yield
+
+
+def scope_footnote_ids(html: str, scope: str) -> str:
+    """Insert ``scope`` into wenmode's footnote ids, hrefs and labels."""
+    if "user-content-fn" not in html:
+        return html
+    html = _FOOTNOTE_ID_RE.sub(lambda m: f"{m.group(1)}{scope}-", html)
+    return _FOOTNOTE_LABEL_RE.sub(lambda m: f'{m.group(1)}-{scope}"', html)
+
+
+def _scoped(html: str) -> str:
+    scope = _footnote_scope.get()
+    return html if scope is None else scope_footnote_ids(html, scope)
 
 
 def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
@@ -639,7 +696,7 @@ def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
     memo_key = (escaping_user_renderer, current_render_repo_cwd(), text)
     cached = markdown_cache.get(memo_key)
     if cached is not None:
-        return cached
+        return _scoped(cached)
 
     # Track markdown rendering time if enabled
     with timing_stat("_markdown_timings"):
@@ -650,7 +707,7 @@ def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
         )
         rendered = renderer.render(text)
     markdown_cache.put(memo_key, rendered)
-    return rendered
+    return _scoped(rendered)
 
 
 def render_markdown(text: str) -> str:
@@ -860,7 +917,8 @@ def _markdown_collapsible(
     if len(lines) > preview_line_count:
         preview_text += "\n\n..."
     # Render truncated markdown (produces valid HTML with proper tag closure)
-    preview_html = render_fn(preview_text)
+    with footnote_subscope("preview"):
+        preview_html = render_fn(preview_text)
 
     collapsible = render_collapsible_code(
         preview_html, rendered_html, len(lines), is_markdown=True
@@ -919,8 +977,10 @@ def render_markdown_preview(
         return render_markdown_collapsible(text, css_class)
     preview_lines = _preview_source(text).splitlines()
     preview = "\n".join([line for line in preview_lines if line.strip()][:2])
+    with footnote_subscope("preview"):
+        preview_html = render_markdown(preview)
     collapsible = render_collapsible_code(
-        render_markdown(preview),
+        preview_html,
         render_markdown_document(text),
         len(lines),
         is_markdown=True,

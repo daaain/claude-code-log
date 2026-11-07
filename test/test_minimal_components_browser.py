@@ -680,16 +680,22 @@ class TestFootnotes:
         assert all(gap >= 3 for gap in box["gaps"]), box["gaps"]
 
     @pytest.mark.parametrize(
-        "anchor, key",
+        "selector, key",
         [
-            ("user-content-fn-2", "noteBackgrounds"),
-            ("user-content-fnref-2", "refBackgrounds"),
+            ("section.footnotes li", "noteBackgrounds"),
+            ("sup > a[data-footnote-ref]", "refBackgrounds"),
         ],
     )
     def test_the_target_is_marked_and_clear_of_the_toolbar(
-        self, page: Page, tmp_path: Path, anchor: str, key: str
+        self, page: Page, tmp_path: Path, selector: str, key: str
     ) -> None:
         url = _render(tmp_path, _footnotes_fixture(tmp_path)).as_uri()
+        page.goto(url)
+        # The ids are the message's own (scoped per message), so read the
+        # second note's or reference's id off the page rather than spelling
+        # wenmode's out.
+        anchor = page.locator(selector).nth(1).get_attribute("id")
+        assert anchor, selector
         page.goto(f"{url}#{anchor}")
         box = page.evaluate(FOOTNOTES_BOX)
         first, second, third = box[key]
@@ -739,3 +745,42 @@ def test_a_list_inside_a_note_keeps_the_look_of_a_body_list(
     assert box["noteMarginTops"][1] >= 3, box
     assert box["innerListMarginTop"] >= 3, box
     assert box["innerItemMarginTops"] == [0, 0], box
+
+
+def _two_footnoted_answers(tmp_path: Path) -> Path:
+    note = "Claim[^1].\n\n[^1]: Note of answer {}.\n"
+    entries = [
+        _entry("u1", None, "user", [{"type": "text", "text": "One."}]),
+        _entry(
+            "a12", "u1", "assistant", [{"type": "text", "text": note.format("ONE")}]
+        ),
+        _entry("u123", "a12", "user", [{"type": "text", "text": "Two."}]),
+        _entry(
+            "a1234", "u123", "assistant", [{"type": "text", "text": note.format("TWO")}]
+        ),
+    ]
+    src = tmp_path / "two-notes.jsonl"
+    src.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return src
+
+
+@pytest.mark.browser
+class TestFootnoteIds:
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_a_reference_leads_to_its_own_answers_note_and_back(
+        self, page: Page, tmp_path: Path, theme: str
+    ) -> None:
+        """Two answers each with ``[^1]``: the second answer's reference must
+        land on the second answer's note, and its ↩ back on that reference."""
+        page.goto(_render(tmp_path, _two_footnoted_answers(tmp_path), theme).as_uri())
+        refs = page.locator("sup > a[data-footnote-ref]")
+        assert refs.count() == 2
+        refs.nth(1).click()
+        assert "TWO" in page.evaluate(
+            "() => document.querySelector(':target').textContent"
+        )
+        page.locator(":target a.data-footnote-backref").click()
+        assert page.evaluate(
+            """() => document.querySelector(':target')
+                     === document.querySelectorAll('sup > a[data-footnote-ref]')[1]"""
+        )

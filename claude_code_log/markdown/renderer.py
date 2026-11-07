@@ -514,6 +514,62 @@ class MarkdownRenderer(Renderer):
         sid = message.meta.session_id if message.meta else ""
         return self._teammate_colors_by_session.get(sid, {})
 
+    _FOOTNOTE_DEFINITION_RE = re.compile(r"^[ \t]*\[\^([^\]\s]+)\]:", re.MULTILINE)
+    # Fenced blocks and code spans, left as written: a regex sample `[^abc]`
+    # or a definition shown in a fence is not a footnote. Fences as
+    # CommonMark reads them: three or more backticks or tildes, indented up
+    # to three spaces, closed by at least as many of the same
+    # character — or by the end of the text when never closed. A backtick
+    # opener's info string holds no backtick, so a line starting with a
+    # ```x``` span is a span, not a fence that swallows the rest.
+    _CODE_RE = re.compile(
+        r"(?ms)^ {0,3}(?P<bt>`{3,})[^`\n]*\n.*?(?:^ {0,3}(?P=bt)`*[ \t]*$|\Z)"
+        r"|^ {0,3}(?P<td>~{3,})[^\n]*\n.*?(?:^ {0,3}(?P=td)~*[ \t]*$|\Z)"
+        r"|`+[^`\n]+`+"
+    )
+
+    def _scope_footnotes(
+        self, text: str, message: Optional[TemplateMessage], item_index: int = 0
+    ) -> str:
+        """Prefix a message's footnote labels with its index on the page.
+
+        Every message's Markdown is written into one document, so two
+        answers each defining ``[^1]`` would share a label and a reader's
+        renderer would pair every ``[^1]`` with one of the notes. Only the
+        labels the text defines are rewritten, and only outside code; a text
+        that defines no footnote is left alone. A second text item of the
+        message gets a suffix of its own.
+        """
+        index = message.message_index if message is not None else None
+        if index is None or "[^" not in text:
+            return text
+        prose = [(span.start(), span.end()) for span in self._CODE_RE.finditer(text)]
+        pieces: list[tuple[bool, str]] = []  # (is_code, piece)
+        last = 0
+        for start, end in prose:
+            pieces.append((False, text[last:start]))
+            pieces.append((True, text[start:end]))
+            last = end
+        pieces.append((False, text[last:]))
+        labels = {
+            label
+            for is_code, piece in pieces
+            if not is_code
+            for label in self._FOOTNOTE_DEFINITION_RE.findall(piece)
+        }
+        if not labels:
+            return text
+        scope = f"m{index}" if not item_index else f"m{index}-i{item_index}"
+        pattern = re.compile(
+            r"\[\^(" + "|".join(re.escape(label) for label in sorted(labels)) + r")\]"
+        )
+        return "".join(
+            piece
+            if is_code
+            else pattern.sub(lambda m: f"[^{scope}-{m.group(1)}]", piece)
+            for is_code, piece in pieces
+        )
+
     def _quote(self, text: str) -> str:
         """Prefix each line with '> ' to create a blockquote.
 
@@ -703,12 +759,13 @@ class MarkdownRenderer(Renderer):
         """Extract text content from a message for excerpt generation."""
         content = msg.content
         if isinstance(content, ThinkingMessage):
-            return content.thinking
+            return self._scope_footnotes(content.thinking, msg)
         if isinstance(content, (AssistantTextMessage, UserTextMessage)):
-            # Get first text item
-            for item in content.items:
+            # The first text item, its footnote labels scoped as in its body
+            # so an excerpt's reference still resolves.
+            for index, item in enumerate(content.items):
                 if isinstance(item, TextContent) and item.text.strip():
-                    return item.text
+                    return self._scope_footnotes(item.text, msg, index)
         return ""
 
     # -------------------------------------------------------------------------
@@ -874,7 +931,7 @@ class MarkdownRenderer(Renderer):
     # -------------------------------------------------------------------------
 
     def format_UserTextMessage(
-        self, content: UserTextMessage, _: TemplateMessage
+        self, content: UserTextMessage, message: TemplateMessage
     ) -> str:
         """Format → user text as Markdown when clean, else fenced code.
 
@@ -890,7 +947,7 @@ class MarkdownRenderer(Renderer):
         path's ``escape=True`` safety posture.
         """
         parts: list[str] = []
-        for item in content.items:
+        for index, item in enumerate(content.items):
             if isinstance(item, SystemReminderContent):
                 # Blockquote each reminder so extracting it out of the text does
                 # not drop content that previously rendered inline in Markdown.
@@ -915,6 +972,7 @@ class MarkdownRenderer(Renderer):
                         # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
                         frontmatter, body = self._split_frontmatter(item.text)
+                        body = self._scope_footnotes(body, message, index)
                         parts.append(
                             frontmatter + _protect_html_tags(self._linkify_shas(body))
                         )
@@ -1082,11 +1140,11 @@ class MarkdownRenderer(Renderer):
     # -------------------------------------------------------------------------
 
     def format_AssistantTextMessage(
-        self, content: AssistantTextMessage, _: TemplateMessage
+        self, content: AssistantTextMessage, message: TemplateMessage
     ) -> str:
         """Format → blockquoted text."""
         parts: list[str] = []
-        for item in content.items:
+        for index, item in enumerate(content.items):
             if isinstance(item, ImageContent):
                 parts.append(self._format_image(item))
             else:  # TextContent
@@ -1096,11 +1154,12 @@ class MarkdownRenderer(Renderer):
                     # the natural text shape (a leading "> " would
                     # confuse the word-boundary regex anchor).
                     frontmatter, body = self._split_frontmatter(item.text)
+                    body = self._scope_footnotes(body, message, index)
                     parts.append(self._quote(frontmatter + self._linkify_shas(body)))
         return "\n\n".join(parts)
 
     def format_ThinkingMessage(
-        self, content: ThinkingMessage, _: TemplateMessage
+        self, content: ThinkingMessage, message: TemplateMessage
     ) -> str:
         """Format → <details><summary>Thinking...</summary>blockquote</details>."""
         # SHA-linkify before quoting so the substitution sees a clean
@@ -1108,7 +1167,9 @@ class MarkdownRenderer(Renderer):
         # anchor) and parity with the HTML side — assistant thinking
         # there flows through the wenmode pipeline, whose SHA-link
         # transform does the same job.
-        quoted = self._quote(self._linkify_shas(content.thinking))
+        quoted = self._quote(
+            self._linkify_shas(self._scope_footnotes(content.thinking, message))
+        )
         return self._collapsible("Thinking...", quoted)
 
     def format_UnknownMessage(self, content: UnknownMessage, _: TemplateMessage) -> str:
