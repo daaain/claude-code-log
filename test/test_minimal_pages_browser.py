@@ -93,8 +93,10 @@ def _no_sideways_scroll(page: Page) -> None:
 
 def _search(page: Page, server: Any, query: str) -> None:
     page.goto(f"{server.url}/search.html?q={query}")
-    page.wait_for_selector("#app[data-ready]", timeout=10000)
-    page.wait_for_selector(".search-result-item.mn-hit", timeout=10000)
+    # On the expect budget (conftest raises it for starved runners), not a
+    # hard 10 s: a slow cell once lost this wait with nothing wrong.
+    expect(page.locator("#app[data-ready]")).to_be_attached()
+    expect(page.locator(".search-result-item.mn-hit").first).to_be_visible()
 
 
 @pytest.mark.browser

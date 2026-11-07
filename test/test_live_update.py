@@ -154,6 +154,14 @@ def _wait_for(page, expression: str, timeout: int = 30000) -> None:
     page.wait_for_function(expression, timeout=timeout)
 
 
+# Scrolled to the end of the document (within a pixel, for fractional
+# offsets), which is where a follow scroll lands.
+_AT_PAGE_END = (
+    "() => { const s = document.scrollingElement;"
+    " return s.scrollTop >= s.scrollHeight - s.clientHeight - 1; }"
+)
+
+
 @pytest.mark.browser
 class TestLiveUpdate:
     def _open(self, page, base: str, project: Path):
@@ -244,12 +252,15 @@ class TestLiveUpdate:
         bar = page.locator(".fold-bar-section.fold-one-level").first
         assert bar.count() > 0, "fixture has nothing foldable"
         bar.click()
-        page.wait_for_timeout(200)
+        _wait_for(
+            page,
+            "() => [...document.querySelectorAll('.message-node > .children')]"
+            ".some(c => c.style.display === 'none')",
+        )
         folded = page.evaluate(
             "() => [...document.querySelectorAll('.message-node > .children')]"
             ".filter(c => c.style.display === 'none').length"
         )
-        assert folded > 0, "clicking the fold bar did not fold anything"
 
         with jsonl.open("a", encoding="utf-8") as f:
             f.write(_entry("live-5", "LIVE-MARKER-FIVE"))
@@ -571,12 +582,22 @@ class TestLiveUpdate:
         assert page.evaluate(
             "() => document.body.classList.contains('live-following')"
         ), "clicking the toggle did not engage follow mode"
+        # Engaging scrolls to the end of the page, smoothly, and so does
+        # the update below. Each is waited for where it lands, the end of
+        # the document, not for a guess at how long it takes and not for a
+        # `scrollend`, which the first scroll can still fire after the
+        # second has started (or at once, if there was nothing to scroll).
+        _wait_for(page, _AT_PAGE_END)
 
         with jsonl.open("a", encoding="utf-8") as f:
             f.write(_entry("follow-1", "FOLLOW-ONE"))
-        _wait_for(page, "() => document.body.innerText.includes('FOLLOW-ONE')")
-        # The scroll is smooth, so let it land.
-        page.wait_for_timeout(1200)
+        # With the new card in, the page is longer: at its end again only
+        # once the follow scroll has landed.
+        _wait_for(
+            page,
+            "() => document.body.innerText.includes('FOLLOW-ONE')"
+            f" && ({_AT_PAGE_END})()",
+        )
 
         gap = page.evaluate(
             "() => { const c = document.getElementById('transcript');"
