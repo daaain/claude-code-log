@@ -729,12 +729,22 @@
                 closeToolbarButton.addEventListener('click', toggleFilterToolbar);
             }
 
+            // The cards a filter toggle covers, through the same toggle map
+            // as applyFilter: "User" also counts the bash lines, "Tool" both
+            // tool types.
+            function toggleCardSelector(type, extra = '') {
+                const toggleGroups = window.timelineToggleGroups;
+                return (toggleGroups[type] || [type])
+                    .map(t => `.message.${t}:not(.session-header)${extra}`)
+                    .join(', ');
+            }
+
             // Count messages by type and update button labels
             function updateMessageCounts() {
-                const messageTypes = ['assistant', 'sidechain', 'memory', 'system', 'thinking', 'image'];
+                const messageTypes = ['user', 'system', 'assistant', 'thinking', 'tool', 'sidechain', 'memory', 'image'];
 
                 messageTypes.forEach(type => {
-                    const messages = document.querySelectorAll(`.message.${type}:not(.session-header)`);
+                    const messages = document.querySelectorAll(toggleCardSelector(type));
                     const count = messages.length;
                     const toggle = document.querySelector(`[data-type="${type}"]`);
                     const countSpan = toggle ? toggle.querySelector('.count') : null;
@@ -750,36 +760,6 @@
                         }
                     }
                 });
-
-                // Handle combined "user" filter (user + bash-input + bash-output)
-                const userMessages = document.querySelectorAll(`.message.user:not(.session-header), .message.bash-input:not(.session-header), .message.bash-output:not(.session-header)`);
-                const userCount = userMessages.length;
-                const userToggle = document.querySelector(`[data-type="user"]`);
-                const userCountSpan = userToggle ? userToggle.querySelector('.count') : null;
-
-                if (userCountSpan) {
-                    userCountSpan.textContent = `(${userCount})`;
-                    if (userCount === 0) {
-                        userToggle.style.display = 'none';
-                    } else {
-                        userToggle.style.display = 'flex';
-                    }
-                }
-
-                // Handle combined "tool" filter (tool_use + tool_result)
-                const toolMessages = document.querySelectorAll(`.message.tool_use:not(.session-header), .message.tool_result:not(.session-header)`);
-                const toolCount = toolMessages.length;
-                const toolToggle = document.querySelector(`[data-type="tool"]`);
-                const toolCountSpan = toolToggle ? toolToggle.querySelector('.count') : null;
-
-                if (toolCountSpan) {
-                    toolCountSpan.textContent = `(${toolCount})`;
-                    if (toolCount === 0) {
-                        toolToggle.style.display = 'none';
-                    } else {
-                        toolToggle.style.display = 'flex';
-                    }
-                }
             }
 
             // Filter functionality
@@ -788,18 +768,13 @@
                     .filter(toggle => toggle.classList.contains('active'))
                     .map(toggle => toggle.dataset.type);
 
-                // Expand filter types to their corresponding CSS classes
-                const expandedTypes = [];
-                activeTypes.forEach(type => {
-                    if (type === 'tool') {
-                        expandedTypes.push('tool_use', 'tool_result');
-                    } else if (type === 'user') {
-                        // User filter includes bash commands (user-initiated)
-                        expandedTypes.push('user', 'bash-input', 'bash-output');
-                    } else {
-                        expandedTypes.push(type);
-                    }
-                });
+                // Expand filter types to their corresponding CSS classes,
+                // through the map the timeline filters its groups by
+                // (timeline.html), so the two cannot disagree: "Tool" stands
+                // for both tool types, "User" also covers the user-initiated
+                // bash lines, and every other toggle its own type.
+                const toggleGroups = window.timelineToggleGroups;
+                const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
 
                 // Show/hide messages based on active toggle buttons
                 const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -849,11 +824,11 @@
             }
 
             function updateVisibleCounts() {
-                const messageTypes = ['assistant', 'sidechain', 'memory', 'system', 'thinking', 'image'];
+                const messageTypes = ['user', 'system', 'assistant', 'thinking', 'tool', 'sidechain', 'memory', 'image'];
 
                 messageTypes.forEach(type => {
-                    const visibleMessages = document.querySelectorAll(`.message.${type}:not(.session-header):not(.filtered-hidden)`);
-                    const totalMessages = document.querySelectorAll(`.message.${type}:not(.session-header)`);
+                    const visibleMessages = document.querySelectorAll(toggleCardSelector(type, ':not(.filtered-hidden)'));
+                    const totalMessages = document.querySelectorAll(toggleCardSelector(type));
                     const visibleCount = visibleMessages.length;
                     const totalCount = totalMessages.length;
 
@@ -875,52 +850,6 @@
                         }
                     }
                 });
-
-                // Handle combined "user" filter separately (includes bash messages)
-                const visibleUserMessages = document.querySelectorAll(`.message.user:not(.session-header):not(.filtered-hidden), .message.bash-input:not(.session-header):not(.filtered-hidden), .message.bash-output:not(.session-header):not(.filtered-hidden)`);
-                const totalUserMessages = document.querySelectorAll(`.message.user:not(.session-header), .message.bash-input:not(.session-header), .message.bash-output:not(.session-header)`);
-                const visibleUserCount = visibleUserMessages.length;
-                const totalUserCount = totalUserMessages.length;
-
-                const userToggle = document.querySelector(`[data-type="user"]`);
-                const userCountSpan = userToggle ? userToggle.querySelector('.count') : null;
-
-                if (userCountSpan && totalUserCount > 0) {
-                    const activeTypes = Array.from(filterToggles)
-                        .filter(toggle => toggle.classList.contains('active'))
-                        .map(toggle => toggle.dataset.type);
-
-                    const isFiltering = activeTypes.length < filterToggles.length;
-
-                    if (isFiltering && visibleUserCount !== totalUserCount) {
-                        userCountSpan.textContent = `(${visibleUserCount}/${totalUserCount})`;
-                    } else {
-                        userCountSpan.textContent = `(${totalUserCount})`;
-                    }
-                }
-
-                // Handle combined "tool" filter separately
-                const visibleToolMessages = document.querySelectorAll(`.message.tool_use:not(.session-header):not(.filtered-hidden), .message.tool_result:not(.session-header):not(.filtered-hidden)`);
-                const totalToolMessages = document.querySelectorAll(`.message.tool_use:not(.session-header), .message.tool_result:not(.session-header)`);
-                const visibleToolCount = visibleToolMessages.length;
-                const totalToolCount = totalToolMessages.length;
-
-                const toolToggle = document.querySelector(`[data-type="tool"]`);
-                const toolCountSpan = toolToggle ? toolToggle.querySelector('.count') : null;
-
-                if (toolCountSpan && totalToolCount > 0) {
-                    const activeTypes = Array.from(filterToggles)
-                        .filter(toggle => toggle.classList.contains('active'))
-                        .map(toggle => toggle.dataset.type);
-
-                    const isFiltering = activeTypes.length < filterToggles.length;
-
-                    if (isFiltering && visibleToolCount !== totalToolCount) {
-                        toolCountSpan.textContent = `(${visibleToolCount}/${totalToolCount})`;
-                    } else {
-                        toolCountSpan.textContent = `(${totalToolCount})`;
-                    }
-                }
             }
 
             function toggleFilter(button) {
