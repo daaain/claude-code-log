@@ -328,7 +328,10 @@ count describes them: instead of recording one,
 row (and of page 1's `html_pages` row, which shares the combined file's
 name) to -1, which no session or project matches, so the next
 unfiltered run re-renders it.
-The rows stay, so a paginated project keeps its page count. The cache's
+The rows stay, so a paginated project keeps its page count. JSON output
+has no `html_cache` row and goes by its own `version` field; a JSON file
+written from a window carries the window as `date_range`, and
+`JsonRenderer.is_outdated` reads such a file as outdated. The cache's
 pre-filter (`load_cached_entries_filtered`) and the renderer's cut
 (`filter_messages_by_date`) read a bound through one function,
 `utils.parse_date_bounds`, in UTC: a bound naming a whole day (`today`,

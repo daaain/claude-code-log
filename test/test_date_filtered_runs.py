@@ -113,6 +113,7 @@ SHAPES: Dict[str, Dict[str, Any]] = {
     "md-sessions": {"output_format": "md", "write_combined": False},
     "html-combined": {"output_format": "html"},
     "html-paginated": {"output_format": "html", "page_size": 4},
+    "json": {"output_format": "json"},
 }
 
 
@@ -218,6 +219,55 @@ def test_an_unfiltered_run_after_a_filtered_one_renders_everything(
         ext = SHAPES[shape]["output_format"]
         text = (project / f"session-sess-alpha.{ext}").read_text(encoding="utf-8")
         assert late in text
+
+
+def test_a_json_session_rendered_by_the_pool_from_a_window_is_rewritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A JSON file records its window itself, so a render worker must know
+    the window too: the same sequence, with the session files rendered in
+    the pool."""
+    from claude_code_log import render_dispatch
+    from claude_code_log import render_pool as render_pool_module
+    from claude_code_log.render_pool import RenderPool, RenderUnit
+
+    monkeypatch.setattr(render_dispatch, "_MIN_MESSAGES_FOR_RENDER_POOL", 0)
+    monkeypatch.setattr(render_dispatch, "_MIN_ENTRIES_FOR_RENDER_POOL", 0)
+    monkeypatch.setattr(
+        render_pool_module, "available_memory_bytes", lambda: 64 * 1024**3
+    )
+    dispatched: List[str] = []
+    original_submit = RenderPool.submit
+
+    def counting_submit(self: RenderPool, unit: RenderUnit) -> Any:
+        future = original_submit(self, unit)
+        if future is not None:
+            dispatched.append(unit.kind)
+        return future
+
+    monkeypatch.setattr(RenderPool, "submit", counting_submit)
+    project = _build_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+    def run(from_date: Optional[str] = None, to_date: Optional[str] = None) -> None:
+        convert_jsonl_to(
+            "json",
+            project,
+            from_date=from_date,
+            to_date=to_date,
+            silent=True,
+            render_jobs=2,
+        )
+
+    run()
+    dispatched.clear()
+    run(**FIRST_DAY)
+    # Controls: the pool rendered the windowed session files, without day two.
+    assert "session" in dispatched, "the pool never rendered"
+    assert _missing(project, "json") != [], "the window filtered nothing"
+
+    run()
+    assert _missing(project, "json") == []
 
 
 def _cold_build(

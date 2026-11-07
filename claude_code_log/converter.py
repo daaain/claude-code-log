@@ -4082,6 +4082,8 @@ def convert_jsonl_to(
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
         theme=theme,
+        from_date=from_date,
+        to_date=to_date,
     )
 
     # One fragment store per conversion, shared by the combined pages and
@@ -5196,6 +5198,8 @@ def _generate_individual_session_files(
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
         theme=theme,
+        from_date=from_date,
+        to_date=to_date,
     )
     if fragment_store is not None:
         from .html.renderer import HtmlRenderer as _HtmlRenderer
