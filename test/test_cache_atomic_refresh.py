@@ -809,6 +809,51 @@ def test_a_statement_left_active_over_the_overlay_does_not_break_the_scope(
     assert _spools(manager.db_path) == []
 
 
+@pytest.mark.parametrize(
+    "write_combined", [False, True], ids=["no-combined", "combined"]
+)
+def test_a_pass_heals_a_project_016_zeroed_whatever_it_writes(
+    project: Path, monkeypatch: pytest.MonkeyPatch, write_combined: bool
+) -> None:
+    """016's heal is "a zero total takes the full refresh on the next
+    run". A hierarchy pass only refreshes a project it plans work for,
+    and without the combined page, work meant modified files, stale
+    sessions or a theme change: a zeroed project stayed at zero
+    messages on the index until one of its files changed."""
+    from claude_code_log.migrations.runner import run_migrations
+
+    projects_dir = project.parent
+    db_path = projects_dir / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+
+    def run() -> None:
+        process_projects_hierarchy(
+            projects_dir, output_format="md", write_combined=write_combined, jobs=1
+        )
+
+    run()
+    # A healthy cache that 015 marked, as every upgrading cache is: no
+    # file modified, no session stale, only the flag.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN refresh_pending INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute("UPDATE projects SET refresh_pending = 1")
+        conn.execute("DELETE FROM _schema_version WHERE version = 16")
+    assert run_migrations(db_path) == 1
+
+    run()
+    data = _manager(project).get_cached_project_data()
+    assert data is not None
+    assert data.total_message_count == 4
+    assert {sid: s.message_count for sid, s in data.sessions.items()} == {
+        "sess-alpha": 2,
+        "sess-beta": 2,
+    }
+    index = (projects_dir / "index.md").read_text(encoding="utf-8")
+    assert "0 messages" not in index, index
+
+
 def test_a_leftover_spool_record_does_not_outlive_its_connection(
     project: Path,
 ) -> None:

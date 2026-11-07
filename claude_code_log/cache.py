@@ -3038,6 +3038,21 @@ class CacheManager:
 
         return modified
 
+    def cached_message_total(self) -> Optional[int]:
+        """The project's cached ``total_message_count``; None without a row.
+
+        One query, for a pass's plan: ``get_cached_project_data`` would
+        load every session row to answer the same question.
+        """
+        if self._project_id is None:
+            return None
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT total_message_count FROM projects WHERE id = ?",
+                (self._project_id,),
+            ).fetchone()
+        return int(row["total_message_count"]) if row else None
+
     def get_cached_project_data(self) -> Optional[ProjectCache]:
         """Get the cached project data if available."""
         if self._project_id is None:

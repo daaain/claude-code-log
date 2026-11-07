@@ -6457,6 +6457,18 @@ def _plan_project(
     else:
         combined_stale = True
 
+    # A populated project whose cached total is zero is a cache to
+    # refresh in full, as `ensure_fresh_cache` reads it (migration 016
+    # zeroes a project whose derived rows may predate its entries, to
+    # keep 015's heal); without this, a run that writes no combined
+    # output would never reach that refresh, since no file is modified
+    # and no session stale, and the index would count it at zero.
+    unrefreshed = (
+        cache_manager is not None
+        and bool(jsonl_files)
+        and cache_manager.cached_message_total() == 0
+    )
+
     # Determine if we need to do any work. With
     # `write_combined=False`, the combined-transcript file
     # isn't produced — its staleness / on-disk presence is
@@ -6467,6 +6479,7 @@ def _plan_project(
             bool(modified_files)
             or bool(stale_sessions)
             or combined_stale
+            or unrefreshed
             or not output_path.exists()
         )
     else:
@@ -6475,6 +6488,7 @@ def _plan_project(
         needs_work = (
             bool(modified_files)
             or bool(stale_sessions)
+            or unrefreshed
             or (
                 combined_ext == "html"
                 and generate_individual_sessions
