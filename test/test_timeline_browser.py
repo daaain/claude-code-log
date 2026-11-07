@@ -52,6 +52,47 @@ _TWO_FRAMES = (
     "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
 )
 
+# Rewrites the toggle map in place as timeline.html exports it, before the
+# timeline or the page filter reads it: tool_result moves from the "Tool"
+# toggle to the "Assistant" toggle.
+_MOVE_TOOL_RESULT_TO_ASSISTANT = """
+Object.defineProperty(window, 'timelineToggleGroups', {
+    configurable: true,
+    get() { return this.__toggleGroups; },
+    set(map) {
+        map.tool = ['tool_use'];
+        map.assistant = ['assistant', 'tool_result'];
+        this.__toggleGroups = map;
+    },
+});
+"""
+
+# Each timeline item is shown iff its card is: its group is on the timeline
+# and visible, and the item is not hidden one by one. Counts the items
+# compared per group, so a check that compared nothing reads as such.
+_PAGE_AND_TIMELINE_AGREE = """() => {
+    const tl = window.timeline;
+    const shownGroups = new Set(tl.groupsData.get()
+        .filter(g => g.visible !== false).map(g => g.id));
+    const cards = [...document.querySelectorAll('.message:not(.session-header)')];
+    const problems = [];
+    const compared = {};
+    tl.itemsData.get().forEach(item => {
+        const el = cards[item.id];
+        if (!el) { problems.push('item without a card: ' + item.id); return; }
+        const cardShown = !el.classList.contains('filtered-hidden')
+            && !el.classList.contains('search-hidden');
+        const itemShown = shownGroups.has(item.group)
+            && !(item.className || '').split(/\\s+/).includes('timeline-filtered-hidden');
+        compared[item.group] = (compared[item.group] || 0) + 1;
+        if (cardShown !== itemShown) {
+            problems.push((cardShown ? 'page shows, timeline hides ' : 'page hides, timeline shows ')
+                + el.id + ' (' + item.group + ')');
+        }
+    });
+    return { problems, compared };
+}"""
+
 
 def _wait_for_filters(page: Page) -> None:
     """After a filter toggle (or Select All/None) click: the timeline's groups
@@ -945,6 +986,62 @@ class TestTimelineBrowser:
         _wait_for_filters(page)
         assert page.evaluate(count_items, tool_kinds) == tools_before
         assert page.evaluate(count_items, side_kinds) == side_before
+
+    @pytest.mark.browser
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_page_filter_expands_toggles_through_the_timelines_map(
+        self, page: Page, theme: str
+    ):
+        """The page filter and the timeline read one toggle map (#395).
+
+        The map is rewritten as the page exports it, before either reads it:
+        tool_result moves from the "Tool" toggle to the "Assistant" toggle.
+        With Assistant off and Tool on, the timeline hides the tool_result
+        group; a page filter with a copy of its own would still show the
+        tool_result cards, and the two would disagree.
+        """
+        messages = load_transcript(Path("test/test_data/representative_messages.jsonl"))
+        with tempfile.NamedTemporaryFile(
+            suffix=".html", delete=False, dir=self.temp_dir
+        ) as f:
+            temp_file = Path(f.name)
+        html = generate_html(
+            messages, "Toggle Map", theme=theme, output_dir=temp_file.parent
+        )
+        temp_file.write_text(html, encoding="utf-8")
+        self.temp_files.append(temp_file)
+
+        page.add_init_script(_MOVE_TOOL_RESULT_TO_ASSISTANT)
+        page.goto(f"file://{temp_file}")
+        # The rewrite reached the map both sides read.
+        assert page.evaluate(
+            "() => [window.timelineToggleGroups.tool, window.timelineToggleGroups.assistant]"
+        ) == [["tool_use"], ["assistant", "tool_result"]]
+        page.locator("#toggleTimeline").click()
+        self._wait_for_timeline_loaded(page)
+        _wait_for_timeline_groups(page)
+
+        moved_cards = "#transcript .message.tool_result:not(.sidechain)"
+        assert page.locator(moved_cards).count() > 0
+
+        page.locator("#filterMessages").click()
+        page.locator('.filter-toggle[data-type="assistant"]').click()
+        _wait_for_filters(page)
+
+        # The page and the timeline agree, item by item, the moved group
+        # included.
+        agreement = page.evaluate(_PAGE_AND_TIMELINE_AGREE)
+        assert agreement["problems"] == [], agreement["problems"][:10]
+        assert agreement["compared"].get("tool_result", 0) > 0, agreement
+        assert agreement["compared"].get("tool_use", 0) > 0, agreement
+        # And the page follows the map: no Tool toggle covers tool_result now.
+        assert set(
+            page.evaluate(
+                "(sel) => [...document.querySelectorAll(sel)]"
+                ".map(m => m.classList.contains('filtered-hidden'))",
+                moved_cards,
+            )
+        ) == {True}
 
     @pytest.mark.browser
     def test_timeline_filter_individual_message_types(self, page: Page):
