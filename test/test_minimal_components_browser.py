@@ -559,3 +559,51 @@ def test_a_markdown_image_stays_in_its_message(page: Page, tmp_path: Path) -> No
     )
     assert widths[2] == 3000, "the image did not load"
     assert widths[0] <= widths[1] + 0.5, widths
+
+
+READ_TOOL = TEST_DATA / "read_tool_pygments.jsonl"
+
+# A line-numbered Pygments block: `td.linenos > div > pre` holds the numbers,
+# `td.code > div > pre > code` the code. Both columns' line boxes must agree
+# or the numbers drift away from their lines down a long file (#364).
+LINE_NUMBERED_BLOCK = """
+() => {
+    const table = [...document.querySelectorAll('.highlighttable')]
+        .find(t => !t.closest('.preview-content'));
+    const numbers = table.querySelector('td.linenos pre');
+    const code = table.querySelector('td.code pre code');
+    const content = (el) => {
+        const s = getComputedStyle(el);
+        return el.getBoundingClientRect().height
+            - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom);
+    };
+    const top = (el) => {
+        const s = getComputedStyle(el);
+        return el.getBoundingClientRect().top + parseFloat(s.paddingTop);
+    };
+    return {
+        lines: numbers.textContent.trim().split('\\n').length,
+        numbersHeight: content(numbers),
+        codeHeight: content(code),
+        numbersTop: top(numbers),
+        codeTop: top(code),
+    };
+}
+"""
+
+
+@pytest.mark.browser
+class TestLineNumberedCode:
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_line_numbers_keep_step_with_the_code(
+        self, page: Page, tmp_path: Path, theme: str
+    ) -> None:
+        page.goto(_render(tmp_path, READ_TOOL, theme).as_uri())
+        page.evaluate(
+            "document.querySelectorAll('details').forEach(d => d.open = true)"
+        )
+        box = page.evaluate(LINE_NUMBERED_BLOCK)
+        assert box["lines"] >= 20, box
+        pitch = (box["numbersHeight"] / box["lines"], box["codeHeight"] / box["lines"])
+        assert abs(box["numbersHeight"] - box["codeHeight"]) < 1, (box, pitch)
+        assert abs(box["numbersTop"] - box["codeTop"]) < 1, box
