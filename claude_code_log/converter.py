@@ -6625,6 +6625,11 @@ def process_projects_hierarchy(
             # Inside the lease, so the connection that recovers the log
             # is the one the pass then keeps.
             trim_oversized_wal(get_cache_db_path(projects_path))
+            # A refresh killed mid-parse leaves its spool behind (nothing
+            # else does); under the pass lock, those of dead processes go.
+            from .refresh_spool import sweep_orphan_spools
+
+            sweep_orphan_spools(get_cache_db_path(projects_path))
         # No entry write of this pass re-indexes its file for search —
         # not in the pool (its initializer defers too) and not inline
         # here: that is tokenising under the database's single write

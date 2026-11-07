@@ -25,6 +25,7 @@ from __future__ import annotations
 import itertools
 import os
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -109,6 +110,62 @@ def spool_path(db_path: Path) -> Path:
 def is_spool_path(path: Path, db_path: Path) -> bool:
     """Whether ``path`` is a spool of ``db_path``, this process's or not."""
     return path.name.startswith(f"{db_path.name}{SPOOL_INFIX}")
+
+
+def _spool_owner(path: Path, db_path: Path) -> Optional[int]:
+    """The pid in a spool's name, or None when the name is not one."""
+    rest = path.name[len(db_path.name) + len(SPOOL_INFIX) :]
+    pid, _, seq = rest.partition("-")
+    if pid.isdigit() and seq.isdigit():
+        return int(pid)
+    return None
+
+
+def _process_alive(pid: int) -> bool:
+    """Whether a process with that pid exists (ours counts)."""
+    if pid == os.getpid():
+        return True
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def sweep_orphan_spools(db_path: Path) -> List[Path]:
+    """Remove the spools beside ``db_path`` whose process is gone.
+
+    A refresh removes its spool when it ends, whichever way; only a
+    killed process leaves one, and it then costs disk until something
+    removes it. A spool whose owning process is still alive may be mid
+    refresh and is left alone. Returns the paths removed.
+    """
+    removed: List[Path] = []
+    try:
+        candidates = list(db_path.parent.glob(f"{db_path.name}{SPOOL_INFIX}*"))
+    except OSError:
+        return removed
+    for path in candidates:
+        pid = _spool_owner(path, db_path)
+        if pid is None or _process_alive(pid):
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed.append(path)
+    return removed
 
 
 @dataclass(frozen=True)
