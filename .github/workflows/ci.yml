@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Three jobs. `test` runs the Python suites over the OS × Python matrix.
+# `browser` runs the Playwright suite in parallel with it, on one Python
+# per OS: those tests exercise the pages' JavaScript in Chromium, and the
+# Python version underneath rarely changes what they see, while the OS
+# (paths, temp dirs, timing) does. `coverage` combines the two data files
+# and reports once both are in. The critical path is the slower of the
+# first two jobs plus the short third, instead of unit + TUI + browser in
+# sequence on the slowest matrix cell (issue #359).
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -20,15 +28,15 @@ jobs:
 
     env:
       # Collect coverage only on the primary job: it is the only one that
-      # uploads the reports and feeds the PR comment, while --cov costs
-      # ~65% extra pytest wall time (worst on Windows). Windows-only
-      # covered lines measured at 5 (diffing covered lines per file,
-      # Windows vs the primary artifact): the SIGUSR1 no-op return and the
-      # drive-letter branch of convert_project_path_to_claude_dir, both in
-      # cli.py. Those were never in the published report (non-primary
-      # coverage was computed and discarded), so this changes nothing.
-      COV: ${{ matrix.is-primary && '--cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term' || '' }}
-      COV_APPEND: ${{ matrix.is-primary && '--cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term' || '' }}
+      # feeds the combined report, while --cov costs ~65% extra pytest wall
+      # time (worst on Windows). Windows-only covered lines measured at 5
+      # (diffing covered lines per file, Windows vs the primary artifact):
+      # the SIGUSR1 no-op return and the drive-letter branch of
+      # convert_project_path_to_claude_dir, both in cli.py. Those were never
+      # in the published report (non-primary coverage was computed and
+      # discarded), so this changes nothing.
+      COV: ${{ matrix.is-primary && '--cov=claude_code_log --cov-report=term' || '' }}
+      COV_APPEND: ${{ matrix.is-primary && '--cov=claude_code_log --cov-append --cov-report=term' || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +71,9 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev && uv run playwright install chromium
+        # No `playwright install chromium` here: the browser suite has its
+        # own job below.
+        run: uv sync --all-extras --dev
 
       - name: Run unit tests (coverage on primary only)
         # -p no:playwright: unit tests don't use the browser fixtures; skipping the
@@ -74,38 +84,22 @@ jobs:
       - name: Run TUI tests (coverage append on primary only)
         run: uv run pytest -m tui ${{ env.COV_APPEND }}
 
-      - name: Run browser tests (coverage append on primary only)
-        run: uv run pytest -m browser ${{ env.COV_APPEND }}
-
       - name: Run benchmark tests with coverage append (primary only)
         if: matrix.is-primary
         env:
           CLAUDE_CODE_LOG_DEBUG_TIMING: "1"
         run: uv run pytest -m benchmark ${{ env.COV_APPEND }} -v
 
-      - name: Upload coverage HTML report as artifact
+      - name: Upload coverage data (primary only)
         uses: actions/upload-artifact@v4
         if: matrix.is-primary
         with:
-          name: coverage-report-html
-          path: htmlcov/
-          retention-days: 30
-
-      - name: Upload coverage XML as artifact
-        uses: actions/upload-artifact@v4
-        if: matrix.is-primary
-        with:
-          name: coverage-report-xml
-          path: coverage.xml
-          retention-days: 30
-
-      - name: Coverage comment (PR only)
-        if: github.event_name == 'pull_request' && matrix.is-primary
-        uses: py-cov-action/python-coverage-comment-action@v3
-        with:
-          GITHUB_TOKEN: ${{ github.token }}
-          MINIMUM_GREEN: 75
-          MINIMUM_ORANGE: 60
+          name: coverage-data-test
+          path: .coverage
+          # upload-artifact leaves dotfiles out unless told otherwise.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Run linting
         run: uv run ruff check
@@ -128,3 +122,125 @@ jobs:
           uv run --group js oxfmt --check || status=1
           uv run --group js python scripts/fmt_templates.py --check || status=1
           exit $status
+
+  browser:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "windows-latest"]
+        include:
+          - os: "ubuntu-latest"
+            is-primary: true
+
+    env:
+      # One Python for the browser suite: the matrix above covers the
+      # interpreter; here the subject is the pages in Chromium.
+      PYTHON_VERSION: "3.12"
+      COV: ${{ matrix.is-primary && '--cov=claude_code_log --cov-report=term' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Move TEMP to the workspace disk (Windows)
+        # Same reason as in `test`: the browser tests render into temp dirs
+        # and serve from them.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev && uv run playwright install chromium
+
+      - name: Run browser tests (coverage on primary only)
+        run: uv run pytest -m browser ${{ env.COV }}
+
+      - name: Upload coverage data (primary only)
+        uses: actions/upload-artifact@v4
+        if: matrix.is-primary
+        with:
+          name: coverage-data-browser
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage:
+    # Combines the primary `test` cell's data with the primary `browser`
+    # cell's, then reports: the artifacts and the PR comment come from the
+    # union, as they did when every suite ran in one job.
+    runs-on: ubuntu-latest
+    needs: [test, browser]
+    # Run once the two jobs are over, red cells included, so a failure in
+    # a non-primary cell does not withhold the report. The report needs
+    # both primary artifacts, though: a primary cell whose pytest failed,
+    # or that the matrix's default fail-fast cancelled after another
+    # cell's failure, never reaches its upload, and this job then fails at
+    # the combine below, beside the cell that failed first.
+    if: ${{ !cancelled() }}
+    env:
+      PYTHON_VERSION: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      # The same interpreter and the same coverage as the cells that
+      # measured: a report parses the sources to count statements, and
+      # the count differs between Python versions (3.14 counts 276 fewer
+      # over this package than 3.12, in the same files the data covers),
+      # which would misstate the total and every per-file figure.
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-*
+          path: coverage-data
+
+      - name: Combine and report
+        run: |
+          uv run coverage combine --keep \
+            coverage-data/coverage-data-test/.coverage \
+            coverage-data/coverage-data-browser/.coverage
+          uv run coverage xml
+          uv run coverage html
+          uv run coverage report
+
+      - name: Upload coverage HTML report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-html
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Upload coverage XML as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-xml
+          path: coverage.xml
+          retention-days: 30
+
+      - name: Coverage comment (PR only)
+        if: github.event_name == 'pull_request'
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          MINIMUM_GREEN: 75
+          MINIMUM_ORANGE: 60
