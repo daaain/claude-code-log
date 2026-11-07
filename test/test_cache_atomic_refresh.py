@@ -20,7 +20,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -761,6 +761,46 @@ def test_migration_016_heals_a_project_015_left_pending_and_drops_the_flag(
         "sess-beta": 2,
     }
     assert data.total_message_count == 4
+
+
+@pytest.mark.parametrize("exit_with", ["return", "exception"])
+def test_a_statement_left_active_over_the_overlay_does_not_break_the_scope(
+    project: Path, exit_with: str
+) -> None:
+    """A cursor the body left unexhausted keeps a statement active, and
+    DETACH then fails with "database spool is locked". That must not
+    fail a merge that committed, nor replace the body's own exception
+    (which, read as a busy error, would be retried as contention), nor
+    poison the connection for the next scope, as it would under a
+    pass's leased connection."""
+    manager = _manager(project)
+    files = sorted(project.glob("*.jsonl"))
+    _refresh(manager, files, files)
+    files, changed = _grow(project)
+
+    with manager.batch():
+        conn = manager._shared_conn  # pyright: ignore[reportPrivateUsage]
+        assert conn is not None
+        cursor: Optional[sqlite3.Cursor] = None
+        try:
+            with manager.atomic_refresh():
+                _refresh(manager, files, changed)
+                cursor = conn.execute("SELECT _uuid FROM messages")
+                cursor.fetchone()  # active, not exhausted
+                if exit_with == "exception":
+                    raise RuntimeError("the body's own")
+        except RuntimeError as exc:
+            assert exit_with == "exception" and str(exc) == "the body's own"
+        else:
+            assert exit_with == "return"
+            assert len(_rows_by_file(manager.db_path)["sess-gamma.jsonl"]) == 2
+        del cursor
+        # The next scope on the same connection works and commits.
+        _append(project / "sess-beta.jsonl", _turn("sess-beta", 1, "later"))
+        with manager.atomic_refresh():
+            _refresh(manager, files, [project / "sess-beta.jsonl"])
+        assert len(_rows_by_file(manager.db_path)["sess-beta.jsonl"]) == 4
+    assert _spools(manager.db_path) == []
 
 
 def test_a_nested_scope_joins_the_outer_one(project: Path) -> None:

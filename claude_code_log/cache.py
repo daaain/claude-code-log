@@ -1162,6 +1162,12 @@ _MERGE_MESSAGES = (
 )
 
 
+# Spools a scope could not DETACH when it ended (a statement was still
+# active on the connection), by connection: released at the next scope's
+# entry on that connection. See `CacheManager._detach_spool`.
+_leftover_spools: Dict[int, Path] = {}
+
+
 class _PendingRefresh:
     """What an `atomic_refresh` scope accumulates until its merge.
 
@@ -1367,23 +1373,26 @@ class CacheManager:
         the outer scope. A read-only instance cannot write and gets no
         spool: its writes behave as outside a scope.
         """
-        if self._refresh is not None or self._read_only:
+        if self._refresh is not None or self._read_only or self._project_id is None:
+            # Nested: join. Read-only, or no project row: every write of
+            # this instance returns early, so there is nothing to spool.
             yield
             return
 
         with self.batch(), self._get_connection() as conn:
+            # ATTACH and DETACH refuse to run inside a transaction; the
+            # scope opens on a connection that is only reading. Python's
+            # sqlite3 opens one implicitly at any DML outside
+            # `write_transaction`, so say what happened rather than let
+            # ATTACH report it.
+            if conn.in_transaction:
+                raise sqlite3.ProgrammingError(
+                    "atomic_refresh: the connection is already in a "
+                    "transaction; a write on it bypassed write_transaction"
+                )
+            self._release_leftover_spool(conn)
             pending = _PendingRefresh(RefreshSpool(self.db_path))
             try:
-                # ATTACH and DETACH refuse to run inside a transaction;
-                # the scope opens on a connection that is only reading.
-                # Python's sqlite3 opens one implicitly at any DML
-                # outside `write_transaction`, so say what happened
-                # rather than let ATTACH report it.
-                if conn.in_transaction:
-                    raise sqlite3.ProgrammingError(
-                        "atomic_refresh: the connection is already in a "
-                        "transaction; a write on it bypassed write_transaction"
-                    )
                 conn.execute("ATTACH DATABASE ? AS spool", (str(pending.spool.path),))
                 try:
                     self._refresh = pending
@@ -1395,10 +1404,42 @@ class CacheManager:
                         self._drop_overlay(conn)
                     self._merge_refresh(conn, pending)
                 finally:
-                    conn.execute("DETACH DATABASE spool")
+                    self._detach_spool(conn, pending.spool)
             finally:
                 pending.spool.close()
-                pending.spool.unlink()
+                if id(conn) not in _leftover_spools:
+                    pending.spool.unlink()
+
+    @staticmethod
+    def _detach_spool(conn: sqlite3.Connection, spool: RefreshSpool) -> None:
+        """DETACH the spool, or leave it for the next scope on ``conn``.
+
+        A statement still active on the connection (a cursor the scope's
+        body left unexhausted, kept alive by the traceback of the
+        exception that ended the scope) makes DETACH fail with "database
+        spool is locked". That must neither replace the body's exception
+        nor turn a committed merge into a failure, so the attachment is
+        recorded and released at the next scope's entry, or at the
+        connection's close, whichever comes first; the file goes with it.
+        """
+        try:
+            conn.execute("DETACH DATABASE spool")
+        except sqlite3.OperationalError:
+            _leftover_spools[id(conn)] = spool.path
+
+    @staticmethod
+    def _release_leftover_spool(conn: sqlite3.Connection) -> None:
+        """Finish a scope's cleanup that `_detach_spool` could not."""
+        path = _leftover_spools.pop(id(conn), None)
+        if path is None:
+            return
+        conn.execute("DROP VIEW IF EXISTS temp.messages")
+        conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+        conn.execute("DETACH DATABASE spool")
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
     def _create_overlay(self, conn: sqlite3.Connection) -> None:
         """Make the scope's reads see the cache as the merge will leave it.
