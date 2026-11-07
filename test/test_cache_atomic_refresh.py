@@ -26,7 +26,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from claude_code_log import converter
-from claude_code_log.cache import CacheManager, SessionSidecar, get_library_version
+from claude_code_log.cache import (
+    CacheManager,
+    SessionSidecar,
+    connection_lease,
+    get_library_version,
+)
 from claude_code_log.converter import (
     compute_project_aggregates,
     compute_session_data,
@@ -729,10 +734,13 @@ def test_two_refreshes_of_one_project_overlapping_leave_it_repairable(
             assert not b.is_alive(), "refresh B is stuck behind refresh A"
         original(self, *args, **kwargs)
 
-    manager = _manager(project)
-    with monkeypatch.context() as m:
+    # Under the lease a pass holds, so A's connection is the one a
+    # manager on this thread would be handed.
+    with connection_lease(db_path), monkeypatch.context() as m:
         m.setattr(CacheManager, "update_session_cache", interleave)
-        refreshed = converter.ensure_fresh_cache(project, manager, silent=True)
+        refreshed = converter.ensure_fresh_cache(
+            project, _manager(project), silent=True
+        )
     assert fired  # positive control: B ran inside A
     assert b_errors == []
     # B committed its own parse, turn two included: 2 + two turns of 2.
