@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -680,12 +681,21 @@ def test_two_refreshes_of_one_project_overlapping_leave_it_repairable(
 
     Refresh A parses the session at one turn; while A is between its
     entry write and its derived writes, refresh B (another process's,
-    here another manager's) parses a newer turn and commits. With
-    several transactions, A's derived rows then land over B's entry
-    rows and the file reads current while the session row predates it:
-    the newer turn is never rendered. In one transaction A's snapshot
-    wins whole, its file record is older than the file, and the next
-    pass repairs it.
+    here another manager's on another thread) parses a newer turn and
+    commits. With several transactions, A's derived rows then land over
+    B's entry rows and the file reads current while the session row
+    predates it: the newer turn is never rendered. In one transaction
+    A's snapshot wins whole, its file record is older than the file, and
+    the next pass repairs it.
+
+    B runs on its own thread so that it opens its own connection: on A's
+    thread it would be handed A's leased one, whose spool is attached,
+    and fail on attaching its own, a failure the repair pass hid. A is
+    the refresh alone, not a whole pass: a pass goes on to render, and
+    its render loads a file that changed since the refresh and writes
+    those entries outside any refresh, as current, under the old session
+    rows. That is a hole of the render, not of the refresh, and it opens
+    for any file written to during a pass, overlap or not.
     """
     projects_dir = project.parent
     db_path = projects_dir / "cache.db"
@@ -693,27 +703,58 @@ def test_two_refreshes_of_one_project_overlapping_leave_it_repairable(
     _pass(projects_dir)
     alpha = project / "sess-alpha.jsonl"
     _append(alpha, _turn("sess-alpha", 1, "turn one"))
+    turn_one_size = alpha.stat().st_size
 
     fired: List[int] = []
+    b_errors: List[BaseException] = []
+    b_rows: List[int] = []
     original = CacheManager.update_session_cache
+
+    def refresh_b() -> None:
+        try:
+            other = CacheManager(project, get_library_version(), db_path=db_path)
+            converter.ensure_fresh_cache(project, other, silent=True)
+            # What B committed, read before A's merge replaces it.
+            b_rows.append(len(_rows_by_file(db_path)["sess-alpha.jsonl"]))
+        except BaseException as exc:  # asserted on A's thread, below
+            b_errors.append(exc)
 
     def interleave(self: CacheManager, *args: Any, **kwargs: Any) -> None:
         if not fired:
             fired.append(1)
             _append(alpha, _turn("sess-alpha", 2, "turn two"))
-            other = CacheManager(project, get_library_version(), db_path=db_path)
-            converter.ensure_fresh_cache(project, other, silent=True)
+            b = threading.Thread(target=refresh_b)
+            b.start()
+            b.join(timeout=60)
+            assert not b.is_alive(), "refresh B is stuck behind refresh A"
         original(self, *args, **kwargs)
 
+    manager = _manager(project)
     with monkeypatch.context() as m:
         m.setattr(CacheManager, "update_session_cache", interleave)
-        _pass(projects_dir)
+        refreshed = converter.ensure_fresh_cache(project, manager, silent=True)
     assert fired  # positive control: B ran inside A
+    assert b_errors == []
+    # B committed its own parse, turn two included: 2 + two turns of 2.
+    assert b_rows == [6]
+    assert refreshed is not converter.CacheRefresh.NONE
 
-    # The derived rows are where the race shows: with several
-    # transactions, A's session row (turn one: 4 messages) lands over
-    # B's entry rows (turn two: 6), the file reads current, and no pass
-    # recomputes it. The entry rows themselves are B's either way.
+    # A committed after B, whole: its entry rows, its file record, its
+    # session row, all from the turn-one parse. The record is older than
+    # the file, so the file reads modified.
+    with sqlite3.connect(db_path) as conn:
+        size, count = conn.execute(
+            "SELECT source_size, message_count FROM cached_files"
+            " WHERE file_name = 'sess-alpha.jsonl'"
+        ).fetchone()
+        (session_count,) = conn.execute(
+            "SELECT message_count FROM sessions WHERE session_id = 'sess-alpha'"
+        ).fetchone()
+    assert (size, count, session_count) == (turn_one_size, 4, 4)
+    assert len(_rows_by_file(db_path)["sess-alpha.jsonl"]) == 4
+    assert alpha in _manager(project).get_modified_files([alpha])
+
+    # So the next pass repairs it: B's turn is cached and rendered.
     _pass(projects_dir)
     cached = CacheManager(project, get_library_version(), db_path=db_path)
     data = cached.get_cached_project_data()
