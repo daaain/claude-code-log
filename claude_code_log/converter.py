@@ -6340,7 +6340,9 @@ def _plan_project(
     converting a project with nothing in the window would rewrite its
     combined output empty and mark it as rendered from a window, which the
     next plain run re-renders. A project with a changed file is converted
-    as before, since its session rows cannot tell what the change holds.
+    as before, since its session rows cannot tell what the change holds,
+    and so is one whose combined output is missing at the destination,
+    since the index links it.
     """
     from .utils import project_destination
 
@@ -6458,8 +6460,12 @@ def _plan_project(
 
     outside_window = False
     if window is not None and cache_manager is not None:
-        needs_work = bool(modified_files) or cache_manager.has_sessions_in_window(
-            *window
+        # A combined page missing at the destination (a fresh --output) is
+        # written even when empty for the window: the index links it.
+        needs_work = (
+            bool(modified_files)
+            or (write_combined and not output_path.exists())
+            or cache_manager.has_sessions_in_window(*window)
         )
         outside_window = not needs_work
 

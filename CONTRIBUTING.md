@@ -653,8 +653,8 @@ The tool implements a SQLite-based caching system for performance:
   refresh therefore loads whole files when they changed and the incremental
   refresh declines, not just the window's entries, and nothing when no file
   changed. A date-filtered `--all-projects` pass converts the projects with a
-  session in the window (or a changed file) and reports the others as having
-  no messages in it. A pass that loses a project ends with a count of the
+  session in the window (or a changed file, or no combined page at the
+  destination) and reports the others as having no messages in it. A pass that loses a project ends with a count of the
   failed projects, and the CLI exits 1
 - **Performance**: 10-100x faster loading for large projects
 

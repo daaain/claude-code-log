@@ -149,8 +149,10 @@ worker per stale project is handed to it, § 2.10), and **collect**
 cross-project `index.html` is written last). Under `--from-date` /
 `--to-date` the plan converts a project when one of its visible sessions
 overlaps the window (`CacheManager.has_sessions_in_window`, from the
-session rows' first and last timestamps) or a file changed, whose rows
-cannot yet say what it holds; every other project is left untouched and
+session rows' first and last timestamps), when a file changed, whose
+rows cannot yet say what it holds, or when its combined output is missing
+at the destination (a fresh `--output`), which the index links; every
+other project is left untouched and
 reported as having no messages in the window. Converting those too would
 rewrite each one's combined output empty and mark it as rendered from a
 window (§ 2.3), so the next plain run would re-render the archive. Workers

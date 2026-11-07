@@ -134,3 +134,36 @@ def test_a_filtered_pass_still_converts_a_changed_idle_project(
     text = (idle / "session-idle-one.md").read_text(encoding="utf-8")
     assert "LATE-IDLE" in text
     assert "reply 0" not in text
+
+
+def test_a_filtered_pass_into_a_fresh_output_writes_every_linked_combined_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An idle project with no output at the destination still gets its
+    combined page, empty for the window: the index links every project's
+    combined page, and leaving one out would make that link dead."""
+    import re
+
+    from claude_code_log.converter import process_projects_hierarchy
+
+    active = _build_project(tmp_path)
+    _build_idle_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(active.parent, "html-combined")
+
+    fresh = tmp_path / "fresh"
+    process_projects_hierarchy(
+        active.parent,
+        from_date=SECOND_DAY["from_date"],
+        to_date=SECOND_DAY["to_date"],
+        jobs=1,
+        output_format="html",
+        output_dir=fresh,
+    )
+
+    index = (fresh / "index.html").read_text(encoding="utf-8")
+    # The cards' links are built by script from data embedded in the page.
+    links = set(re.findall(r"[^\"' <>=]*combined_transcripts[^\"' <>]*", index))
+    assert any(IDLE in link for link in links), links
+    dead = sorted(link for link in links if not (fresh / link).is_file())
+    assert dead == []
