@@ -146,7 +146,16 @@ projects are independent, so this scales near-linearly with cores; when
 the per-project render fan-out is enabled, any budget left over after one
 worker per stale project is handed to it, § 2.10), and **collect**
 (sequential — per-project index data is read back from the cache and the
-cross-project `index.html` is written last). Workers
+cross-project `index.html` is written last). Under `--from-date` /
+`--to-date` the plan converts a project when one of its visible sessions
+overlaps the window (`CacheManager.has_sessions_in_window`, from the
+session rows' first and last timestamps), when a file changed, whose
+rows cannot yet say what it holds, or when its combined output is missing
+at the destination (a fresh `--output`), which the index links; every
+other project is left untouched and
+reported as having no messages in the window. Converting those too would
+rewrite each one's combined output empty and mark it as rendered from a
+window (§ 2.3), so the next plain run would re-render the archive. Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
