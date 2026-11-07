@@ -378,7 +378,9 @@ spool, copies each file's rows in with `INSERT … SELECT` (no Python per
 row under the lock, and less time than the direct `executemany` took),
 runs the deferred writes, and commits. A refresh that stops anywhere
 leaves the cache as it was and the spool is removed; the next run, or
-the pass's in-pass retry, redoes it, re-parsing the modified files. A
+the pass's in-pass retry, redoes it, re-parsing the modified files. Only
+a process killed mid-parse leaves a spool behind, and a pass removes the
+spools of dead processes before it starts, under its lock. A
 reader on another connection sees either the whole refresh or none of
 it, and two refreshes of one project overlapping commit two
 self-consistent snapshots: the later wins, and if it parsed older files
