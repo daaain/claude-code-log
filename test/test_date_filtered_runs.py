@@ -222,7 +222,9 @@ def test_an_unfiltered_run_after_a_filtered_one_renders_everything(
 
 
 def test_a_json_session_rendered_by_the_pool_from_a_window_is_rewritten(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A JSON file records its window itself, so a render worker must know
     the window too: the same sequence, with the session files rendered in
@@ -261,10 +263,17 @@ def test_a_json_session_rendered_by_the_pool_from_a_window_is_rewritten(
 
     run()
     dispatched.clear()
+    capsys.readouterr()
     run(**FIRST_DAY)
-    # Controls: the pool rendered the windowed session files, without day two.
+    # Controls: the workers rendered the windowed session files (a broken
+    # pool falls back to rendering inline, with the parent's renderer, and
+    # says so), and every one of them is without its day two.
     assert "session" in dispatched, "the pool never rendered"
-    assert _missing(project, "json") != [], "the window filtered nothing"
+    captured = capsys.readouterr()
+    assert "render worker failed" not in captured.out + captured.err
+    for sid in SESSIONS:
+        text = (project / f"session-{sid}.json").read_text(encoding="utf-8")
+        assert _second_day(sid) not in text, f"the window left {sid} whole"
 
     run()
     assert _missing(project, "json") == []
