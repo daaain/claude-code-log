@@ -480,10 +480,17 @@ def load_transcript(
     _loaded_files: Optional[set[Path]] = None,
     _meta_maps: Optional[dict[Path, dict[str, str]]] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    snapshot: bool = False,
 ) -> list[TranscriptEntry]:
     """Load and parse JSONL transcript file, using cache if available.
 
     Args:
+        snapshot: The render's load, after this run's cache refresh: serve
+            the entries the refresh committed (``load_snapshot_entries``),
+            even when the file has grown since, and never parse the file
+            or write the cache. A file the cache has no rows for yet is
+            left to the next run. Without a cache manager it changes
+            nothing: there are no rows to disagree with.
         entry_store: Optional per-conversion store of entries this
             conversion has already materialised (``entry_store.py``).
             Consulted ahead of the cache, which it saves a
@@ -514,6 +521,15 @@ def load_transcript(
             if not silent:
                 print(f"Loading {jsonl_path} from this run's parsed entries...")
             return held
+    if snapshot and cache_manager is not None:
+        committed = cache_manager.load_snapshot_entries(jsonl_path, from_date, to_date)
+        if committed is None:
+            if not silent:
+                print(f"Skipping {jsonl_path}: not in the cache yet")
+            return []
+        if not silent:
+            print(f"Loading {jsonl_path} from cache...")
+        return committed
     # Try to load from cache first
     if cache_manager is not None:
         # Use filtered loading if date parameters are provided
@@ -1337,6 +1353,7 @@ def load_directory_transcripts(
     silent: bool = False,
     persist_sidecar: bool = False,
     sidecar_required: bool = False,
+    snapshot: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load all JSONL transcript files from a directory and combine them.
 
@@ -1352,6 +1369,7 @@ def load_directory_transcripts(
     ``sidecar_required`` makes a failed sidecar write raise on
     contention or drop the sidecar otherwise, instead of only being
     logged: the cache refresh passes it, see ``_persist_session_sidecar``.
+    ``snapshot`` is the render's load: see ``load_transcript``.
     """
     all_messages: list[TranscriptEntry] = []
 
@@ -1369,7 +1387,12 @@ def load_directory_transcripts(
     with load_batch:
         for jsonl_file in jsonl_files:
             messages = load_transcript(
-                jsonl_file, cache_manager, from_date, to_date, silent
+                jsonl_file,
+                cache_manager,
+                from_date,
+                to_date,
+                silent,
+                snapshot=snapshot,
             )
             all_messages.extend(messages)
 
@@ -1595,6 +1618,7 @@ def _load_stale_session_transcripts(
         trunk_files,
         silent,
         entry_store=entry_store,
+        snapshot=True,
     )
 
 
@@ -1651,6 +1675,7 @@ def _load_sessions_partial(
     reelect_uuids: Optional[set[str]] = None,
     native_junction_uuids: Optional[set[str]] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    snapshot: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load the given trunk files into a faithful partial (entries, tree).
 
@@ -1694,6 +1719,7 @@ def _load_sessions_partial(
                     None,
                     silent,
                     entry_store=entry_store,
+                    snapshot=snapshot,
                 )
             )
 
@@ -3411,7 +3437,7 @@ def _stream_paginated_conversion(
             if {f.name for f in trunk_files} != needed_files:
                 return None
             page_entries, page_tree = _load_sessions_partial(
-                input_path, cache_manager, sidecar, trunk_files, silent
+                input_path, cache_manager, sidecar, trunk_files, silent, snapshot=True
             )
             page_entries = deduplicate_messages(page_entries)
 
@@ -4046,6 +4072,7 @@ def convert_jsonl_to(
             # A full unfiltered load is the moment the cross-session
             # sidecar can be (re)derived for the session-scoped path.
             persist_sidecar=(from_date is None and to_date is None),
+            snapshot=True,
         )
 
         # Get working directories from cache
@@ -5449,8 +5476,10 @@ def generate_single_session_file(
     # Ensure fresh cache
     ensure_fresh_cache(input_path, cache_manager, silent=True)
 
-    # Load messages from JSONL files
-    messages, _session_tree = load_directory_transcripts(input_path, cache_manager)
+    # Render what the refresh committed (see ``load_transcript``).
+    messages, _session_tree = load_directory_transcripts(
+        input_path, cache_manager, snapshot=True
+    )
 
     # Collect all known session IDs: from loaded messages + cache metadata
     all_session_ids: set[str] = {

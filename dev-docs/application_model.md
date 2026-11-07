@@ -281,6 +281,10 @@ HTML exports honour `--theme` / `$CLAUDE_CODE_LOG_THEME` (§ 2.1):
 `html_theme` (not `theme`, which is Textual's own UI theme), and
 `_ensure_session_file` renders with it — regenerating a session page
 left in the other theme, under the same `session-{id}.html` name.
+Before it renders a live session, `_ensure_session_file` refreshes the
+cache (`ensure_fresh_cache`), then renders what that refresh committed
+(§ 2.3): the cache the TUI read at start may predate the session's
+newest lines.
 
 The "archive" action is interesting: it moves a session's source JSONL
 out of `~/.claude/projects/` while keeping the cache row intact. The
@@ -378,6 +382,33 @@ touch, so it re-parses only what really changed. The flag is
 project-wide and boolean: two processes refreshing the same project at
 once can still clear each other's, as they could already overwrite each
 other's session rows.
+
+**A run renders what its refresh committed.** Only the refresh writes
+entry rows; the render reads them and writes none. A session file can
+grow between the two, since sessions are written to while a run converts
+them. The render used to find that file's rows stale, parse it again and
+write its rows itself, stamped with the file's new size and mtime, while
+the session rows and aggregates kept the refresh's counts. The run's
+pages then showed lines its session rows did not count, and the cache
+called the file current, so only `refresh_pending` (above) made the next
+run look at it again. Now every render-side load passes `snapshot=True`
+to `load_transcript`, through `load_directory_transcripts` and
+`_load_sessions_partial`: Phase 1b (§ 2.12), the streaming page loads
+(§ 2.13), Phase 2, `generate_single_session_file` and the TUI's export.
+In that mode the loader serves `CacheManager.load_snapshot_entries`,
+the rows the cache holds at the current content version whatever the
+file's stamp says now, or a parsed-entry store hit (§ 2.16), which is
+verified against the file and so describes the same rows. It never
+parses the file and never writes the cache. A file with no rows yet
+(created after the refresh) is skipped. Lines that land after the
+refresh are the next refresh's: that run finds the file modified, as
+nothing restamped it. `--no-cache` and single-file mode have no rows and
+parse as before. The hierarchy's no-cache-data fallback and Codex's
+wholesale render load and write their rows and session rows from one
+load, so they keep doing both. The TUI refreshes right before it exports
+a session, because the cache it would otherwise render may date from its
+start. `test/test_render_snapshot.py` grows a file right after the
+refresh, on each of these paths.
 
 **Corruption is recovered by discarding, not repairing.** A damaged
 cache file is unusable and, left alone, permanently so: `apply_migration`
@@ -1463,6 +1494,12 @@ states nobody sees; without the cap a long unbroken stream would never
 surface. `tick()` (poll once) is split from `run()` (wait) and the clock
 is injectable, so tests drive ticks by hand against a fake clock.
 
+A tick stamps the files before it calls the conversion, and the
+conversion renders what its own refresh committed (§ 2.3). So a line
+written while a tick renders is in none of that tick's output, and it is
+a change for the next tick, which refreshes and shows it: one tick late,
+never lost.
+
 **What makes a tick cheap** is §2.12's session-scoped path, which is
 reachable here only because `ensure_fresh_cache_detailed` reports *how*
 it refreshed (`CacheRefresh.NONE`/`INCREMENTAL`/`FULL`). Phase 1b's
@@ -1631,7 +1668,9 @@ reason it is a parameter rather than a memo:
   `(size, mtime_ns)` against the stamp captured *before* the parse. A
   stamp taken before the parse can only be older than the entries
   describe, so a file that grew mid-parse declines to the cache rather
-  than serving a list its stamp misdescribes. The stamp also carries the
+  than serving a list its stamp misdescribes. A file that grew after the
+  refresh declines too, and the render then reads the rows the refresh
+  committed (§ 2.3), not the file. The stamp also carries the
   file's **sub-agent fingerprint** (`cache.subagents_fingerprint`, which
   covers the `agent-*.jsonl` transcripts as well as the sidecars, scoped
   for an agent file as its cache row is — `PendingStamp` snapshots before

@@ -1577,13 +1577,7 @@ class CacheManager:
         if file_id is None:
             return None
 
-        with self._get_connection() as conn:
-            rows = conn.execute(
-                "SELECT content FROM messages WHERE file_id = ? ORDER BY timestamp NULLS LAST",
-                (file_id,),
-            ).fetchall()
-
-        return [self._deserialize_entry(row) for row in rows]
+        return self._entries_for_file(file_id, None, None)
 
     def load_cached_entries_filtered(
         self, jsonl_path: Path, from_date: Optional[str], to_date: Optional[str]
@@ -1600,28 +1594,69 @@ class CacheManager:
         if file_id is None:
             return None
 
-        # The renderer's reading of the window: ``filter_messages_by_date``
-        # makes the exact cut after this load, so the two must agree on
-        # what a bound means.
-        from .utils import parse_date_bounds
+        return self._entries_for_file(file_id, from_date, to_date)
 
-        from_dt, to_dt = parse_date_bounds(from_date, to_date)
+    def load_snapshot_entries(
+        self,
+        jsonl_path: Path,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> Optional[List[TranscriptEntry]]:
+        """The entries the cache holds for ``jsonl_path``, however the file
+        has moved since they were written.
 
-        # Build query with SQL-based filtering
+        This is the render's read. A run refreshes the cache, then renders
+        what the refresh committed: a session file can grow in between,
+        and parsing it again here would put lines in the pages that the
+        session rows and aggregates do not count. Lines that land after the
+        refresh are the next refresh's. So the file's size, mtime and
+        sub-agent fingerprint are not consulted; only the content version
+        is, since rows of another version may lack what the renderer reads.
+
+        None when the cache holds no usable rows for the file: it appeared
+        after the refresh, which leaves it to the next run.
+        """
+        if self._project_id is None:
+            return None
+
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id, content_version FROM cached_files"
+                " WHERE project_id = ? AND file_name = ?",
+                (self._project_id, jsonl_path.name),
+            ).fetchone()
+
+        if row is None or row["content_version"] != content_schema_version():
+            return None
+        return self._entries_for_file(row["id"], from_date, to_date)
+
+    def _entries_for_file(
+        self, file_id: int, from_date: Optional[str], to_date: Optional[str]
+    ) -> List[TranscriptEntry]:
+        """A cached file's entries, in timestamp order, within the window if
+        one is given."""
         sql = "SELECT content FROM messages WHERE file_id = ?"
         params: List[Any] = [file_id]
 
-        if from_dt:
-            # Same format as stored timestamps (``_normalize_timestamp``)
-            from_bound = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-            # Include entries with NULL timestamp (like summaries) OR within date range
-            sql += " AND (timestamp IS NULL OR timestamp >= ?)"
-            params.append(from_bound)
+        if from_date or to_date:
+            # The renderer's reading of the window: ``filter_messages_by_date``
+            # makes the exact cut after this load, so the two must agree on
+            # what a bound means.
+            from .utils import parse_date_bounds
 
-        if to_dt:
-            to_bound = to_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-            sql += " AND (timestamp IS NULL OR timestamp <= ?)"
-            params.append(to_bound)
+            from_dt, to_dt = parse_date_bounds(from_date, to_date)
+
+            if from_dt:
+                # Same format as stored timestamps (``_normalize_timestamp``)
+                from_bound = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                # Include entries with NULL timestamp (like summaries) OR within date range
+                sql += " AND (timestamp IS NULL OR timestamp >= ?)"
+                params.append(from_bound)
+
+            if to_dt:
+                to_bound = to_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                sql += " AND (timestamp IS NULL OR timestamp <= ?)"
+                params.append(to_bound)
 
         sql += " ORDER BY timestamp NULLS LAST"
 

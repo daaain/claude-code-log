@@ -1856,9 +1856,12 @@ class SessionBrowser(App[Optional[str]]):
                 # Load from cache for archived sessions
                 messages = self.cache_manager.load_session_entries(session_id)
             else:
-                # Load from JSONL files for current sessions
+                # Refresh first, then render what the refresh committed
+                # (see ``load_transcript``): the cache may date from when
+                # the TUI started, and a session is still being written.
+                ensure_fresh_cache(self.project_path, self.cache_manager, silent=True)
                 messages, _tree = load_directory_transcripts(
-                    self.project_path, self.cache_manager, silent=True
+                    self.project_path, self.cache_manager, silent=True, snapshot=True
                 )
             if not messages:
                 return None
