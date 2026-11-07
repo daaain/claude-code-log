@@ -514,22 +514,54 @@ class MarkdownRenderer(Renderer):
         sid = message.meta.session_id if message.meta else ""
         return self._teammate_colors_by_session.get(sid, {})
 
-    _FOOTNOTE_LABEL_RE = re.compile(r"\[\^([^\]\s]+)\]")
-    _FOOTNOTE_DEFINITION_RE = re.compile(r"^\s*\[\^[^\]\s]+\]:", re.MULTILINE)
+    _FOOTNOTE_DEFINITION_RE = re.compile(r"^[ \t]*\[\^([^\]\s]+)\]:", re.MULTILINE)
+    # Fenced blocks and code spans, left as written: a regex sample `[^abc]`
+    # or a definition shown in a fence is not a footnote.
+    _CODE_RE = re.compile(
+        r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$|`+[^`\n]+`+"
+    )
 
-    def _scope_footnotes(self, text: str, message: Optional[TemplateMessage]) -> str:
+    def _scope_footnotes(
+        self, text: str, message: Optional[TemplateMessage], item_index: int = 0
+    ) -> str:
         """Prefix a message's footnote labels with its index on the page.
 
         Every message's Markdown is written into one document, so two
         answers each defining ``[^1]`` would share a label and a reader's
-        renderer would pair every ``[^1]`` with one of the notes. A text
-        that defines no footnote is left alone.
+        renderer would pair every ``[^1]`` with one of the notes. Only the
+        labels the text defines are rewritten, and only outside code; a text
+        that defines no footnote is left alone. A second text item of the
+        message gets a suffix of its own.
         """
         index = message.message_index if message is not None else None
-        if index is None or not self._FOOTNOTE_DEFINITION_RE.search(text):
+        if index is None or "[^" not in text:
             return text
-        scope = f"m{index}"
-        return self._FOOTNOTE_LABEL_RE.sub(lambda m: f"[^{scope}-{m.group(1)}]", text)
+        prose = [(span.start(), span.end()) for span in self._CODE_RE.finditer(text)]
+        pieces: list[tuple[bool, str]] = []  # (is_code, piece)
+        last = 0
+        for start, end in prose:
+            pieces.append((False, text[last:start]))
+            pieces.append((True, text[start:end]))
+            last = end
+        pieces.append((False, text[last:]))
+        labels = {
+            label
+            for is_code, piece in pieces
+            if not is_code
+            for label in self._FOOTNOTE_DEFINITION_RE.findall(piece)
+        }
+        if not labels:
+            return text
+        scope = f"m{index}" if not item_index else f"m{index}-i{item_index}"
+        pattern = re.compile(
+            r"\[\^(" + "|".join(re.escape(label) for label in sorted(labels)) + r")\]"
+        )
+        return "".join(
+            piece
+            if is_code
+            else pattern.sub(lambda m: f"[^{scope}-{m.group(1)}]", piece)
+            for is_code, piece in pieces
+        )
 
     def _quote(self, text: str) -> str:
         """Prefix each line with '> ' to create a blockquote.
@@ -722,10 +754,11 @@ class MarkdownRenderer(Renderer):
         if isinstance(content, ThinkingMessage):
             return content.thinking
         if isinstance(content, (AssistantTextMessage, UserTextMessage)):
-            # Get first text item
-            for item in content.items:
+            # The first text item, its footnote labels scoped as in its body
+            # so an excerpt's reference still resolves.
+            for index, item in enumerate(content.items):
                 if isinstance(item, TextContent) and item.text.strip():
-                    return item.text
+                    return self._scope_footnotes(item.text, msg, index)
         return ""
 
     # -------------------------------------------------------------------------
@@ -907,7 +940,7 @@ class MarkdownRenderer(Renderer):
         path's ``escape=True`` safety posture.
         """
         parts: list[str] = []
-        for item in content.items:
+        for index, item in enumerate(content.items):
             if isinstance(item, SystemReminderContent):
                 # Blockquote each reminder so extracting it out of the text does
                 # not drop content that previously rendered inline in Markdown.
@@ -932,7 +965,7 @@ class MarkdownRenderer(Renderer):
                         # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
                         frontmatter, body = self._split_frontmatter(item.text)
-                        body = self._scope_footnotes(body, message)
+                        body = self._scope_footnotes(body, message, index)
                         parts.append(
                             frontmatter + _protect_html_tags(self._linkify_shas(body))
                         )
@@ -1104,7 +1137,7 @@ class MarkdownRenderer(Renderer):
     ) -> str:
         """Format → blockquoted text."""
         parts: list[str] = []
-        for item in content.items:
+        for index, item in enumerate(content.items):
             if isinstance(item, ImageContent):
                 parts.append(self._format_image(item))
             else:  # TextContent
@@ -1114,7 +1147,7 @@ class MarkdownRenderer(Renderer):
                     # the natural text shape (a leading "> " would
                     # confuse the word-boundary regex anchor).
                     frontmatter, body = self._split_frontmatter(item.text)
-                    body = self._scope_footnotes(body, message)
+                    body = self._scope_footnotes(body, message, index)
                     parts.append(self._quote(frontmatter + self._linkify_shas(body)))
         return "\n\n".join(parts)
 

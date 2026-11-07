@@ -19,7 +19,9 @@ from ..models import (
     ThinkingMessage,
     UnknownMessage,
 )
-from .utils import escape_html, render_markdown_collapsible
+from contextlib import nullcontext
+
+from .utils import escape_html, footnote_subscope, render_markdown_collapsible
 
 # Type alias for image formatter callback
 ImageFormatter = Callable[[ImageContent], str]
@@ -54,17 +56,20 @@ def format_assistant_text_content(
     """
     formatter = image_formatter or format_image_content
     parts: list[str] = []
-    for item in content.items:
+    for index, item in enumerate(content.items):
         if isinstance(item, ImageContent):
             parts.append(formatter(item))
         else:  # TextContent
             if item.text.strip():
-                text_html = render_markdown_collapsible(
-                    item.text,
-                    "assistant-text",
-                    line_threshold=line_threshold,
-                    preview_line_count=preview_line_count,
-                )
+                # A second text item is its own Markdown body: its footnote
+                # ids get a suffix of their own (utils.footnote_scope).
+                with footnote_subscope(f"i{index}") if index else nullcontext():
+                    text_html = render_markdown_collapsible(
+                        item.text,
+                        "assistant-text",
+                        line_threshold=line_threshold,
+                        preview_line_count=preview_line_count,
+                    )
                 parts.append(text_html)
     return "\n".join(parts)
 

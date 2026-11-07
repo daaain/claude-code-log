@@ -632,8 +632,11 @@ def render_markdown_document(text: str, user: bool = False) -> str:
 _footnote_scope: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "_footnote_scope", default=None
 )
-_FOOTNOTE_ID_RE = re.compile(r"user-content-fn(ref)?-")
-_FOOTNOTE_LABEL_RE = re.compile(r'"footnote-label"')
+# Only the attribute values wenmode emits (`id="…"`, `href="#…"`,
+# `aria-describedby="…"`): a body that merely mentions an id in a code span
+# or a fence must keep it verbatim.
+_FOOTNOTE_ID_RE = re.compile(r'((?:id|href)="#?user-content-fn(?:ref)?-)')
+_FOOTNOTE_LABEL_RE = re.compile(r'((?:id|aria-describedby)="footnote-label)"')
 
 
 @contextlib.contextmanager
@@ -652,9 +655,10 @@ def footnote_scope(scope: Optional[str]) -> Iterator[None]:
 
 
 @contextlib.contextmanager
-def _footnote_subscope(suffix: str) -> Iterator[None]:
-    """A nested scope for a second render of the same text (a preview), so
-    its ids do not repeat the full copy's on the same card."""
+def footnote_subscope(suffix: str) -> Iterator[None]:
+    """A nested scope inside the message's: for a second render of the same
+    text (a preview), or a second text item of the message, so their ids do
+    not repeat the first's on the same card. A no-op outside a scope."""
     scope = _footnote_scope.get()
     with footnote_scope(None if scope is None else f"{scope}-{suffix}"):
         yield
@@ -664,10 +668,8 @@ def scope_footnote_ids(html: str, scope: str) -> str:
     """Insert ``scope`` into wenmode's footnote ids, hrefs and labels."""
     if "user-content-fn" not in html:
         return html
-    html = _FOOTNOTE_ID_RE.sub(
-        lambda m: f"user-content-fn{m.group(1) or ''}-{scope}-", html
-    )
-    return _FOOTNOTE_LABEL_RE.sub(f'"footnote-label-{scope}"', html)
+    html = _FOOTNOTE_ID_RE.sub(lambda m: f"{m.group(1)}{scope}-", html)
+    return _FOOTNOTE_LABEL_RE.sub(lambda m: f'{m.group(1)}-{scope}"', html)
 
 
 def _scoped(html: str) -> str:
@@ -915,7 +917,7 @@ def _markdown_collapsible(
     if len(lines) > preview_line_count:
         preview_text += "\n\n..."
     # Render truncated markdown (produces valid HTML with proper tag closure)
-    with _footnote_subscope("preview"):
+    with footnote_subscope("preview"):
         preview_html = render_fn(preview_text)
 
     collapsible = render_collapsible_code(
@@ -975,7 +977,7 @@ def render_markdown_preview(
         return render_markdown_collapsible(text, css_class)
     preview_lines = _preview_source(text).splitlines()
     preview = "\n".join([line for line in preview_lines if line.strip()][:2])
-    with _footnote_subscope("preview"):
+    with footnote_subscope("preview"):
         preview_html = render_markdown(preview)
     collapsible = render_collapsible_code(
         preview_html,
