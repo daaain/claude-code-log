@@ -43,7 +43,12 @@ from .cache import (
     is_corrupt_database_error,
     trim_oversized_wal,
 )
-from .migrations.runner import apply_write_pragmas, cache_busy_timeout
+from .migrations.runner import (
+    SQLiteTooOldError,
+    apply_write_pragmas,
+    cache_busy_timeout,
+    check_sqlite_version,
+)
 from .models import RenderingDepth
 from .render_pool import resolve_render_jobs
 from .search import (
@@ -378,6 +383,20 @@ def _clear_provider_output(output_root: Path, output_format: str) -> None:
     click.echo(
         f"Cleared {removed} generated {file_ext.upper()} file(s) under {output_root}."
     )
+
+
+def _require_cache_sqlite(remedy: str = "") -> None:
+    """Refuse up front, in one line, when SQLite is too old for the cache.
+
+    The migration runner refuses too, but by then the conversion is under
+    way, and it refuses per CacheManager: a pass prints the same warning
+    twice per project and runs on without a cache. ``remedy`` names the
+    way out the calling command has, if any.
+    """
+    try:
+        check_sqlite_version()
+    except SQLiteTooOldError as exc:
+        raise click.ClickException(f"{exc}{remedy}.") from exc
 
 
 def _install_stack_dump_signal() -> None:
@@ -1388,6 +1407,16 @@ def convert(
     # actually projects. Exempt provider_wholesale from both; keep them verbatim
     # for every other mode, where they remain correct.
     will_run_all_projects = all_projects or input_path is None
+
+    # A single transcript file and a provider's one-session export never
+    # open the cache; everything else does unless told not to.
+    uses_cache = (
+        not no_cache
+        and not (input_path is not None and input_path.is_file())
+        and (provider is None or provider_wholesale)
+    )
+    if uses_cache:
+        _require_cache_sqlite(", or run with --no-cache")
     if (expand_paths or filter_path) and tui:
         click.echo(
             "Warning: --expand-paths / --filter-path are ignored in --tui mode.",
@@ -2282,6 +2311,11 @@ def serve(
     # Before the refresh and the index build, so neither has to work
     # through a log a previous interrupted serve left behind (#332). The
     # refresh would do this itself; --no-convert has nothing else that will.
+    if not no_convert:
+        _require_cache_sqlite(
+            ", or serve the pages already generated with --no-convert"
+        )
+
     trim_oversized_wal(get_cache_db_path(projects_path), announce=click.echo)
 
     if not no_convert:
@@ -2603,6 +2637,7 @@ def watch(
             f"Warning: --theme is HTML-only; ignoring under --format {output_format}.",
             err=True,
         )
+    _require_cache_sqlite()
     projects_path = projects_dir or get_default_projects_dir()
     root = _resolve_watch_root(input_path, projects_path, all_projects)
     if root is None:

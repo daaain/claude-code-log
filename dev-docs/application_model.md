@@ -692,7 +692,13 @@ Current migrations:
   one. A project 015 still marked gets `total_message_count` zeroed
   first, which the next run reads as a cache to refresh in full, from
   the cached entries: 015's heal at 015's price. `DROP COLUMN` needs
-  SQLite 3.35 (2021).
+  SQLite 3.35 (2021), which makes 3.35 the cache's minimum
+  (`MIN_SQLITE_VERSION`): `run_migrations` checks it before opening
+  the file, since on an older SQLite the `DROP` failed as a bare syntax
+  error after the `UPDATE` had committed, unrecorded, so again on
+  every run. The CLI checks it once up front (`convert` unless
+  `--no-cache` or a single file, `serve` unless `--no-convert`,
+  `watch`) and exits 1 with one line naming both versions.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
