@@ -350,3 +350,28 @@ def test_an_interrupted_cold_build_is_marked_and_heals(
     _pass(projects_dir)
     assert _sessions(project) == {"sess-alpha": 2, "sess-beta": 2}
     assert _total(db_path) == 4
+
+
+def test_a_per_file_merge_with_nothing_derived_takes_no_mark(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scope that writes rows only (as `atomic_refresh` allows any
+    caller): nothing derived can fall out of step with them, and nothing
+    would lift a mark, so the project keeps its total instead of being
+    refreshed in full by the next run for no reason."""
+    _per_file(monkeypatch)
+    manager = _built(project)
+    files, changed = _grow(project)
+    begins: List[str] = []
+    with manager.atomic_refresh():
+        conn = manager._shared_conn  # pyright: ignore[reportPrivateUsage]
+        assert conn is not None
+        conn.set_trace_callback(
+            lambda sql: begins.append(sql) if sql.upper().startswith("BEGIN") else None
+        )
+        for f in changed:
+            manager.save_cached_entries(f, _entries(f))
+    # Per file (one per file, then the last), and no mark before them.
+    assert len(begins) == len(changed) + 1
+    assert len(_rows_by_file(manager.db_path)["sess-gamma.jsonl"]) == 2
+    assert _total(manager.db_path) == 4
