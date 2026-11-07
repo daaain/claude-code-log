@@ -646,14 +646,20 @@ The tool implements a SQLite-based caching system for performance:
   (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
   locked out is retried after the pool rather than failed. A pass compacts
   an oversized WAL before it starts and truncates the WAL when it ends. A
-  project's refresh commits as one transaction (`CacheManager.atomic_refresh`):
-  while it parses, its entry rows go to a spool file beside the cache
-  (`<cache>.spool-<pid>-<n>`, `refresh_spool.py`), and one merge at the end
-  commits them with the session rows, aggregates and sidecar derived from
-  them, so a refresh that fails part-way leaves the cache as it was and the
-  next run redoes it. Only the refresh writes entry rows: a run renders what
-  its refresh committed, so lines written to a session while it renders
-  appear on the next run. A date-filtered run refreshes the
+  refresh of a project the cache already holds runs in one scope
+  (`CacheManager.atomic_refresh`): while it parses, its entry rows go to a
+  spool file beside the cache (`<cache>.spool-<pid>-<n>`, `refresh_spool.py`),
+  and a merge at the end commits them with the session rows, aggregates and
+  sidecar derived from them. The merge is one transaction while the rows
+  beyond the largest file's are at most 16 MB
+  (`CLAUDE_CODE_LOG_ATOMIC_MERGE_MB` overrides it), so a refresh that fails
+  part-way leaves the cache as it was; past that it commits per file, under a
+  mark (the project's message total at 0) that its last transaction lifts and
+  that otherwise makes the next run refresh the project in full. A cold
+  build, of a project with nothing cached, writes per file without a spool,
+  its total at 0 until it finishes. Only the refresh writes entry rows: a run
+  renders what its refresh committed, so lines written to a session while it
+  renders appear on the next run. A date-filtered run refreshes the
   cache as an unfiltered one would and leaves the files it wrote from its
   window marked stale, so the next unfiltered run re-renders them. Its
   refresh therefore loads whole files when they changed and the incremental

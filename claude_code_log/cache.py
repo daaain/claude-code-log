@@ -1165,6 +1165,44 @@ _MERGE_MESSAGES = (
 )
 
 
+# How a refresh's merge commits (`CacheManager._merge_refresh`). In one
+# transaction, its lock hold is the sum of what each spooled file's rows
+# cost to insert; per file, the longest is the largest file's. One
+# transaction is kept while the difference, the rows beyond the largest
+# file's, stays under this many bytes of spooled content: about half a
+# second of extra hold at the rates measured on a cold merge (24-55 ms per
+# spooled MB, most of it the messages indexes). A watch tick and a small
+# daily delta merge at once; a refresh spread over many files, per file.
+ATOMIC_MERGE_MAX_EXTRA_BYTES = 16 * 1024 * 1024
+ENV_ATOMIC_MERGE_MB = "CLAUDE_CODE_LOG_ATOMIC_MERGE_MB"
+
+# The page cache a merge runs with, in KiB. SQLite's default is 2 MB, and
+# a merge maintains the messages indexes in random key order: on a
+# 191k-row cold merge 64 MB took the copy from 6.1 s to 3.4 s. Set for the
+# merge alone and given back, so it is not held by every writing
+# connection (a pool of workers each holding 64 MB).
+MERGE_CACHE_SIZE_KIB = 64 * 1024
+
+
+def atomic_merge_max_extra_bytes() -> int:
+    """`ATOMIC_MERGE_MAX_EXTRA_BYTES`, or ``$CLAUDE_CODE_LOG_ATOMIC_MERGE_MB``.
+
+    The override is in megabytes and may be fractional; ``0`` merges
+    per file whenever more than one file is spooled, a large value
+    always at once. Unparsable or negative falls back to the default.
+    Read at each merge, as the other switches are.
+    """
+    raw = os.environ.get(ENV_ATOMIC_MERGE_MB, "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = -1.0
+        if value >= 0:
+            return int(value * 1024 * 1024)
+    return ATOMIC_MERGE_MAX_EXTRA_BYTES
+
+
 # Spools a scope could not DETACH when it ended (a statement was still
 # active on the connection), by connection: released at the next scope's
 # entry on that connection, or when the connection closes. Keyed by the
@@ -1532,33 +1570,161 @@ class CacheManager:
     def _merge_refresh(
         self, conn: sqlite3.Connection, pending: _PendingRefresh
     ) -> None:
-        """The one transaction an `atomic_refresh` scope ends with.
+        """Commit what an `atomic_refresh` scope accumulated.
 
         Runs with the spool attached and the overlay views dropped, so
-        the tables it writes are the tables.
+        the tables it writes are the tables, and with a larger page
+        cache (`MERGE_CACHE_SIZE_KIB`), given back after. In one
+        transaction when the rows beyond the largest file's are at most
+        `atomic_merge_max_extra_bytes()`; otherwise per file
+        (`_merge_per_file`), since one transaction would hold the lock
+        for the sum of what per file holds at most once.
         """
         spooled = pending.spool.files()
         if not spooled and not pending.deferred:
             return
-        with write_transaction(conn):
-            file_ids: List[int] = []
-            for spooled_file in spooled:
-                file_ids.append(self._merge_spooled_file(conn, spooled_file, pending))
-            if file_ids:
-                # One index refresh for every file merged, as each
-                # direct write does for its file (and a hierarchy
-                # pass defers to its end, the same way).
-                from .search import (
-                    auto_index_enabled,
-                    index_maintenance_deferred,
-                    reindex_files,
-                )
+        sizes = [f.content_bytes for f in spooled]
+        at_once = sum(sizes) - max(sizes, default=0) <= atomic_merge_max_extra_bytes()
+        with self._merge_page_cache(conn):
+            if at_once:
+                self._merge_at_once(conn, pending, spooled)
+            else:
+                self._merge_per_file(conn, pending, spooled)
 
-                if auto_index_enabled() and not index_maintenance_deferred():
-                    reindex_files(conn, file_ids, commit=False)
+    @staticmethod
+    @contextmanager
+    def _merge_page_cache(conn: sqlite3.Connection) -> Generator[None, None, None]:
+        (previous,) = conn.execute("PRAGMA cache_size").fetchone()
+        conn.execute(f"PRAGMA cache_size = -{MERGE_CACHE_SIZE_KIB}")
+        try:
+            yield
+        finally:
+            conn.execute(f"PRAGMA cache_size = {int(previous)}")
+
+    @staticmethod
+    def _reindex(conn: sqlite3.Connection, file_ids: List[int]) -> None:
+        """Refresh the search index for merged files, as each direct
+        write does for its file (a hierarchy pass defers it to its end,
+        the same way)."""
+        from .search import (
+            auto_index_enabled,
+            index_maintenance_deferred,
+            reindex_files,
+        )
+
+        if auto_index_enabled() and not index_maintenance_deferred():
+            reindex_files(conn, file_ids, commit=False)
+
+    def _merge_at_once(
+        self,
+        conn: sqlite3.Connection,
+        pending: _PendingRefresh,
+        spooled: List[SpooledFile],
+    ) -> None:
+        """The whole refresh in one transaction: rows, then derived rows."""
+        with write_transaction(conn):
+            file_ids = [self._merge_spooled_file(conn, f, pending) for f in spooled]
+            if file_ids:
+                self._reindex(conn, file_ids)
                 self._update_last_updated(conn)
             for write in pending.deferred:
                 write(conn)
+
+    def _merge_per_file(
+        self,
+        conn: sqlite3.Connection,
+        pending: _PendingRefresh,
+        spooled: List[SpooledFile],
+    ) -> None:
+        """The refresh in one transaction per file, between two more.
+
+        The first marks the project unfinished, its message total at 0,
+        which the next run reads as "refresh in full, from the cached
+        entries" (migration 016's heal); each file then commits its
+        record with its rows; the last writes the derived rows, the
+        aggregates among them, which lift the mark. A merge that stops
+        anywhere leaves every file whole and the project marked.
+
+        The last transaction first checks that each file still carries
+        the record this merge wrote. Another writer may have rewritten
+        one in between, from a newer parse; derived rows from this
+        merge's parse would then read as current over those rows, so
+        they are not written, and the mark stays for the next run.
+
+        With nothing deferred there are no derived rows to fall out of
+        step, and no mark either.
+        """
+        if pending.deferred:
+            with write_transaction(conn):
+                self._mark_refresh_unfinished(conn)
+        merged: Dict[int, Optional[Tuple[Any, ...]]] = {}
+        for spooled_file in spooled:
+            file_id, record = self._merge_one_file(conn, spooled_file, pending)
+            merged[file_id] = record
+        with write_transaction(conn):
+            moved = [
+                file_id
+                for file_id, record in merged.items()
+                if self._file_record_identity(conn, file_id) != record
+            ]
+            if moved:
+                logger.info(
+                    "%d file(s) of %s rewritten by another writer during the"
+                    " merge; left for the next run to derive",
+                    len(moved),
+                    self.project_path,
+                )
+                return
+            if merged:
+                self._update_last_updated(conn)
+            for write in pending.deferred:
+                write(conn)
+
+    def has_cached_files(self) -> bool:
+        """Whether the cache holds any file of this project.
+
+        A refresh of a project with none is a cold build, which
+        `ensure_fresh_cache` runs without a spool.
+        """
+        if self._project_id is None:
+            return False
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT 1 FROM cached_files WHERE project_id = ? LIMIT 1",
+                (self._project_id,),
+            ).fetchall()
+        return bool(rows)
+
+    def _mark_refresh_unfinished(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "UPDATE projects SET total_message_count = 0 WHERE id = ?",
+            (self._project_id,),
+        )
+
+    def _merge_one_file(
+        self,
+        conn: sqlite3.Connection,
+        spooled_file: SpooledFile,
+        pending: _PendingRefresh,
+    ) -> Tuple[int, Optional[Tuple[Any, ...]]]:
+        """One spooled file in a transaction of its own; returns its id
+        and the record it was left with."""
+        with write_transaction(conn):
+            file_id = self._merge_spooled_file(conn, spooled_file, pending)
+            self._reindex(conn, [file_id])
+            return file_id, self._file_record_identity(conn, file_id)
+
+    @staticmethod
+    def _file_record_identity(
+        conn: sqlite3.Connection, file_id: int
+    ) -> Optional[Tuple[Any, ...]]:
+        """What tells one write of a file's record from another."""
+        row = conn.execute(
+            "SELECT source_mtime, source_size, cached_mtime, message_count"
+            " FROM cached_files WHERE id = ?",
+            (file_id,),
+        ).fetchone()
+        return None if row is None else tuple(row)
 
     def _merge_spooled_file(
         self,
