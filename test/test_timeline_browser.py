@@ -1105,6 +1105,18 @@ class TestTimelineBrowser:
         # The visible/total form was exercised, not only the totals.
         assert "/" in counts["labels"]["assistant"], counts
 
+        # With Assistant off, the moved cards are hidden whichever map the
+        # visible count reads. With Assistant on and Tool off they are shown,
+        # so a visible count that bypassed the map would count them under
+        # Tool (and miss them under Assistant).
+        page.locator('.filter-toggle[data-type="assistant"]').click()
+        page.locator('.filter-toggle[data-type="tool"]').click()
+        _wait_for_filters(page)
+
+        counts = page.evaluate(_TOGGLE_COUNTS_FOLLOW_THE_MAP)
+        assert counts["problems"] == [], counts
+        assert "/" in counts["labels"]["tool"], counts
+
     @pytest.mark.browser
     def test_timeline_filter_individual_message_types(self, page: Page):
         """Test filtering individual message types in timeline."""
