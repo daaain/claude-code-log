@@ -934,7 +934,9 @@ def _drop_leases(db_path: Path) -> None:
     """
     leases = _thread_leases()
     for key in [k for k in leases if k[0] == str(db_path)]:
-        leases.pop(key).close()
+        conn = leases.pop(key)
+        conn.close()
+        _forget_leftover_spool(conn)
 
 
 @contextmanager
@@ -975,6 +977,7 @@ def connection_lease(
         # `_drop_leases` may already have removed and closed it.
         if leases.pop(key, None) is not None:
             conn.close()
+            _forget_leftover_spool(conn)
 
 
 # How long a WAL checkpoint waits for readers to move off old snapshots. A
@@ -1164,8 +1167,20 @@ _MERGE_MESSAGES = (
 
 # Spools a scope could not DETACH when it ended (a statement was still
 # active on the connection), by connection: released at the next scope's
-# entry on that connection. See `CacheManager._detach_spool`.
-_leftover_spools: Dict[int, Path] = {}
+# entry on that connection, or when the connection closes. Keyed by the
+# connection object, not its address, which a later connection may
+# reuse. See `CacheManager._detach_spool`.
+_leftover_spools: Dict[sqlite3.Connection, Path] = {}
+
+
+def _forget_leftover_spool(conn: sqlite3.Connection) -> None:
+    """After ``conn`` closed: its attachment went with it, the file goes."""
+    path = _leftover_spools.pop(conn, None)
+    if path is not None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 class _PendingRefresh:
@@ -1343,6 +1358,7 @@ class CacheManager:
         finally:
             self._shared_conn = None
             conn.close()
+            _forget_leftover_spool(conn)
 
     @contextmanager
     def atomic_refresh(self) -> Generator[None, None, None]:
@@ -1407,7 +1423,7 @@ class CacheManager:
                     self._detach_spool(conn, pending.spool)
             finally:
                 pending.spool.close()
-                if id(conn) not in _leftover_spools:
+                if conn not in _leftover_spools:
                     pending.spool.unlink()
 
     @staticmethod
@@ -1425,17 +1441,19 @@ class CacheManager:
         try:
             conn.execute("DETACH DATABASE spool")
         except sqlite3.OperationalError:
-            _leftover_spools[id(conn)] = spool.path
+            _leftover_spools[conn] = spool.path
 
     @staticmethod
     def _release_leftover_spool(conn: sqlite3.Connection) -> None:
         """Finish a scope's cleanup that `_detach_spool` could not."""
-        path = _leftover_spools.pop(id(conn), None)
+        path = _leftover_spools.pop(conn, None)
         if path is None:
             return
         conn.execute("DROP VIEW IF EXISTS temp.messages")
         conn.execute("DROP VIEW IF EXISTS temp.cached_files")
-        conn.execute("DETACH DATABASE spool")
+        attached = {row[1] for row in conn.execute("PRAGMA database_list")}
+        if "spool" in attached:
+            conn.execute("DETACH DATABASE spool")
         try:
             path.unlink()
         except OSError:

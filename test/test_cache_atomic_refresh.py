@@ -552,12 +552,18 @@ def test_reads_inside_a_scope_see_the_spooled_rows(project: Path) -> None:
     alpha = project / "sess-alpha.jsonl"
     gamma = project / "sess-gamma.jsonl"
     old_alpha = _entries(alpha)
+    old_state = manager.get_file_states(["sess-alpha.jsonl"])["sess-alpha.jsonl"]
     files, _changed = _grow(project)
     all_alpha = _entries(alpha)
 
     def read_back() -> None:
         states = manager.get_file_states(["sess-alpha.jsonl", "sess-gamma.jsonl"])
         assert len(states["sess-alpha.jsonl"].row_fingerprints) == 4
+        # The tail follows the file's rows (its ids read past the
+        # cache's last), which the incremental path's prefix check needs.
+        assert states["sess-alpha.jsonl"].row_fingerprints[:2] == (
+            old_state.row_fingerprints
+        )
         assert len(states["sess-gamma.jsonl"].row_fingerprints) == 2
         assert states["sess-gamma.jsonl"].sessions == {"sess-gamma"}
         owners = manager.get_uuid_owners(["sess-gamma-u0", "sess-alpha-u1"])
@@ -800,6 +806,38 @@ def test_a_statement_left_active_over_the_overlay_does_not_break_the_scope(
         with manager.atomic_refresh():
             _refresh(manager, files, [project / "sess-beta.jsonl"])
         assert len(_rows_by_file(manager.db_path)["sess-beta.jsonl"]) == 4
+    assert _spools(manager.db_path) == []
+
+
+def test_a_leftover_spool_record_does_not_outlive_its_connection(
+    project: Path,
+) -> None:
+    """A scope that could not DETACH records its spool for the next
+    scope on that connection. Keyed by the connection's address, the
+    record was inherited by whatever connection was next allocated
+    there, and that scope's entry then DETACHed a spool it never had.
+    """
+    manager = _manager(project)
+    files = sorted(project.glob("*.jsonl"))
+    _refresh(manager, files, files)
+    files, changed = _grow(project)
+
+    with manager.batch():
+        conn = manager._shared_conn  # pyright: ignore[reportPrivateUsage]
+        assert conn is not None
+        with manager.atomic_refresh():
+            _refresh(manager, files, changed)
+            cursor = conn.execute("SELECT _uuid FROM messages")
+            cursor.fetchone()  # active when the scope ends
+        del cursor
+    # The batch closed its connection: the leftover went with it.
+    assert _spools(manager.db_path) == []
+
+    for n in range(20):
+        _append(project / "sess-beta.jsonl", _turn("sess-beta", n + 1, f"turn {n}"))
+        with manager.atomic_refresh():  # a fresh connection each time
+            _refresh(manager, files, [project / "sess-beta.jsonl"])
+    assert len(_rows_by_file(manager.db_path)["sess-beta.jsonl"]) == 42
     assert _spools(manager.db_path) == []
 
 
