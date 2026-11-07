@@ -21,12 +21,17 @@ from claude_code_log.models import TranscriptEntry
 # reaches the timeline 50 ms later (``setTimeout(applyFilters, 50)`` in
 # timeline.html): group visibility follows the toggles, then each item is
 # tagged ``timeline-filtered-hidden`` after its card. Item ids index
-# ``.message:not(.session-header)``; the toggle→groups map mirrors
-# timeline.html's TOGGLE_GROUPS.
+# ``.message:not(.session-header)``. Which groups a toggle governs is read off
+# the page (timeline.html exposes its TOGGLE_GROUPS), so the predicate cannot
+# drift from the template; a page without that map fails the wait at once
+# rather than letting every multi-group toggle pass unchecked.
 _TIMELINE_IN_SYNC = """() => {
+    const groupsOf = window.timelineToggleGroups;
+    if (!groupsOf || !Object.keys(groupsOf).length) {
+        throw new Error('window.timelineToggleGroups is missing or empty');
+    }
     const tl = window.timeline;
     if (!tl || !tl.groupsData || !tl.itemsData) return true;
-    const groupsOf = {tool: ['tool_use', 'tool_result'], user: ['user', 'bash-input', 'bash-output']};
     const visible = new Map(tl.groupsData.get().map(g => [g.id, g.visible !== false]));
     for (const toggle of document.querySelectorAll('.filter-toggle')) {
         const on = toggle.classList.contains('active');
