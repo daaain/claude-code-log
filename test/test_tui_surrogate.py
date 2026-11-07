@@ -90,13 +90,16 @@ class TestTUIExportSurrogateHandling:
 
         # Mock the renderer's generate_session to inject surrogate-bearing
         # content directly. Also short-circuit `is_outdated` so we always
-        # write, and `load_directory_transcripts` to skip JSONL parsing.
+        # write, and `load_directory_transcripts` to skip JSONL parsing,
+        # and with it the cache refresh before it, which would read the
+        # mocked project data below.
         mock_renderer = MagicMock()
         mock_renderer.is_outdated.return_value = True
         mock_renderer.generate_session.return_value = surrogate_html
 
         with (
             patch("claude_code_log.tui.get_renderer", return_value=mock_renderer),
+            patch("claude_code_log.tui.ensure_fresh_cache"),
             patch(
                 "claude_code_log.tui.load_directory_transcripts",
                 return_value=([{"placeholder": True}], None),
