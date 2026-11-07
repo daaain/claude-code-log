@@ -5136,6 +5136,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -13894,6 +13900,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -32639,6 +32651,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -48432,6 +48450,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -72866,6 +72890,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -84556,6 +84586,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -93432,6 +93468,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -102588,6 +102630,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -111691,6 +111739,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -120739,6 +120793,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -129615,6 +129675,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
@@ -138296,6 +138362,12 @@
               // Create timeline
               itemsDataSet = new vis.DataSet(items);
               timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
+              // vis-timeline keeps its root hidden, under a loading overlay that
+              // swallows clicks, until a redraw follows its first range event.
+              // With an explicit window (start/end above) nothing requests that
+              // redraw for about a second, so the timeline appeared, and took
+              // clicks, a fixed second after it was built. Ask for it.
+              timeline.once('rangechanged', () => timeline.redraw());
   
               // Make timeline available globally for debugging
               window.timeline = timeline;
