@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Utility functions for message filtering and processing."""
 
+import json
 import os
 import re
 import time
@@ -1033,6 +1034,54 @@ def strip_error_tags(text: str) -> str:
         text,
         flags=re.DOTALL,
     )
+
+
+def split_json_prefix(text: str) -> Optional[tuple[str, str]]:
+    """Split a tool result into its leading JSON document and the text after.
+
+    Tool results are often *mixed* (issue #362): one JSON object or array
+    on the first line(s), then plain-text lines. Returns ``(json_text,
+    tail)`` — ``tail`` empty when the whole result is the document — or
+    ``None`` when the result does not start with one.
+
+    The definition is deliberately narrow. The document must begin (after
+    leading whitespace) with ``{`` or ``[``, parse completely, and end its
+    line: anything but whitespace after it on that line (words, a second
+    document) means the result is not JSON-headed and stays text. Scalars
+    are never a head. Nor is the first record of a stream: when the tail
+    itself starts with a JSON document (JSON Lines, concatenated
+    documents), the whole result stays text rather than render one record
+    as JSON and the rest as text.
+
+    Blank lines between the document and the tail are not part of the
+    tail; its first line keeps its indentation.
+    """
+    stripped = text.lstrip()
+    end = _json_document_end(stripped)
+    if end is None:
+        return None
+    remainder = stripped[end:]
+    same_line, newline, tail = remainder.partition("\n")
+    if same_line.strip():
+        return None
+    tail = tail.strip("\r\n") if newline else ""
+    if not tail.strip():
+        tail = ""
+    elif _json_document_end(tail.lstrip()) is not None:
+        return None
+    return stripped[:end], tail
+
+
+def _json_document_end(text: str) -> Optional[int]:
+    """Index just past the JSON object or array ``text`` starts with, or
+    ``None`` when it does not start with one (scalars included)."""
+    if text[:1] not in ("{", "["):
+        return None
+    try:
+        _, end = json.JSONDecoder().raw_decode(text)
+    except (ValueError, RecursionError):
+        return None
+    return end
 
 
 def generate_unified_diff(old_string: str, new_string: str) -> str:

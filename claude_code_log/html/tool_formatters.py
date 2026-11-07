@@ -40,6 +40,7 @@ from ..json_depth import exceeds_depth
 from ..utils import (
     ARTIFACT_FAVICON_TEXT_MAX,
     is_safe_web_url,
+    split_json_prefix,
     split_websearch_queries,
     strip_error_tags,
 )
@@ -1628,11 +1629,6 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
 
     # Format the content
     full_html = escape_html(raw_content)
-    preview_html = (
-        escape_html(raw_content[:200]) + "..."
-        if len(raw_content) > 200
-        else escape_html(raw_content)
-    )
 
     # Build final HTML based on content length and presence of images
     if has_images:
@@ -1663,19 +1659,34 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
             text_html = f"<pre>{full_html}</pre>" if full_html else ""
             return f"{text_html}{structured_html}"
 
-        # Text-only content that parses as structured JSON renders as a
-        # params-style table (not for errors — those read as text).
+        # Text-only content that starts with a structured JSON document
+        # renders it as a params-style table (not for errors — those read
+        # as text). A mixed result (issue #362) — the document, then
+        # plain-text lines — renders the table, then the tail as text.
         if not tool_result.is_error:
-            json_table = _json_result_table_html(raw_content)
-            if json_table is not None:
-                return json_table
+            split = split_json_prefix(raw_content)
+            if split is not None:
+                json_text, tail = split
+                json_table = _json_result_table_html(json_text)
+                if json_table is not None:
+                    if not tail:
+                        return json_table
+                    return json_table + _text_result_html(tail)
 
-        # For simple content, show directly without collapsible wrapper
-        if len(raw_content) <= 200:
-            return f"<pre>{full_html}</pre>"
+        return _text_result_html(raw_content)
 
-        # For longer content, use collapsible details
-        return f"""
+
+def _text_result_html(raw_content: str) -> str:
+    """Render a tool result's plain text: a bare ``<pre>`` when short,
+    collapsible details with a 200-char preview otherwise."""
+    full_html = escape_html(raw_content)
+    # For simple content, show directly without collapsible wrapper
+    if len(raw_content) <= 200:
+        return f"<pre>{full_html}</pre>"
+
+    # For longer content, use collapsible details
+    preview_html = escape_html(raw_content[:200]) + "..."
+    return f"""
     <details class="collapsible-details">
         <summary>
             <div class="preview-content"><pre>{preview_html}</pre></div>
