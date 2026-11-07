@@ -387,14 +387,25 @@ class TestLiveUpdate:
             response = route.fetch()
             body = response.body()
             served_stale.append(b"LOAD-RACE-MARKER" not in body)
-            with jsonl.open("a", encoding="utf-8") as f:
-                f.write(_entry("load-race", "LOAD-RACE-MARKER"))
-            deadline = time.time() + 20
-            while time.time() < deadline:
-                if "LOAD-RACE-MARKER" in page_file.read_text(encoding="utf-8"):
-                    break
-                time.sleep(0.05)
-            route.fulfill(status=response.status, headers=response.headers, body=body)
+            try:
+                with jsonl.open("a", encoding="utf-8") as f:
+                    f.write(_entry("load-race", "LOAD-RACE-MARKER"))
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    try:
+                        text = page_file.read_text(encoding="utf-8")
+                    except PermissionError:
+                        # Windows, mid-swap: not rewritten yet.
+                        text = ""
+                    if "LOAD-RACE-MARKER" in text:
+                        break
+                    time.sleep(0.05)
+            finally:
+                # Whatever happened above, release the navigation: a held
+                # route would turn any error here into a goto timeout.
+                route.fulfill(
+                    status=response.status, headers=response.headers, body=body
+                )
 
         page.route(url, hold)
         self._open(page, base, project)
