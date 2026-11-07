@@ -1044,10 +1044,11 @@ def catch_up_search_index(db_path: Path) -> int:
     The index is derived data that the next pass heals (its entries stay
     behind their cache rows until re-extracted), so no error here is
     worth failing the pass over: the pages are written already. A cache
-    busy with another process's writer, a full disk, a damaged index and
-    an undecodable blob are all reported with the same warning and
-    return 0 — unlike an entry write, where the same error fails that
-    one project's save and nothing else.
+    busy with another process's writer, a full disk and a damaged index
+    are all reported with the same warning and return 0 — unlike an entry
+    write, where the same error fails that one project's save and nothing
+    else. An undecodable blob is not among them: the index leaves that
+    message out and names its file (``search._rows_for_file``).
     """
     from .search import auto_index_enabled, catch_up_index
 
@@ -1064,13 +1065,13 @@ def catch_up_search_index(db_path: Path) -> int:
         return 0
     try:
         return catch_up_index(conn)
-    # ValueError covers what `search.decode_entry` raises past zlib: a blob
-    # that decompresses but is not UTF-8 (UnicodeDecodeError) or not JSON
-    # (JSONDecodeError) — both subclasses, neither a zlib.error.
+    # zlib.error and ValueError (what decoding raises past zlib) stay as a
+    # backstop; a blob that fails to decode is handled per message before
+    # it could get here.
     except (sqlite3.Error, zlib.error, ValueError) as exc:
         print(
             "Warning: the search index was not brought up to date "
-            f"({exc}); the next run or `serve` start will do it."
+            f"({exc}); the next run or `serve` start tries again."
         )
         return 0
     finally:
