@@ -83,7 +83,19 @@ def test_serve_refuses_and_names_no_convert(
     assert "--no-convert" in result.output
 
 
+def _past_the_gate(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("watch went past its SQLite gate")
+
+
 def test_watch_refuses(projects: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Past the gate, watch converts once and then loops until interrupted:
+    # under CliRunner a missing gate would hang the test, not fail it. Both
+    # steps raise instead, so a missing gate is a fast red.
+    from claude_code_log import cli
+    from claude_code_log.watch import WatchEngine
+
+    monkeypatch.setattr(cli, "convert_jsonl_to", _past_the_gate)
+    monkeypatch.setattr(WatchEngine, "run", _past_the_gate)
     monkeypatch.setattr(sqlite3, "sqlite_version_info", OLD)
     result = CliRunner().invoke(main, ["watch", str(projects / "-tmp-demo")])
     _refused(result.output, result.exit_code)
