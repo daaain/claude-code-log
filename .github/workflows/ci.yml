@@ -185,7 +185,7 @@ jobs:
     # both primary artifacts, though: a primary cell whose pytest failed,
     # or that the matrix's default fail-fast cancelled after another
     # cell's failure, never reaches its upload, and this job then fails at
-    # the download below, beside the cell that failed first.
+    # the combine below, beside the cell that failed first.
     if: ${{ !cancelled() }}
     env:
       PYTHON_VERSION: "3.12"
