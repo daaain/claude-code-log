@@ -1799,9 +1799,12 @@ the card holds both copies, and a message's second text item in an
 `-i<n>` one. The Markdown output has the same collision in its `[^1]`
 labels and prefixes them the same way (`[^m<index>-1]`, `-i<n>` per
 later item), for user and assistant text, thinking and the heading
-excerpt: only the labels the text defines outside code, and only
-outside fenced blocks and code spans, so a regex sample `[^abc]` or a
-definition shown in a fence stays as written. `test/test_footnote_ids.py`
+excerpt (a thinking block's too): only the labels the text defines
+outside code, and only outside fenced blocks and code spans, so a regex
+sample `[^abc]` or a definition shown in a fence stays as written. A
+fence is read as CommonMark does: three or more backticks or tildes,
+indented up to three spaces, closed by at least as many of the same
+character, or running to the end of the text when never closed. `test/test_footnote_ids.py`
 pins both.
 
 **Extensions are transforms, not inline rules.** SHA linkification

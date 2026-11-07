@@ -516,9 +516,14 @@ class MarkdownRenderer(Renderer):
 
     _FOOTNOTE_DEFINITION_RE = re.compile(r"^[ \t]*\[\^([^\]\s]+)\]:", re.MULTILINE)
     # Fenced blocks and code spans, left as written: a regex sample `[^abc]`
-    # or a definition shown in a fence is not a footnote.
+    # or a definition shown in a fence is not a footnote. Fences as
+    # CommonMark reads them: three or more backticks or tildes, indented up
+    # to three spaces, closed by at least as many of the same character —
+    # or by the end of the text when never closed.
     _CODE_RE = re.compile(
-        r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$|`+[^`\n]+`+"
+        r"(?ms)^ {0,3}(?P<fence>(?P<ch>[`~])(?P=ch){2,})[^\n]*\n"
+        r".*?(?:^ {0,3}(?P=fence)(?P=ch)*[ \t]*$|\Z)"
+        r"|`+[^`\n]+`+"
     )
 
     def _scope_footnotes(
@@ -752,7 +757,7 @@ class MarkdownRenderer(Renderer):
         """Extract text content from a message for excerpt generation."""
         content = msg.content
         if isinstance(content, ThinkingMessage):
-            return content.thinking
+            return self._scope_footnotes(content.thinking, msg)
         if isinstance(content, (AssistantTextMessage, UserTextMessage)):
             # The first text item, its footnote labels scoped as in its body
             # so an excerpt's reference still resolves.
