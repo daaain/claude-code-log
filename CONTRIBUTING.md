@@ -647,7 +647,9 @@ The tool implements a SQLite-based caching system for performance:
   locked out is retried after the pool rather than failed. A pass compacts
   an oversized WAL before it starts and truncates the WAL when it ends. A
   refresh that fails part-way leaves `projects.refresh_pending` set, and the
-  next run refreshes that project in full. A date-filtered run refreshes the
+  next run refreshes that project in full. Only the refresh writes entry
+  rows: a run renders what its refresh committed, so lines written to a
+  session while it renders appear on the next run. A date-filtered run refreshes the
   cache as an unfiltered one would and leaves the files it wrote from its
   window marked stale, so the next unfiltered run re-renders them. Its
   refresh therefore loads whole files when they changed and the incremental
