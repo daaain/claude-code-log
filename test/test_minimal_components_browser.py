@@ -680,16 +680,22 @@ class TestFootnotes:
         assert all(gap >= 3 for gap in box["gaps"]), box["gaps"]
 
     @pytest.mark.parametrize(
-        "anchor, key",
+        "selector, key",
         [
-            ("user-content-fn-2", "noteBackgrounds"),
-            ("user-content-fnref-2", "refBackgrounds"),
+            ("section.footnotes li", "noteBackgrounds"),
+            ("sup > a[data-footnote-ref]", "refBackgrounds"),
         ],
     )
     def test_the_target_is_marked_and_clear_of_the_toolbar(
-        self, page: Page, tmp_path: Path, anchor: str, key: str
+        self, page: Page, tmp_path: Path, selector: str, key: str
     ) -> None:
         url = _render(tmp_path, _footnotes_fixture(tmp_path)).as_uri()
+        page.goto(url)
+        # The ids are the message's own (scoped per message), so read the
+        # second note's or reference's id off the page rather than spelling
+        # wenmode's out.
+        anchor = page.locator(selector).nth(1).get_attribute("id")
+        assert anchor, selector
         page.goto(f"{url}#{anchor}")
         box = page.evaluate(FOOTNOTES_BOX)
         first, second, third = box[key]
