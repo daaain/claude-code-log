@@ -4986,11 +4986,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -7204,18 +7204,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -13751,11 +13746,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -15864,18 +15859,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -32542,11 +32532,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -34756,18 +34746,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -48385,11 +48370,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -51166,18 +51151,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -72869,11 +72849,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -75199,18 +75179,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -84570,11 +84545,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -86906,18 +86881,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -93453,11 +93423,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -96069,18 +96039,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -102616,11 +102581,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -105179,18 +105144,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -111726,11 +111686,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -114234,18 +114194,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -120781,11 +120736,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -123117,18 +123072,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -129664,11 +129614,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -131805,18 +131755,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -138352,11 +138297,11 @@
               return { timelineItems, timelineGroups, timelineEnd, timelineStart };
           }
   
-          // The timeline groups a filter toggle governs. Mirrors the toggle
-          // expansion in the transcript's applyFilter: the single "Tool" toggle
-          // stands for both tool groups, and "User" also covers the
+          // The timeline groups a filter toggle governs: the single "Tool"
+          // toggle stands for both tool groups, and "User" also covers the
           // user-initiated bash lines. Every other toggle governs the group of
-          // its own name.
+          // its own name. The transcript's applyFilter expands toggles through
+          // this same map (exported below as window.timelineToggleGroups).
           const TOGGLE_GROUPS = {
               'tool': ['tool_use', 'tool_result'],
               'user': ['user', 'bash-input', 'bash-output']
@@ -140442,18 +140387,13 @@
                       .filter(toggle => toggle.classList.contains('active'))
                       .map(toggle => toggle.dataset.type);
   
-                  // Expand filter types to their corresponding CSS classes
-                  const expandedTypes = [];
-                  activeTypes.forEach(type => {
-                      if (type === 'tool') {
-                          expandedTypes.push('tool_use', 'tool_result');
-                      } else if (type === 'user') {
-                          // User filter includes bash commands (user-initiated)
-                          expandedTypes.push('user', 'bash-input', 'bash-output');
-                      } else {
-                          expandedTypes.push(type);
-                      }
-                  });
+                  // Expand filter types to their corresponding CSS classes,
+                  // through the map the timeline filters its groups by
+                  // (timeline.html), so the two cannot disagree: "Tool" stands
+                  // for both tool types, "User" also covers the user-initiated
+                  // bash lines, and every other toggle its own type.
+                  const toggleGroups = window.timelineToggleGroups;
+                  const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
   
                   // Show/hide messages based on active toggle buttons
                   const allMessages = document.querySelectorAll('.message:not(.session-header)');

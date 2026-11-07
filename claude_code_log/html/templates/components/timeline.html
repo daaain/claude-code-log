@@ -350,11 +350,11 @@
             return { timelineItems, timelineGroups, timelineEnd, timelineStart };
         }
 
-        // The timeline groups a filter toggle governs. Mirrors the toggle
-        // expansion in the transcript's applyFilter: the single "Tool" toggle
-        // stands for both tool groups, and "User" also covers the
+        // The timeline groups a filter toggle governs: the single "Tool"
+        // toggle stands for both tool groups, and "User" also covers the
         // user-initiated bash lines. Every other toggle governs the group of
-        // its own name.
+        // its own name. The transcript's applyFilter expands toggles through
+        // this same map (exported below as window.timelineToggleGroups).
         const TOGGLE_GROUPS = {
             'tool': ['tool_use', 'tool_result'],
             'user': ['user', 'bash-input', 'bash-output']

@@ -788,18 +788,13 @@
                     .filter(toggle => toggle.classList.contains('active'))
                     .map(toggle => toggle.dataset.type);
 
-                // Expand filter types to their corresponding CSS classes
-                const expandedTypes = [];
-                activeTypes.forEach(type => {
-                    if (type === 'tool') {
-                        expandedTypes.push('tool_use', 'tool_result');
-                    } else if (type === 'user') {
-                        // User filter includes bash commands (user-initiated)
-                        expandedTypes.push('user', 'bash-input', 'bash-output');
-                    } else {
-                        expandedTypes.push(type);
-                    }
-                });
+                // Expand filter types to their corresponding CSS classes,
+                // through the map the timeline filters its groups by
+                // (timeline.html), so the two cannot disagree: "Tool" stands
+                // for both tool types, "User" also covers the user-initiated
+                // bash lines, and every other toggle its own type.
+                const toggleGroups = window.timelineToggleGroups;
+                const expandedTypes = activeTypes.flatMap(type => toggleGroups[type] || [type]);
 
                 // Show/hide messages based on active toggle buttons
                 const allMessages = document.querySelectorAll('.message:not(.session-header)');
