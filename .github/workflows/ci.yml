@@ -18,6 +18,10 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Every cell runs to the end when another fails: a flaky cell then
+      # costs only its own rerun, and does not cancel the primary cell
+      # whose coverage data the `coverage` job needs.
+      fail-fast: false
       matrix:
         os: ["ubuntu-latest", "windows-latest"]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -126,6 +130,8 @@ jobs:
   browser:
     runs-on: ${{ matrix.os }}
     strategy:
+      # As in `test`: no cell cancels the others.
+      fail-fast: false
       matrix:
         os: ["ubuntu-latest", "windows-latest"]
         include:
@@ -182,10 +188,9 @@ jobs:
     needs: [test, browser]
     # Run once the two jobs are over, red cells included, so a failure in
     # a non-primary cell does not withhold the report. The report needs
-    # both primary artifacts, though: a primary cell whose pytest failed,
-    # or that the matrix's default fail-fast cancelled after another
-    # cell's failure, never reaches its upload, and this job then fails at
-    # the combine below, beside the cell that failed first.
+    # both primary artifacts, though: a primary cell whose pytest failed
+    # never reaches its upload, and this job then fails at the combine
+    # below, beside that cell.
     if: ${{ !cancelled() }}
     env:
       PYTHON_VERSION: "3.12"
