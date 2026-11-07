@@ -1161,11 +1161,55 @@ def test_a_catch_up_error_does_not_fail_the_pass(
         conn.close()
 
 
+_TOO_DEEP = 100_000
+# An entry whose content nests 100k lists deep. CPython's JSON decoder
+# bounds its recursion by the C stack: under the default 8 MB stack (and
+# the 1 MB of a Windows main thread) decoding raises RecursionError; under
+# `ulimit -s unlimited` it decodes in milliseconds, and the bounded flatten
+# indexes it. Either way the index must build.
+TOO_DEEP_BLOB = zlib.compress(
+    (
+        '{"type": "user", "message": {"content": '
+        + "[" * _TOO_DEEP
+        + "]" * _TOO_DEEP
+        + "}}"
+    ).encode()
+)
+
+
+def _nested_tool_results(levels: int) -> dict[str, Any]:
+    """A tool result holding a tool result, ``levels`` deep, around a text."""
+    inner: dict[str, Any] = {"type": "text", "text": "the innermost text"}
+    for _ in range(levels):
+        inner = {"type": "tool_result", "tool_use_id": "toolu_x", "content": [inner]}
+    return inner
+
+
+# Decodes on any stack, but its tool results nest past the interpreter's
+# recursion limit, which the text extraction must not follow.
+NESTED_TOOL_RESULTS_BLOB = zlib.compress(
+    json.dumps(
+        {"type": "user", "message": {"content": [_nested_tool_results(2000)]}}
+    ).encode()
+)
+
+
+def _does_not_decode(blob: bytes) -> bool:
+    """Whether this interpreter, on this stack, fails to decode ``blob``."""
+    try:
+        decode_entry(blob)
+    except Exception:
+        return True
+    return False
+
+
 @pytest.mark.parametrize(
     "blob",
     [
         pytest.param(zlib.compress(b"\xff\xfe\x00 not utf-8"), id="not-utf8"),
         pytest.param(zlib.compress(b"{not json"), id="not-json"),
+        pytest.param(TOO_DEEP_BLOB, id="too-deep"),
+        pytest.param(NESTED_TOOL_RESULTS_BLOB, id="nested-tool-results"),
     ],
 )
 def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
@@ -1176,7 +1220,10 @@ def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
 ) -> None:
     """A blob that decompresses but is not UTF-8 JSON raises a ValueError
     (UnicodeDecodeError, JSONDecodeError) from `decode_entry`, not a
-    zlib.error. The catch-up leaves that message out and names the file,
+    zlib.error; one nested too deep raises RecursionError (on a bounded C
+    stack), and one whose tool results nest too deep decodes but must not be
+    followed down. The catch-up leaves an undecodable message out and names
+    the file,
     the pass returns and still checkpoints, and the next pass that
     rewrites the file heals the index."""
     from claude_code_log import converter
@@ -1213,8 +1260,8 @@ def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
     assert failed == []
     assert checkpoints == [db_path], "the WAL checkpoint was skipped"
     err = capsys.readouterr().err
-    assert str(jsonl) in err, err
-    assert "until the file is rewritten" in err, err
+    assert (str(jsonl) in err) == _does_not_decode(blob), err
+    assert ("until the file is rewritten" in err) == _does_not_decode(blob), err
 
     jsonl.write_text(_entry_line("the second version mentions platypus"))
     bump_mtime(jsonl)
@@ -1262,6 +1309,7 @@ UNDECODABLE_BLOBS = [
     pytest.param(b"not zlib at all", id="not-zlib"),
     pytest.param(zlib.compress(b"\xff\xfe\x00 not utf-8"), id="not-utf8"),
     pytest.param(zlib.compress(b"{not json"), id="not-json"),
+    pytest.param(TOO_DEEP_BLOB, id="too-deep"),
 ]
 
 
@@ -1282,8 +1330,8 @@ def test_serve_start_indexes_around_an_undecodable_blob(
     _build_search_index(db_path, ("text",), rebuild=False)
 
     err = capsys.readouterr().err
-    assert str(jsonl) in err, err
-    assert "until the file is rewritten" in err, err
+    assert (str(jsonl) in err) == _does_not_decode(blob), err
+    assert ("until the file is rewritten" in err) == _does_not_decode(blob), err
     conn = sqlite3.connect(db_path)
     try:
         assert index_status(conn).ready
@@ -1294,6 +1342,41 @@ def test_serve_start_indexes_around_an_undecodable_blob(
 
     _build_search_index(db_path, ("text",), rebuild=False)
     assert str(jsonl) not in capsys.readouterr().err, "reported on every start"
+
+
+def test_serve_start_indexes_a_transcript_with_deeply_nested_tool_results(
+    tmp_path: Path,
+) -> None:
+    """A transcript line whose tool results nest past the interpreter's
+    recursion limit (on any C stack: the walk is Python recursion) parses
+    and is cached. Extracting its text must not stop the index build at
+    `serve` start. (The catch-up meets the same row in the blob tests.)"""
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.cli import _build_search_index
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    db_path = get_cache_db_path(projects)
+    deep = json.loads(_entry_line("unused"))
+    deep["message"]["content"] = [_nested_tool_results(2000)]
+    second = json.loads(_entry_line("the second message mentions wombat"))
+    second["uuid"] = "uuid-second"
+    second["parentUuid"] = "uuid-hook"
+    jsonl.write_text(json.dumps(deep) + "\n" + json.dumps(second) + "\n")
+    # The conversion itself may fail on this line; its cache rows are
+    # written before the render, and the index reads those.
+    process_projects_hierarchy(projects, silent=True, failed_projects=[])
+    _build_search_index(db_path, ("text",), rebuild=False)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        assert index_status(conn).ready
+        assert count_matches(conn, "wombat", fields=("text",)) == 1
+    finally:
+        conn.close()
 
 
 def test_catch_up_index_tolerates_a_file_indexed_since_its_snapshot(

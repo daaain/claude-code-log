@@ -256,8 +256,17 @@ def _flatten(value: Any, depth: int = 0) -> str:
     return ""
 
 
-def _walk_content_items(items: Iterable[Any], out: dict[str, list[str]]) -> None:
-    """Sort a list of content items into field groups."""
+def _walk_content_items(
+    items: Iterable[Any], out: dict[str, list[str]], depth: int = 0
+) -> None:
+    """Sort a list of content items into field groups.
+
+    Tool results nested in tool results are walked at most ``_MAX_DEPTH``
+    deep, like ``_flatten``: a transcript can nest them past the
+    interpreter's recursion limit.
+    """
+    if depth > _MAX_DEPTH:
+        return
     for item in items:
         if not isinstance(item, dict):
             out["text"].append(_flatten(item))
@@ -279,7 +288,7 @@ def _walk_content_items(items: Iterable[Any], out: dict[str, list[str]]) -> None
                 # into the `text` group, which would make a file dump look
                 # like prose the user wrote.
                 nested: dict[str, list[str]] = {f: [] for f in SEARCH_FIELDS}
-                _walk_content_items(cast("list[Any]", content), nested)
+                _walk_content_items(cast("list[Any]", content), nested, depth + 1)
                 out["tool_result"].extend(
                     part for group in SEARCH_FIELDS for part in nested[group] if part
                 )
@@ -607,10 +616,12 @@ def _rows_for_file(
     )
     for row_id, blob in cursor:
         # ValueError covers what decoding raises past zlib: UnicodeDecodeError
-        # and JSONDecodeError are both subclasses, neither a zlib.error.
+        # and JSONDecodeError are both subclasses, neither a zlib.error. The
+        # JSON decoder raises RecursionError on nesting deeper than the C
+        # stack allows (8 MB by default on Linux, 1 MB on Windows).
         try:
             entry = decode_entry(blob)
-        except (zlib.error, ValueError):
+        except (zlib.error, ValueError, RecursionError):
             undecodable.append(int(row_id))
             continue
         extracted = extract_search_text(entry)
