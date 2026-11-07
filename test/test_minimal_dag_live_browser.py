@@ -625,16 +625,21 @@ def test_a_quiet_lane_keeps_running(
 
 
 @pytest.mark.parametrize("live", ["session"], indirect=True)
-def test_the_quiet_label_follows_the_clock(page: Page, live: Any) -> None:
+def test_the_quiet_label_follows_the_clock(isolated_page: Page, live: Any) -> None:
     """Under a minute the label is just "running"; the engine's re-check
     brings it up to date as the lane stays quiet, without any update."""
-    # The lane's newest card is ~6 s after base: quiet for ~52 s when the
-    # harness starts, so the label is still "running" at open (under a
-    # minute) and reaches the minute a few seconds later, not a quarter
-    # of one later. The 8 s left are for the serve subprocess to come up.
-    harness = live("start", base=datetime.now(timezone.utc) - timedelta(seconds=58))
+    page = isolated_page
+    # The page's clock is a fake one, installed before the page opens and
+    # ticking as usual until it is moved: the lane's minute of quiet is a
+    # jump of the clock, not a wait for the real one, so no slow start of
+    # the harness can carry the label past the minute before the first
+    # look. The lane's newest card is ~6 s after base, so at open it has
+    # been quiet for ~4 s plus however long the harness took to come up.
+    page.clock.install()
+    harness = live("start", base=datetime.now(timezone.utc) - timedelta(seconds=10))
     _open(page, harness.url)
     assert _lane(page, LANE_C)["pillLabel"] == "running"
+    page.clock.fast_forward(60_000)
     # The engine's own timer runs every 30 s; ask for its relayout directly
     # rather than waiting that out.
     _wait(
