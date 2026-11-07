@@ -518,11 +518,13 @@ class MarkdownRenderer(Renderer):
     # Fenced blocks and code spans, left as written: a regex sample `[^abc]`
     # or a definition shown in a fence is not a footnote. Fences as
     # CommonMark reads them: three or more backticks or tildes, indented up
-    # to three spaces, closed by at least as many of the same character —
-    # or by the end of the text when never closed.
+    # to three spaces, closed by at least as many of the same
+    # character — or by the end of the text when never closed. A backtick
+    # opener's info string holds no backtick, so a line starting with a
+    # ```x``` span is a span, not a fence that swallows the rest.
     _CODE_RE = re.compile(
-        r"(?ms)^ {0,3}(?P<fence>(?P<ch>[`~])(?P=ch){2,})[^\n]*\n"
-        r".*?(?:^ {0,3}(?P=fence)(?P=ch)*[ \t]*$|\Z)"
+        r"(?ms)^ {0,3}(?P<bt>`{3,})[^`\n]*\n.*?(?:^ {0,3}(?P=bt)`*[ \t]*$|\Z)"
+        r"|^ {0,3}(?P<td>~{3,})[^\n]*\n.*?(?:^ {0,3}(?P=td)~*[ \t]*$|\Z)"
         r"|`+[^`\n]+`+"
     )
 
