@@ -14,6 +14,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -148,6 +149,31 @@ def conversation_archive(request: pytest.FixtureRequest, tmp_path: Path):
     jsonl.write_text("".join(lines), encoding="utf-8")
     with _served(projects, request.param) as url:
         yield url, project, jsonl
+
+
+def _sharing_violation_once(
+    monkeypatch: pytest.MonkeyPatch, target: Path
+) -> list[Path]:
+    """Make this thread's first read of ``target`` raise PermissionError.
+
+    That is what Windows raises for an `open` landing while the watch
+    swaps the page in (`atomic_write_text`); POSIX never does, so a read
+    racing the watch only meets it on a Windows runner. Other threads —
+    the watch's conversion, the server — read as usual. Returns the
+    paths it raised for, so a test can show the injection was reached.
+    """
+    read_text = Path.read_text
+    owner = threading.get_ident()
+    raised: list[Path] = []
+
+    def flaky(self: Path, *args: Any, **kwargs: Any) -> str:
+        if not raised and self == target and threading.get_ident() == owner:
+            raised.append(self)
+            raise PermissionError(13, "Permission denied", str(self))
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    return raised
 
 
 def _wait_for(page, expression: str, timeout: int = 30000) -> None:
@@ -332,7 +358,7 @@ class TestLiveUpdate:
         )
 
     def test_an_update_during_page_load_is_not_absorbed(
-        self, page, live_archive
+        self, page, live_archive, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The first poll cannot adopt whatever the server holds by then.
 
@@ -346,6 +372,9 @@ class TestLiveUpdate:
         url = f"{base}/{project.name}/session-{SESSION_ID}.html"
         page_file = project / f"session-{SESSION_ID}.html"
         served_stale: list[bool] = []
+        # The poll below reads the page while the watch rewrites it, which
+        # on Windows can raise mid-swap: have it do so on every platform.
+        swapped = _sharing_violation_once(monkeypatch, page_file)
 
         def hold(route):
             # Only the navigation: the page's own HEAD and GET share this
@@ -358,18 +387,30 @@ class TestLiveUpdate:
             response = route.fetch()
             body = response.body()
             served_stale.append(b"LOAD-RACE-MARKER" not in body)
-            with jsonl.open("a", encoding="utf-8") as f:
-                f.write(_entry("load-race", "LOAD-RACE-MARKER"))
-            deadline = time.time() + 20
-            while time.time() < deadline:
-                if "LOAD-RACE-MARKER" in page_file.read_text(encoding="utf-8"):
-                    break
-                time.sleep(0.05)
-            route.fulfill(status=response.status, headers=response.headers, body=body)
+            try:
+                with jsonl.open("a", encoding="utf-8") as f:
+                    f.write(_entry("load-race", "LOAD-RACE-MARKER"))
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    try:
+                        text = page_file.read_text(encoding="utf-8")
+                    except PermissionError:
+                        # Windows, mid-swap: not rewritten yet.
+                        text = ""
+                    if "LOAD-RACE-MARKER" in text:
+                        break
+                    time.sleep(0.05)
+            finally:
+                # Whatever happened above, release the navigation: a held
+                # route would turn any error here into a goto timeout.
+                route.fulfill(
+                    status=response.status, headers=response.headers, body=body
+                )
 
         page.route(url, hold)
         self._open(page, base, project)
         assert served_stale == [True], "the browser was served the new page after all"
+        assert swapped == [page_file], "the poll never met the sharing violation"
 
         _wait_for(page, "() => document.body.innerText.includes('LOAD-RACE-MARKER')")
 
