@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import re
+import time
 from pathlib import Path
 from typing import List
 import pytest
@@ -1411,6 +1412,7 @@ class TestTimelineVendoredLibrary:
         assert len(dialogs) == 1
 
 
+@pytest.mark.browser
 class TestTimelineOpenLatency:
     """The timeline shows as soon as it is built, not a second later."""
 
@@ -1438,7 +1440,13 @@ class TestTimelineOpenLatency:
         page.goto(html.as_uri())
         page.locator("#toggleTimeline").click()
         page.wait_for_function("() => !!window.timeline", timeout=30000)
+        deadline = time.monotonic() + 0.7
         expect(page.locator(".vis-timeline")).to_be_visible(timeout=700)
-        # Visible means clickable too: the loading overlay is gone.
-        page.locator(".vis-item").last.click()
+        # Visible is not clickable yet if the overlay outlives the root's
+        # visibility, and a click waits for whatever covers its target to
+        # clear. So the click gets what is left of the same budget, not a
+        # fresh one: the fix is about interactivity, not only visibility.
+        left_ms = (deadline - time.monotonic()) * 1000
+        assert left_ms > 0, "becoming visible took the whole budget"
+        page.locator(".vis-item").last.click(timeout=left_ms)
         expect(page.locator(".message.timeline-flash")).to_have_count(1)
