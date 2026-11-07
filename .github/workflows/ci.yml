@@ -180,6 +180,11 @@ jobs:
     # union, as they did when every suite ran in one job.
     runs-on: ubuntu-latest
     needs: [test, browser]
+    # Run whenever the two jobs finished, red cells included: before the
+    # split the primary cell published its report whatever the other
+    # cells did. A primary cell that did not upload still fails the
+    # download loudly below.
+    if: ${{ !cancelled() }}
     env:
       PYTHON_VERSION: "3.12"
     steps:
