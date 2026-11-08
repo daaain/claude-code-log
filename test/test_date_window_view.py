@@ -251,6 +251,8 @@ def test_the_recent_page_lists_the_window_s_sessions_with_its_counts(
     assert span["title"] == "SPAN-ASKED"
     page = (view / "recent.html").read_text(encoding="utf-8")
     assert "<title>Recent sessions (from 2026-01-02 to 2026-01-02)</title>" in page
+    header = re.search(r"<p class='rc-window'>(.*?)</p>", page, re.S)
+    assert header is not None and "from 2026-01-02 to 2026-01-02" in header.group(1)
 
 
 def test_the_search_page_says_it_searches_the_whole_archive(
@@ -476,6 +478,9 @@ def test_one_transcript_file_follows_the_same_rule(
     with pytest.raises(WindowOutputExists) as raised:
         convert_jsonl_to("html", transcript, silent=True, **WINDOW)
     assert raised.value.path == page
+    # One file's view is one page, which another --output does move.
+    assert "another --output" in str(raised.value)
+    assert "--combined only" not in str(raised.value)
     elsewhere = tmp_path / "day-two.html"
     convert_jsonl_to("html", transcript, elsewhere, silent=True, **WINDOW)
     assert "ONLY-DAY-TWO" in elsewhere.read_text(encoding="utf-8")
@@ -500,7 +505,10 @@ def test_the_refusal_names_the_file_and_both_ways_out(projects: Path) -> None:
     )
     assert result.exit_code == 1, result.output
     assert str(projects / "index.html") in result.output
-    assert "--force" in result.output and "--output" in result.output
+    assert "--force" in result.output
+    # Another directory moves every page of an --all-projects view.
+    assert "another --output" in result.output
+    assert "--combined only" not in result.output
 
 
 def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
