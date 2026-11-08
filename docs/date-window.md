@@ -1,8 +1,8 @@
 # Viewing a date window
 
 `--from-date` and `--to-date` turn a run into a view of that window:
-its index, combined pages and session pages, and every link they show,
-come from the window.
+its index, combined pages, session pages and recent sessions page, and
+every link they show, come from the window.
 
 ```bash
 # Yesterday's work across all projects, in a directory of its own
@@ -25,14 +25,16 @@ Both bounds take natural language (`"today"`, `"3 days ago"`,
 - **A session page** is written for each session with a message in the
   window, and only those. A session that only crosses the window, with
   messages before and after it but none inside, is not part of it.
-- **The index, the combined pages and the session pages state their
-  window** in their title, e.g. *(from 2026-01-02 to 2026-01-02)*, so they
-  are never taken for the whole archive.
-- **The search page and the recent sessions page** are written as on any
-  run and do not state the window. Search covers the whole archive (it
-  needs `claude-code-log serve`), and the recent sessions page lists the
-  sessions active in the last three days, in the window or not, linking
-  only the session pages the view wrote.
+- **The recent sessions page** lists the window's sessions, however old,
+  instead of those active in the last three days. Each row counts the
+  window's part of its session, as the index does: its messages, turns
+  and tool calls, and its last prompt and message. At most 60 are listed,
+  newest first, as on any run.
+- **Every page states its window** in its title or under its heading,
+  e.g. *(from 2026-01-02 to 2026-01-02)*, so it is never taken for the
+  whole archive.
+- **The search page** still searches the whole archive, as on any run
+  (it needs `claude-code-log serve`), and says so next to the window.
 
 Archived projects, whose transcripts are gone, are not part of a view:
 there is no source left to take a window of.
@@ -53,6 +55,17 @@ Error: /home/me/.claude/projects/index.html already exists. A date-filtered run
 writes only into a destination that holds none of the files it writes:
 pass --force to overwrite them (nothing is removed), or choose another
 --output.
+```
+
+For one project, the session pages are written into the project's
+directory whatever `-o` names, so the way out it offers is the combined
+page alone:
+
+```text
+Error: /path/to/project/session-1a2b3c4d.html already exists. A date-filtered
+run writes only into a destination that holds none of the files it writes:
+pass --force to overwrite them (nothing is removed), or write the combined
+page alone elsewhere, with --combined only and --output.
 ```
 
 You then have two ways out:
