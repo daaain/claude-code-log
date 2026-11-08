@@ -9,6 +9,11 @@ file, the first marking the project unfinished (its message total at
 the derived rows, which restore it, only if every file it merged is
 still as it left it. A cold build, of a project with no cached rows,
 spools nothing and writes per file as it parses.
+
+Another refresh can commit while one runs. In every mode, the derived
+rows are written only if each file the refresh did not write still
+carries the record it had as the refresh began; otherwise the project
+stays marked for the next run.
 """
 
 from __future__ import annotations
@@ -438,19 +443,17 @@ def _assert_heals_to_the_cold_control(
     assert _manager(project).get_modified_files(sorted(project.glob("*.jsonl"))) == []
 
 
-@pytest.mark.parametrize("refresh", ["full", "incremental"])
-@pytest.mark.parametrize("mode", ["one", "per-file"])
-def test_a_refresh_overtaken_on_a_file_it_read_from_the_cache_heals(
+def _b_overtaken_at(
+    hooked: str,
     project: Path,
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
     refresh: str,
-) -> None:
-    """Refresh B parses alpha and takes beta from the cache. Before B
-    commits, beta grows and refresh A commits it, with the derived rows.
-    B's derived rows come from the old beta: written over A's record,
-    which matches the file, nothing would ever recompute them."""
+) -> Path:
+    """Refresh B, over the built project, of a grown alpha and a new
+    gamma (two spooled files, so that per file is what the threshold
+    picks), with refresh A run inside B's ``hooked`` method; returns the
+    cache's path. Asserts that A ran, cleanly, and the mode B merged in."""
     if refresh == "full":
         monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
     monkeypatch.setenv(
@@ -461,16 +464,48 @@ def test_a_refresh_overtaken_on_a_file_it_read_from_the_cache_heals(
     _pass(project.parent)
     assert _total(db_path) == 4
     _append(project / "sess-alpha.jsonl", _turn("sess-alpha", 1, "late alpha"))
+    _append(project / "sess-gamma.jsonl", _turn("sess-gamma", 0, "first gamma"))
 
     fired: List[int] = []
     errors: List[BaseException] = []
     hook = _overtaken_by(project, db_path, fired, errors)
-    real = CacheManager._merge_refresh  # pyright: ignore[reportPrivateUsage]
+    b_thread = threading.get_ident()
+    b_modes: List[str] = []
+
+    def recording(name: str, real: Any) -> Any:
+        def wrapped(self: CacheManager, *args: Any) -> Any:
+            if threading.get_ident() == b_thread:
+                b_modes.append(name)
+            return real(self, *args)
+
+        return wrapped
+
     with connection_lease(db_path), monkeypatch.context() as m:
-        m.setattr(CacheManager, "_merge_refresh", hook(real))
+        m.setattr(CacheManager, hooked, hook(getattr(CacheManager, hooked)))
+        for name, attr in (("one", "_merge_at_once"), ("per-file", "_merge_per_file")):
+            m.setattr(CacheManager, attr, recording(name, getattr(CacheManager, attr)))
         converter.ensure_fresh_cache(project, _manager(project), silent=True)
     assert fired, "refresh A never ran inside B: the test is vacuous"
     assert errors == []
+    assert b_modes == [mode]
+    return db_path
+
+
+@pytest.mark.parametrize("refresh", ["full", "incremental"])
+@pytest.mark.parametrize("mode", ["one", "per-file"])
+def test_a_refresh_overtaken_on_a_file_it_read_from_the_cache_heals(
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    refresh: str,
+) -> None:
+    """Refresh B parses alpha and gamma and takes beta from the cache.
+    Before B commits, beta grows and refresh A commits it, with the
+    derived rows. B's derived rows come from the old beta (an
+    incremental B's total, from the total A replaced): written over A's
+    record, which matches the file, nothing would ever recompute them."""
+    db_path = _b_overtaken_at("_merge_refresh", project, monkeypatch, mode, refresh)
     assert _total(db_path) == 0  # B left the project marked unfinished
 
     _assert_heals_to_the_cold_control(project, tmp_path, db_path)
@@ -504,38 +539,19 @@ def test_a_cold_build_overtaken_on_a_file_it_wrote_heals(
 
 
 @pytest.mark.parametrize("refresh", ["full", "incremental"])
-@pytest.mark.parametrize("mode", ["one", "per-file"])
 def test_a_refresh_overtaken_before_it_read_marks_and_heals(
     project: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    mode: str,
     refresh: str,
 ) -> None:
     """The check's false positive, pinned: refresh A commits after B's
     scope read the records and before B read anything. B's reads see
     A's rows, so its derived rows would be right; the check cannot tell,
     and marks the project. That costs the next run a full refresh, and
-    nothing else."""
-    if refresh == "full":
-        monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
-    monkeypatch.setenv(
-        "CLAUDE_CODE_LOG_ATOMIC_MERGE_MB", "0" if mode == "per-file" else "1000"
-    )
-    db_path = project.parent / "cache.db"
-    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
-    _pass(project.parent)
-    _append(project / "sess-alpha.jsonl", _turn("sess-alpha", 1, "late alpha"))
-
-    fired: List[int] = []
-    errors: List[BaseException] = []
-    hook = _overtaken_by(project, db_path, fired, errors)
-    real = CacheManager._create_overlay  # pyright: ignore[reportPrivateUsage]
-    with connection_lease(db_path), monkeypatch.context() as m:
-        m.setattr(CacheManager, "_create_overlay", hook(real))
-        converter.ensure_fresh_cache(project, _manager(project), silent=True)
-    assert fired, "refresh A never ran inside B: the test is vacuous"
-    assert errors == []
+    nothing else. (B finds alpha and gamma current, as A left them, and
+    spools nothing: its merge is one transaction whatever the threshold.)"""
+    db_path = _b_overtaken_at("_create_overlay", project, monkeypatch, "one", refresh)
     assert _total(db_path) == 0
 
     _assert_heals_to_the_cold_control(project, tmp_path, db_path)
