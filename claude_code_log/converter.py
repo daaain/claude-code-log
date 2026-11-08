@@ -4140,6 +4140,7 @@ def convert_jsonl_to(
                     and generate_individual_sessions
                     and record_window
                     and bool(shown_sessions),
+                    combined=write_combined,
                 )
 
     # Update title to include date range if specified
@@ -5146,19 +5147,29 @@ class WindowOutputExists(Exception):
     first such file.
     """
 
-    def __init__(self, path: Path, *, project_pages: bool = False) -> None:
+    def __init__(
+        self, path: Path, *, project_pages: bool = False, combined: bool = True
+    ) -> None:
         self.path = path
         # For one project, --output names the combined page only: its
-        # session pages go into the project whatever it names.
-        way_out = (
-            "write the combined page alone elsewhere, with --combined only and --output"
-            if project_pages
-            else "choose another --output"
-        )
+        # session pages go into the project whatever it names. Without a
+        # combined page, nothing is left for --output to move.
+        if not project_pages:
+            way_out = ", or choose another --output"
+        elif combined:
+            way_out = (
+                ", or write the combined page alone elsewhere, with "
+                "--combined only and --output"
+            )
+        else:
+            way_out = (
+                "; a project's session pages are written into it, whatever "
+                "--output names"
+            )
         super().__init__(
             f"{path} already exists. A date-filtered run writes only into a "
             "destination that holds none of the files it writes: pass --force "
-            f"to overwrite them (nothing is removed), or {way_out}."
+            f"to overwrite them (nothing is removed){way_out}."
         )
 
 

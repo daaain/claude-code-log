@@ -537,6 +537,31 @@ def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
     assert "another --output" not in result.output
 
 
+def test_the_refusal_for_one_project_s_session_pages_alone_offers_force(
+    projects: Path,
+) -> None:
+    """With ``--combined no`` there is no combined page to send elsewhere,
+    and the session pages go into the project: only --force is left."""
+    _full(projects)
+    result = CliRunner().invoke(
+        main,
+        [
+            str(projects / "-mixed"),
+            "--combined",
+            "no",
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert str(projects / "-mixed" / "session-s-day2.html") in result.output
+    assert "--force" in result.output
+    assert "--combined only" not in result.output
+    assert "another --output" not in result.output
+
+
 def test_force_is_accepted_with_a_window_only(projects: Path) -> None:
     result = CliRunner().invoke(
         main, ["--all-projects", "--projects-dir", str(projects), "--force"]

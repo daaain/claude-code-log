@@ -68,6 +68,9 @@ pass --force to overwrite them (nothing is removed), or write the combined
 page alone elsewhere, with --combined only and --output.
 ```
 
+With `--combined no` there is no combined page to send elsewhere, so the
+error offers `--force` alone.
+
 You then have two ways out:
 
 - **`-o` / `--output` another directory.** This is the usual way: the
