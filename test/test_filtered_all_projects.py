@@ -7,8 +7,9 @@ a project active inside the window but already converted kept its
 unfiltered output and was reported "cached". Converting every project
 instead would give each idle one an empty combined page, and mark it as
 rendered from a window, so that the next plain run re-rendered the whole
-archive. A project is converted when a visible session overlaps the
-window; the others are left untouched and reported as such.
+archive. A project is converted when the window shows one of its
+sessions (``window_session_ids``); the others are left untouched and
+reported as such.
 """
 
 from __future__ import annotations
@@ -122,8 +123,7 @@ def test_a_filtered_pass_still_converts_a_changed_idle_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A changed file may hold messages its cached rows do not know of yet,
-    so the window cannot be judged from them: such a project is converted
-    as before."""
+    so the pass refreshes the rows before reading the window from them."""
     active = _build_project(tmp_path)
     idle = _build_idle_project(tmp_path)
     monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
@@ -136,12 +136,12 @@ def test_a_filtered_pass_still_converts_a_changed_idle_project(
     assert "reply 0" not in text
 
 
-def test_a_filtered_pass_into_a_fresh_output_writes_every_linked_combined_page(
+def test_a_filtered_pass_into_a_fresh_output_leaves_an_idle_project_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An idle project with no output at the destination still gets its
-    combined page, empty for the window: the index links every project's
-    combined page, and leaving one out would make that link dead."""
+    """A project idle in the window is not part of its view: the index does
+    not list it, so the pass writes none of its pages, not even an empty
+    combined page."""
     import re
 
     from claude_code_log.converter import process_projects_hierarchy
@@ -164,6 +164,8 @@ def test_a_filtered_pass_into_a_fresh_output_writes_every_linked_combined_page(
     index = (fresh / "index.html").read_text(encoding="utf-8")
     # The cards' links are built by script from data embedded in the page.
     links = set(re.findall(r"[^\"' <>=]*combined_transcripts[^\"' <>]*", index))
-    assert any(IDLE in link for link in links), links
+    assert any(active.name in link for link in links), links
+    assert not any(IDLE in link for link in links), links
+    assert not (fresh / IDLE).exists()
     dead = sorted(link for link in links if not (fresh / link).is_file())
     assert dead == []
