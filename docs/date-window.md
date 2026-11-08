@@ -1,8 +1,8 @@
 # Viewing a date window
 
 `--from-date` and `--to-date` turn a run into a view of that window:
-every page it writes, and every page and link those pages show, comes
-from the window.
+its index, combined pages and session pages, and every link they show,
+come from the window.
 
 ```bash
 # Yesterday's work across all projects, in a directory of its own
@@ -25,8 +25,14 @@ Both bounds take natural language (`"today"`, `"3 days ago"`,
 - **A session page** is written for each session with a message in the
   window, and only those. A session that only crosses the window, with
   messages before and after it but none inside, is not part of it.
-- **Every page states its window** in its title, e.g. *(from 2026-01-02 to
-  2026-01-02)*, so it is never taken for the whole archive.
+- **The index, the combined pages and the session pages state their
+  window** in their title, e.g. *(from 2026-01-02 to 2026-01-02)*, so they
+  are never taken for the whole archive.
+- **The search page and the recent sessions page** are written as on any
+  run and do not state the window. Search covers the whole archive (it
+  needs `claude-code-log serve`), and the recent sessions page lists the
+  sessions active in the last three days, in the window or not, linking
+  only the session pages the view wrote.
 
 Archived projects, whose transcripts are gone, are not part of a view:
 there is no source left to take a window of.
