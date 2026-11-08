@@ -41,7 +41,8 @@ from claude_code_log.converter import (
 
 from test.test_date_filtered_runs import _append, _entry, _turn
 
-WINDOW = {"from_date": "2026-01-02", "to_date": "2026-01-02"}
+# The window every view here is written for: one day, from and to.
+DAY = "2026-01-02"
 INSIDE = {"s-day2", "s-span"}
 OUTSIDE = {"s-day1", "s-gap"}
 
@@ -100,7 +101,8 @@ def _window(
         output_format=fmt,
         output_dir=output_dir,
         force=force,
-        **WINDOW,
+        from_date=DAY,
+        to_date=DAY,
     )
 
 
@@ -239,7 +241,8 @@ def test_without_a_cache_the_view_shows_the_same_sessions(
         output_format="json",
         output_dir=view,
         use_cache=False,
-        **WINDOW,
+        from_date=DAY,
+        to_date=DAY,
     )
     summary = "all-projects-summary.json"
 
@@ -252,7 +255,7 @@ def test_without_a_cache_the_view_shows_the_same_sessions(
 
     html = tmp_path / "html"
     process_projects_hierarchy(
-        projects, jobs=1, output_dir=html, use_cache=False, **WINDOW
+        projects, jobs=1, output_dir=html, use_cache=False, from_date=DAY, to_date=DAY
     )
     written = set(_pages(html))
     assert _session_ids(written) == INSIDE
@@ -271,7 +274,8 @@ def test_one_project_without_a_cache_writes_the_window_s_session_pages(
         output_root=view,
         use_cache=False,
         silent=True,
-        **WINDOW,
+        from_date=DAY,
+        to_date=DAY,
     )
     assert _session_ids(set(_pages(view))) == INSIDE
     assert not (tmp_path / "cache.db").exists()
@@ -405,7 +409,9 @@ def test_one_project_counts_only_the_window_s_session_pages(
     held = dest / "session-s-day1.html"
     held.parent.mkdir(parents=True)
     held.write_text("mine", encoding="utf-8")
-    convert_jsonl_to("html", mixed, output_root=dest, silent=True, **WINDOW)
+    convert_jsonl_to(
+        "html", mixed, output_root=dest, silent=True, from_date=DAY, to_date=DAY
+    )
     assert held.read_text(encoding="utf-8") == "mine"
     assert _session_ids(set(_pages(dest))) == INSIDE | {"s-day1"}
 
@@ -479,15 +485,17 @@ def test_one_project_converted_on_its_own_follows_the_same_rule(
     convert_jsonl_to("html", mixed, silent=True)
     rows = _render_rows(tmp_path / "cache.db")
     with pytest.raises(WindowOutputExists) as raised:
-        convert_jsonl_to("html", mixed, silent=True, **WINDOW)
+        convert_jsonl_to("html", mixed, silent=True, from_date=DAY, to_date=DAY)
     assert raised.value.path == mixed / "combined_transcripts.html"
 
     view = tmp_path / "view"
-    convert_jsonl_to("html", mixed, output_root=view, silent=True, **WINDOW)
+    convert_jsonl_to(
+        "html", mixed, output_root=view, silent=True, from_date=DAY, to_date=DAY
+    )
     assert _session_ids(set(_pages(view))) == INSIDE
     assert _render_rows(tmp_path / "cache.db") == rows
 
-    convert_jsonl_to("html", mixed, silent=True, force=True, **WINDOW)
+    convert_jsonl_to("html", mixed, silent=True, force=True, from_date=DAY, to_date=DAY)
     assert "ONLY-DAY-ONE" not in (mixed / "combined_transcripts.html").read_text(
         encoding="utf-8"
     )
@@ -530,13 +538,15 @@ def test_one_transcript_file_follows_the_same_rule(
     transcript = projects / "-mixed" / "s-day2.jsonl"
     page = convert_jsonl_to("html", transcript, silent=True)
     with pytest.raises(WindowOutputExists) as raised:
-        convert_jsonl_to("html", transcript, silent=True, **WINDOW)
+        convert_jsonl_to("html", transcript, silent=True, from_date=DAY, to_date=DAY)
     assert raised.value.path == page
     # One file's view is one page, which another --output does move.
     assert "another --output" in str(raised.value)
     assert "--combined only" not in str(raised.value)
     elsewhere = tmp_path / "day-two.html"
-    convert_jsonl_to("html", transcript, elsewhere, silent=True, **WINDOW)
+    convert_jsonl_to(
+        "html", transcript, elsewhere, silent=True, from_date=DAY, to_date=DAY
+    )
     assert "ONLY-DAY-TWO" in elsewhere.read_text(encoding="utf-8")
 
 
