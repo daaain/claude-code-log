@@ -269,6 +269,36 @@ def test_an_archived_project_is_not_part_of_a_view(
 # ---- Where the view goes ---------------------------------------------------
 
 
+def test_a_page_of_a_project_outside_the_window_does_not_count(
+    projects: Path, tmp_path: Path
+) -> None:
+    """Only the pages the view writes count: an idle project's combined
+    page is none of them."""
+    dest = tmp_path / "view"
+    held = dest / "-idle" / "combined_transcripts.html"
+    held.parent.mkdir(parents=True)
+    held.write_text("mine", encoding="utf-8")
+    _window(projects, dest)
+    assert held.read_text(encoding="utf-8") == "mine"
+    assert (dest / "-mixed" / "session-s-day2.html").is_file()
+
+
+def test_one_project_counts_only_the_window_s_session_pages(
+    projects: Path, tmp_path: Path
+) -> None:
+    """Converted on its own, a project checks the session pages of the
+    window, not every session it has."""
+    mixed = projects / "-mixed"
+    convert_jsonl_to("html", mixed, silent=True)
+    dest = tmp_path / "view"
+    held = dest / "session-s-day1.html"
+    held.parent.mkdir(parents=True)
+    held.write_text("mine", encoding="utf-8")
+    convert_jsonl_to("html", mixed, output_root=dest, silent=True, **WINDOW)
+    assert held.read_text(encoding="utf-8") == "mine"
+    assert _session_ids(set(_pages(dest))) == INSIDE | {"s-day1"}
+
+
 def test_a_view_over_a_full_one_is_refused_and_writes_nothing(
     projects: Path, tmp_path: Path
 ) -> None:
