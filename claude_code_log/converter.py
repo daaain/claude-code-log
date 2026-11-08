@@ -3829,6 +3829,7 @@ def convert_jsonl_to(
     archive_search_link: Optional[str] = None,
     render_jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    window_sessions: Optional[frozenset[str]] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -3877,6 +3878,11 @@ def convert_jsonl_to(
             single-threaded behaviour. An explicit int overrides the
             environment. See ``build_render_pool`` for the further
             conditions under which a pool is actually created.
+        window_sessions: With a date window, the sessions the caller read
+            the window as showing (``process_projects_hierarchy`` links
+            these from its index and checked their pages): no other
+            session page is written, even for a session that gained a
+            message in the window since.
         theme: HTML theme: ``"classic"``, ``"minimal"``, or ``"default"``
             (the built-in default, ``utils.DEFAULT_THEME``). Ignored for
             Markdown/JSON. Themes overwrite the same filenames; every
@@ -4088,6 +4094,23 @@ def convert_jsonl_to(
 
     # Deduplicate messages (removes version stutters while preserving concurrent tool results)
     messages = deduplicate_messages(messages)
+
+    # A date window is a view of its own: its session pages are the
+    # window's sessions, and it is recorded in the render cache only when
+    # written in place, where it replaced pages of the full view.
+    windowed = from_date is not None or to_date is not None
+    shown_sessions: Optional[set[str]] = None
+    record_window = True
+    if windowed and input_path.is_dir():
+        cached_rows = cache_manager.get_cached_project_data() if cache_manager else None
+        shown_sessions = window_session_ids(
+            messages, dict(cached_rows.sessions) if cached_rows else {}
+        )
+        if window_sessions is not None:
+            shown_sessions &= window_sessions
+        record_window = (
+            Path(effective_output_dir).resolve() == Path(input_path).resolve()
+        )
 
     # Update title to include date range if specified
     if from_date or to_date:
@@ -4328,6 +4351,7 @@ def convert_jsonl_to(
                 if (
                     cache_manager is not None
                     and update_cache
+                    and record_window
                     and _tracks_version_marker(format)
                 ):
                     if from_date is not None or to_date is not None:
@@ -4369,6 +4393,8 @@ def convert_jsonl_to(
                 theme=theme,
                 render_pool=render_pool,
                 fragment_store=fragment_store,
+                restrict_to_sessions=shown_sessions,
+                record_rendered=record_window and (update_cache or not windowed),
             )
 
     finally:
@@ -5080,6 +5106,103 @@ def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str,
     )
 
 
+def window_session_ids(
+    messages: list[TranscriptEntry], session_rows: Dict[str, SessionCacheData]
+) -> set[str]:
+    """The sessions a date window shows, given its messages.
+
+    A trunk session with a message in the window, among the sessions the
+    index lists (a row with a first user message, not a warmup, not an
+    agent's). Its window part need not hold a user message of its own, and
+    first and last stamps that straddle the window do not make it one.
+
+    The one reading of the window for the three that must agree: the
+    session pages a windowed run writes, the ones its index links, and
+    the files its destination may not already hold.
+    """
+    shown = {
+        sid
+        for sid, row in session_rows.items()
+        if row.first_user_message
+        and row.first_user_message != "Warmup"
+        and not is_agent_session(sid)
+    }
+    return collect_trunk_session_ids(messages, get_warmup_session_ids(messages)) & shown
+
+
+@dataclass
+class _WindowView:
+    """What a date window shows of one project, for the master index."""
+
+    session_ids: frozenset[str]
+    # The index's session entries, without their ``file`` link.
+    sessions: List[Dict[str, Any]]
+    aggregates: Dict[str, Any]
+    # Whether the project has anything to show. Without a cache there
+    # are no session rows to read sessions from, so it is whether the
+    # window holds a message at all.
+    shown: bool
+
+
+def _project_window_view(
+    project_dir: Path,
+    cache_manager: Optional[CacheManager],
+    from_date: Optional[str],
+    to_date: Optional[str],
+) -> _WindowView:
+    """Read what the window shows of ``project_dir``, from a fresh cache.
+
+    The same load and filter as the conversion's (``convert_jsonl_to``),
+    so its sessions are the ones the conversion writes pages for. Each
+    session keeps its whole-session title, with the window's message count
+    and time range.
+    """
+    messages, _tree = load_directory_transcripts(
+        project_dir,
+        cache_manager,
+        from_date,
+        to_date,
+        silent=True,
+        snapshot=cache_manager is not None,
+    )
+    messages = deduplicate_messages(
+        filter_messages_by_date(messages, from_date, to_date)
+    )
+    cached = cache_manager.get_cached_project_data() if cache_manager else None
+    rows = dict(cached.sessions) if cached is not None else {}
+    ids = window_session_ids(messages, rows)
+    window_data = compute_session_data(
+        messages,
+        include_cwd=False,
+        warmup_session_ids=get_warmup_session_ids(messages),
+    )
+    sessions: List[Dict[str, Any]] = []
+    for sid in ids:
+        row = rows[sid]
+        part = window_data.get(sid)
+        first = part.first_timestamp if part else row.first_timestamp
+        last = part.last_timestamp if part else row.last_timestamp
+        sessions.append(
+            {
+                "id": sid,
+                "summary": row.ai_title or row.summary,
+                "timestamp_range": format_timestamp_range(first, last),
+                "first_timestamp": first,
+                "last_timestamp": last,
+                "message_count": part.message_count if part else 0,
+                "first_user_message": row.first_user_message,
+                "team_name": row.team_name,
+            }
+        )
+    sessions.sort(key=lambda s: (s["first_timestamp"] or "", s["id"]))
+    return _WindowView(
+        session_ids=frozenset(ids),
+        sessions=sessions,
+        aggregates=compute_project_aggregates(messages),
+        shown=bool(ids) if cache_manager is not None else bool(messages),
+    )
+
+
 def build_session_title(
     project_title: str,
     session_id: str,
@@ -5177,6 +5300,7 @@ def _generate_individual_session_files(
     render_pool: "Optional[RenderPool]" = None,
     fragment_store: "Optional[RenderFragmentStore]" = None,
     restrict_to_sessions: Optional[set[str]] = None,
+    record_rendered: bool = True,
 ) -> int:
     """Generate individual files for each session in the specified format.
 
@@ -5192,7 +5316,12 @@ def _generate_individual_session_files(
             from another page (a source file spanning two sessions) —
             rendering that remnant would silently truncate the session's
             file. Restricted out, it renders complete when its own page's
-            load comes around. None (every other caller) considers all.
+            load comes around. A date-filtered conversion passes the
+            window's sessions (``window_session_ids``). None considers all.
+        record_rendered: Whether to record the files written in the
+            render cache. A date-filtered view written outside the
+            project's own directory is not: the rows are keyed by file
+            name, and are the full view's.
 
     Returns:
         Number of sessions regenerated
@@ -5364,7 +5493,11 @@ def _generate_individual_session_files(
             regenerated_count += 1
             # Update html_cache to track this generation (marker-tracked
             # formats only; JSON uses its own version-field freshness).
-            if cache_manager is None or not _tracks_version_marker(format):
+            if (
+                cache_manager is None
+                or not record_rendered
+                or not _tracks_version_marker(format)
+            ):
                 return
             if from_date is not None or to_date is not None:
                 cache_manager.mark_rendered_from_window(unit.file_name)
@@ -6230,9 +6363,11 @@ class _ProjectPlan:
     # better than bytes: see _holdback_plans.
     cached_message_count: Optional[int] = None
     error: Optional[str] = None
-    # A date-filtered pass left this project alone: none of its sessions
-    # overlaps the window (``_plan_project``).
+    # A date-filtered pass left this project alone: the window shows none
+    # of its sessions (``window``).
     outside_window: bool = False
+    # A date-filtered pass's view of this project, read before the pool.
+    window: "Optional[_WindowView]" = None
 
 
 # How big a project has to be before holding it out of the project pool
@@ -6350,6 +6485,54 @@ def _holdback_plans(
     return held
 
 
+def _window_project_summary(
+    plan: _ProjectPlan,
+    view: _WindowView,
+    *,
+    rel_dest: str,
+    variant: str,
+    combined_ext: str,
+    write_combined: bool,
+) -> Dict[str, Any]:
+    """A project's card on a window view's master index.
+
+    The same shape as the full view's card, with the window's totals and
+    sessions.
+    """
+    jsonl_files = trunk_jsonl_files(plan.project_dir)
+    aggregates = view.aggregates
+    plan.stats.sessions_total = len(view.sessions)
+    return {
+        "name": plan.project_dir.name,
+        "path": plan.project_dir,
+        "html_file": f"{rel_dest}/{plan.output_path.name}",
+        "jsonl_count": len(jsonl_files),
+        "message_count": aggregates["total_message_count"],
+        "last_modified": (
+            max(f.stat().st_mtime for f in jsonl_files) if jsonl_files else 0.0
+        ),
+        "total_input_tokens": aggregates["total_input_tokens"],
+        "total_output_tokens": aggregates["total_output_tokens"],
+        "total_cache_creation_tokens": aggregates["total_cache_creation_tokens"],
+        "total_cache_read_tokens": aggregates["total_cache_read_tokens"],
+        "latest_timestamp": aggregates["latest_timestamp"],
+        "earliest_timestamp": aggregates["earliest_timestamp"],
+        "working_directories": (
+            plan.cache_manager.get_working_directories() if plan.cache_manager else []
+        ),
+        "is_archived": False,
+        "combined_suppressed": not write_combined,
+        "sessions": [
+            {
+                **{k: v for k, v in session.items() if k != "team_name"},
+                "file": f"{rel_dest}/session-{session['id']}{variant}.{combined_ext}",
+            }
+            for session in view.sessions
+        ],
+        "team_names": sorted({s["team_name"] for s in view.sessions if s["team_name"]}),
+    }
+
+
 def _plan_project(
     project_dir: Path,
     *,
@@ -6365,7 +6548,6 @@ def _plan_project(
     page_size: int,
     theme: str = DEFAULT_THEME,
     generate_individual_sessions: bool = True,
-    window: Optional[tuple[Optional[datetime], Optional[datetime]]] = None,
 ) -> Optional[_ProjectPlan]:
     """Resolve destination and staleness for one project (no rendering).
 
@@ -6374,15 +6556,9 @@ def _plan_project(
     shared cache DB's schema/migrations and this project's row exist
     before concurrent workers touch the DB.
 
-    ``window`` is a date-filtered pass's ``parse_date_bounds``. Such a
-    pass converts a project when one of its sessions overlaps the window,
-    whether or not anything changed, and leaves every other one alone:
-    converting a project with nothing in the window would rewrite its
-    combined output empty and mark it as rendered from a window, which the
-    next plain run re-renders. A project with a changed file is converted
-    as before, since its session rows cannot tell what the change holds,
-    and so is one whose combined output is missing at the destination,
-    since the index links it.
+    A date-filtered pass decides which projects to convert afterwards,
+    from what the window shows (``_process_projects_hierarchy``'s window
+    phase), so the staleness found here does not decide it.
     """
     from .utils import project_destination
 
@@ -6512,20 +6688,6 @@ def _plan_project(
             )
         )
 
-    outside_window = False
-    if window is not None and cache_manager is not None:
-        # A combined page missing at the destination (a fresh --output) is
-        # written even when empty for the window: the index links it.
-        # A project migration 016 zeroed heals here too: a user who only
-        # ever runs windowed passes would otherwise keep it at zero.
-        needs_work = (
-            bool(modified_files)
-            or (write_combined and not output_path.exists())
-            or unrefreshed
-            or cache_manager.has_sessions_in_window(*window)
-        )
-        outside_window = not needs_work
-
     if needs_work:
         stats.files_updated = len(modified_files) if modified_files else 0
         stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
@@ -6554,7 +6716,6 @@ def _plan_project(
         stats=stats,
         source_bytes=sum(f.stat().st_size for f in jsonl_files),
         cached_message_count=cached_message_count,
-        outside_window=outside_window,
     )
 
 
@@ -6797,6 +6958,12 @@ def _process_projects_hierarchy(
             staleness plan (``_plan_project``) as well as the conversion.
         failed_projects: When given, the names of the projects that failed
             are appended to it (see ``process_projects_hierarchy``).
+
+    With a date window the pass writes a view of it: the master index
+    lists the projects with a session in the window (``window_session_ids``),
+    with the window's totals, and each such project's combined page and
+    the window's session pages. Archived projects, which have no source
+    to render a window from, are left out.
     """
     import time
 
@@ -6930,7 +7097,6 @@ def _process_projects_hierarchy(
                 page_size=page_size,
                 theme=theme,
                 generate_individual_sessions=generate_individual_sessions,
-                window=window,
             )
         except Exception as e:
             stats = GenerationStats()
@@ -6948,9 +7114,6 @@ def _process_projects_hierarchy(
             continue
         total_archived += plan.archived_count
         plans.append(plan)
-
-    to_convert = [p for p in plans if p.needs_work]
-    projects_with_updates = sum(1 for p in to_convert if p.stats.files_updated > 0)
 
     def _archived_suffix(plan: _ProjectPlan) -> str:
         return f", {plan.archived_count} archived" if plan.archived_count > 0 else ""
@@ -6973,10 +7136,33 @@ def _process_projects_hierarchy(
         plan.stats.add_error(last_line)
         print(f"Warning: Failed to process {plan.project_dir}:\n{error}")
 
+    # ---- Phase 1w (window): what the window shows, before any output is
+    # written. The session rows describe the files only once refreshed, so
+    # each project's cache is refreshed here, in the parent and one project
+    # at a time (unfiltered, as the conversion would; the conversion then
+    # finds it fresh).
+    if window is not None:
+        for plan in plans:
+            try:
+                ensure_fresh_cache_detailed(
+                    plan.project_dir, plan.cache_manager, silent=True
+                )
+                plan.window = _project_window_view(
+                    plan.project_dir, plan.cache_manager, from_date, to_date
+                )
+            except Exception:
+                _print_project_failed(plan, traceback.format_exc())
+                continue
+            plan.needs_work = plan.window.shown
+            plan.outside_window = not plan.window.shown
+
+    to_convert = [p for p in plans if p.needs_work and p.error is None]
+    projects_with_updates = sum(1 for p in to_convert if p.stats.files_updated > 0)
+
     # Cached (no-work) projects are reported first, in stable
     # alphabetical order; regenerated projects follow as they finish.
     for plan in plans:
-        if not plan.needs_work:
+        if not plan.needs_work and plan.error is None:
             state = "no messages in the window" if plan.outside_window else "cached"
             print(
                 f"  {plan.project_dir.name}: {state}{_archived_suffix(plan)} "
@@ -7093,6 +7279,8 @@ def _process_projects_hierarchy(
             # budget for the render fan-out, computed by the parent so the
             # two levels together never exceed `--jobs`.
             "render_jobs": render_jobs,
+            # Phase 1w linked these sessions from the index.
+            "window_sessions": plan.window.session_ids if plan.window else None,
         }
 
     # Projects that failed only because another process held the cache's
@@ -7247,6 +7435,23 @@ def _process_projects_hierarchy(
         dest_dir = plan.dest_dir
         output_path = plan.output_path
         stats = plan.stats
+
+        if window is not None:
+            # A window view lists the projects the window shows, with what
+            # it shows of them, and links only the pages this pass wrote.
+            project_stats.append((project_dir.name, stats))
+            if plan.window is not None and plan.window.shown:
+                project_summaries.append(
+                    _window_project_summary(
+                        plan,
+                        plan.window,
+                        rel_dest=_rel_to_index(dest_dir),
+                        variant=variant,
+                        combined_ext=combined_ext,
+                        write_combined=write_combined,
+                    )
+                )
+            continue
 
         try:
             # Get project info for index - use cached data if available
@@ -7455,10 +7660,12 @@ def _process_projects_hierarchy(
             )
             continue
 
-    # Process archived projects (projects in cache but without JSONL files)
+    # Process archived projects (projects in cache but without JSONL files).
+    # Not in a window view: with no source left, the pass renders no window
+    # of theirs, and their pages are the full view's.
     archived_project_count = 0
     archived_failures: List[str] = []
-    for archived_dir in sorted(archived_project_dirs):
+    for archived_dir in sorted(archived_project_dirs if window is None else []):
         try:
             # Initialize cache manager for archived project
             cache_manager = CacheManager(archived_dir, library_version)

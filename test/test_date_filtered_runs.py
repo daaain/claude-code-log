@@ -438,12 +438,14 @@ def test_a_bound_naming_an_instant_keeps_its_time() -> None:
     assert str(today.time()) == "23:59:59.999999"
 
 
-def test_the_collect_fallback_writes_rows_from_every_message(
+def test_a_filtered_pass_writes_no_session_rows_from_its_index_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The pass's index step falls back to loading the project when the cache
-    has no data for it, and writes session rows from that load; under a
-    window, the load must still be unfiltered.
+    has no data for it, and writes session rows from that load. A filtered
+    pass builds its index from the window it read before converting, so it
+    never takes that fallback; the rows it writes are its unfiltered
+    refresh's.
 
     With a cache manager the project row always exists by then, so the
     fallback is reached here by having the cache report no project data.
@@ -464,11 +466,16 @@ def test_the_collect_fallback_writes_rows_from_every_message(
     monkeypatch.setattr(converter, "_update_cache_with_session_data", spy)
     monkeypatch.setattr(CacheManager, "get_cached_project_data", _no_project_data)
     capsys.readouterr()
-    _run(project.parent, "md-sessions", **FIRST_DAY)
-
-    # Control: the fallback ran.
+    _run(project.parent, "md-sessions")
+    # Control: unfiltered, the fallback runs and writes rows.
     assert "using fallback processing" in capsys.readouterr().out
     assert written, "no session rows were written"
+
+    written.clear()
+    _run(project.parent, "md-sessions", **FIRST_DAY)
+    assert "using fallback processing" not in capsys.readouterr().out
+    # What it does write is its refresh's, which reads the cache as empty
+    # here: rows from every message, as unfiltered.
     second_day = [s for s in _stamps_of_all(project) if s.startswith("2026-01-02")]
     assert second_day
     for stamps in written:
