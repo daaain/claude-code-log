@@ -403,11 +403,17 @@ def _cold_control(project: Path, tmp_path: Path) -> tuple[dict[str, int], int]:
 
 
 def _overtaken_by(
-    project: Path, db_path: Path, fired: List[int], errors: List[BaseException]
+    project: Path,
+    db_path: Path,
+    fired: List[int],
+    errors: List[BaseException],
+    change: str = "grow",
 ) -> Any:
-    """A hook that, once, grows beta and runs refresh A to completion on
-    its own thread (so its own connection), with its own manager."""
+    """A hook that, once, grows beta (``change="grow"``) or starts a new
+    session, delta (``"add"``), and runs refresh A to completion on its
+    own thread (so its own connection), with its own manager."""
     beta = project / "sess-beta.jsonl"
+    delta = project / "sess-delta.jsonl"
 
     def refresh_a() -> None:
         try:
@@ -420,7 +426,10 @@ def _overtaken_by(
         def wrapped(self: CacheManager, *args: Any, **kwargs: Any) -> Any:
             if not fired:
                 fired.append(1)
-                _append(beta, _turn("sess-beta", 1, "late beta"))
+                if change == "grow":
+                    _append(beta, _turn("sess-beta", 1, "late beta"))
+                else:
+                    _append(delta, _turn("sess-delta", 0, "first delta"))
                 a = threading.Thread(target=refresh_a)
                 a.start()
                 a.join(timeout=60)
@@ -449,11 +458,13 @@ def _b_overtaken_at(
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
     refresh: str,
+    change: str = "grow",
 ) -> Path:
     """Refresh B, over the built project, of a grown alpha and a new
     gamma (two spooled files, so that per file is what the threshold
-    picks), with refresh A run inside B's ``hooked`` method; returns the
-    cache's path. Asserts that A ran, cleanly, and the mode B merged in."""
+    picks), with refresh A run inside B's ``hooked`` method after the
+    ``change`` of `_overtaken_by`; returns the cache's path. Asserts that
+    A ran, cleanly, and the mode B merged in."""
     if refresh == "full":
         monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
     monkeypatch.setenv(
@@ -468,7 +479,7 @@ def _b_overtaken_at(
 
     fired: List[int] = []
     errors: List[BaseException] = []
-    hook = _overtaken_by(project, db_path, fired, errors)
+    hook = _overtaken_by(project, db_path, fired, errors, change)
     b_thread = threading.get_ident()
     b_modes: List[str] = []
 
@@ -506,6 +517,27 @@ def test_a_refresh_overtaken_on_a_file_it_read_from_the_cache_heals(
     incremental B's total, from the total A replaced): written over A's
     record, which matches the file, nothing would ever recompute them."""
     db_path = _b_overtaken_at("_merge_refresh", project, monkeypatch, mode, refresh)
+    assert _total(db_path) == 0  # B left the project marked unfinished
+
+    _assert_heals_to_the_cold_control(project, tmp_path, db_path)
+
+
+@pytest.mark.parametrize("refresh", ["full", "incremental"])
+@pytest.mark.parametrize("mode", ["one", "per-file"])
+def test_a_refresh_overtaken_by_a_new_file_heals(
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    refresh: str,
+) -> None:
+    """Before B commits, a new session starts and refresh A commits it.
+    B never saw delta: its total leaves delta's entries out, under a
+    record of delta that reads current. A file with a record now and
+    none as B began has moved, as one whose record changed has."""
+    db_path = _b_overtaken_at(
+        "_merge_refresh", project, monkeypatch, mode, refresh, change="add"
+    )
     assert _total(db_path) == 0  # B left the project marked unfinished
 
     _assert_heals_to_the_cold_control(project, tmp_path, db_path)
