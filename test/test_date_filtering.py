@@ -126,6 +126,9 @@ def test_end_to_end_date_filtering():
         # Test conversion with date filtering
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as output_f:
             output_path = Path(output_f.name)
+        # Only the name is wanted: a date-filtered run does not write over an
+        # existing file without force.
+        output_path.unlink()
 
         # Filter for today only
         result_path = convert_jsonl_to_html(
