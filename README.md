@@ -152,15 +152,17 @@ claude-code-log /path/to/directory -o combined_transcripts.html
 claude-code-log /path/to/directory --open-browser
 
 # Filter by date range (supports natural language)
-claude-code-log /path/to/directory --from-date "yesterday" --to-date "today" -o ~/yesterday
-claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday" -o ~/recent
+claude-code-log /path/to/directory --from-date "yesterday" --to-date "today" --combined only -o ~/yesterday.html
+claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday" --force
 ```
 
 A date-filtered run writes a view of its window: only the projects and
 sessions with messages in it, with the window's totals. It goes into a
 destination that holds none of the pages it writes, so over the pages of
 an earlier run it refuses to start: give it another `-o`, or `--force` to
-write over them (nothing is removed). See [Viewing a date
+write over them (nothing is removed). For one directory, `-o` names the
+combined page alone and the session pages go into the directory, hence
+`--combined only` above. See [Viewing a date
 window](https://daaain.github.io/claude-code-log/date-window/).
 
 ### Feeding Past Conversations to an LLM

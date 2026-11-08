@@ -8,8 +8,8 @@ come from the window.
 # Yesterday's work across all projects, in a directory of its own
 claude-code-log --from-date "yesterday" --to-date "yesterday" -o ~/yesterday
 
-# One project's last week
-claude-code-log /path/to/project --from-date "last week" -o ~/last-week
+# One project's last week, as one page of its own
+claude-code-log /path/to/project --from-date "last week" --combined only -o ~/last-week.html
 ```
 
 Both bounds take natural language (`"today"`, `"3 days ago"`,
@@ -59,6 +59,11 @@ You then have two ways out:
 
 - **`-o` / `--output` another directory.** This is the usual way: the
   full view stays where it is, and the window's view goes next to it.
+  For one project, `-o` names the combined page alone, and its session
+  pages are still written into the project's directory, where the full
+  view's are. To leave those alone, write the combined page only
+  (`--combined only -o page.html`), or the whole view in place with
+  `--force`.
 - **`--force`** writes the window's view over the existing pages. It
   removes nothing: pages of the full view that the window does not
   rewrite (session pages outside the window, other projects' pages) stay
