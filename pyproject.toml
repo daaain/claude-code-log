@@ -80,6 +80,7 @@ markers = [
     "integration: Integration tests with realistic JSONL data",
     "slow: Slower tests that measure performance (may take several seconds)",
     "benchmark: Performance benchmarks that output to GitHub Job Summary",
+    "default_cache_path: Leave CLAUDE_CODE_LOG_CACHE_PATH unset, so the cache lands at its default location (test/conftest.py)",
 ]
 
 [tool.ty.environment]

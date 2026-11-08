@@ -675,6 +675,7 @@ def _survived(page: Path) -> bool:
     return _TAMPER in page.read_text(encoding="utf-8")
 
 
+@pytest.mark.default_cache_path
 def test_walker_cache_db_lives_under_output_root(tmp_path: Path) -> None:
     out = tmp_path / "ccl"
     render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
@@ -748,6 +749,7 @@ def test_walker_cache_rerenders_only_changed_session(tmp_path: Path) -> None:
     assert _survived(out / "-proj-b/combined_transcripts.html")
 
 
+@pytest.mark.default_cache_path
 def test_walker_no_cache_rewrites_every_run(tmp_path: Path) -> None:
     out = tmp_path / "ccl"
     render_provider_wholesale("codex", SESSIONS_ROOT, out, use_cache=False, silent=True)
@@ -771,6 +773,7 @@ def _snapshot_tree(root: Path) -> dict[str, bytes]:
     }
 
 
+@pytest.mark.default_cache_path
 def test_cli_provider_no_cache_renders_without_db(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -788,6 +791,7 @@ def test_cli_provider_no_cache_renders_without_db(
     assert not (out / "claude-code-log-cache.db").exists()
 
 
+@pytest.mark.default_cache_path
 def test_cli_provider_clear_cache_removes_db(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
