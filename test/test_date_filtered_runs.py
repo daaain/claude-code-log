@@ -182,6 +182,24 @@ def _missing(project: Path, shape: str) -> List[str]:
     return missing
 
 
+def test_no_cache_hierarchy_writes_session_pages_linked_from_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unfiltered no-cache run must not link to absent session pages."""
+    project = _build_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+    process_projects_hierarchy(project.parent, jobs=1, use_cache=False)
+
+    index = (project.parent / "index.html").read_text(encoding="utf-8")
+    for sid in SESSIONS:
+        page = project / f"session-{sid}.html"
+        assert f"session-{sid}.html" in index
+        assert page.is_file(), f"index links to missing {page.name}"
+        assert f"first {sid}" in page.read_text(encoding="utf-8")
+    assert not (tmp_path / "cache.db").exists()
+
+
 # The hierarchy pass converts only a project with a changed file, so it
 # reaches a filtered run through an append; a project converted on its own
 # reaches it with or without one.

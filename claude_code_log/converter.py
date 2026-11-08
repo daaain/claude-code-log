@@ -4113,6 +4113,9 @@ def convert_jsonl_to(
     shown_sessions: Optional[set[str]] = None
     window_rows: Optional[Dict[str, SessionCacheData]] = None
     record_window = True
+    if input_path.is_dir() and cache_manager is None and generate_individual_sessions:
+        # The session writer needs rows even when no render cache was requested.
+        window_rows = _build_session_data_from_messages(loaded)
     if windowed:
         assert output_path is not None
         if input_path.is_dir():
