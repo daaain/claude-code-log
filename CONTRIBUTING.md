@@ -657,7 +657,10 @@ The tool implements a SQLite-based caching system for performance:
   mark (the project's message total at 0) that its last transaction lifts and
   that otherwise makes the next run refresh the project in full. A cold
   build, of a project with nothing cached, writes per file without a spool,
-  its total at 0 until it finishes. Only the refresh writes entry rows: a run
+  its total at 0 until it finishes. Either reads the project's file records
+  as it opens and writes the derived rows only if no other refresh has
+  rewritten a file since; otherwise it leaves the total at 0 for the next
+  run. Only the refresh writes entry rows: a run
   renders what its refresh committed, so lines written to a session while it
   renders appear on the next run. A date-filtered run refreshes the
   cache as an unfiltered one would and leaves the files it wrote from its

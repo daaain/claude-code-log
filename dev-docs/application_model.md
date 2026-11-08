@@ -384,9 +384,7 @@ the pass's in-pass retry, redoes it, re-parsing the modified files. Only
 a process killed mid-parse leaves a spool behind, and a pass removes the
 spools of dead processes before it starts, under its lock. A
 reader on another connection sees either the whole refresh or none of
-it, and two refreshes of one project overlapping commit two
-self-consistent snapshots: the later wins, and if it parsed older files
-its `cached_files` rows say so and the next run repairs it. Inside the
+it. Inside the
 scope, two TEMP views named `cached_files` and `messages` shadow the
 tables for every read on the scope's connection (the table minus the
 rows the spooled files replace, `UNION ALL` the spool's rows), because
@@ -415,21 +413,45 @@ cost. Past it, `_merge_per_file` commits per file between two more
 transactions: the first marks the project unfinished by zeroing its
 message total (016's heal: the next run refreshes it in full, from the
 cached entries), and the last writes the derived rows, whose aggregates
-lift the mark, but only if every file it merged still carries the
-record it wrote: a file another writer rewrote in between, from a newer
-parse, would otherwise read as current under derived rows from the
-older one, so the mark stays and the next run derives from what the
-cache holds. Either way the merge runs with a 64 MB page cache
+lift the mark, but only if no file moved (below). Either way the merge
+runs with a 64 MB page cache
 (`MERGE_CACHE_SIZE_KIB`; SQLite's default is 2 MB, which the indexes
 thrash: 6.1 s against 3.4 s for the copy above), set for the merge and
 given back, so no long-lived writing connection keeps it. A **cold
 build**, of a project with no cached file (a new project, or one whose
-rows a version change discarded), opens no scope at all: there are no
-derived rows to fall out of step with, and the project's total is 0
-until the aggregates, the refresh's last write, so a build that stops
-reads as unfinished and the next run completes it. Its files commit one
-by one as they are parsed, which keeps a large project's first build to
-its largest file's hold and adds no spool to its disk.
+rows a version change discarded), takes no spool (`CacheManager.cold_build`):
+there are no derived rows to fall out of step with, and the project's
+total is 0 until the aggregates, the refresh's last write, so a build
+that stops reads as unfinished and the next run completes it. Its files
+commit one by one as they are parsed, which keeps a large project's
+first build to its largest file's hold and adds no spool to its disk.
+
+**Two refreshes of one project overlapping.** Only a hierarchy pass
+holds the pass lock; a single-project convert, `watch <dir>`, a
+single-session file or the TUI's export refresh beside it. A file a
+refresh parsed it writes with the record of that parse, so if another
+refresh committed a newer one in between, the file reads modified and
+the next run reparses it. A file it took from the cache it does not
+write, and if the other rewrote that one before this refresh's derived
+rows landed, those rows (an incremental refresh's total included, which
+it computes as a delta over the total it read) would describe the rows
+the other replaced, under a record that reads current, and nothing
+would recompute them. So both scopes read every file record of the
+project as they open, after the modified-file gate (which only decides
+whether to refresh: a commit before the snapshot is one the scope's
+reads see) and before any read the derived rows come from, and write
+the derived rows only if every file still carries its record: the one
+the refresh left on the files it wrote (none to compare in the
+one-transaction merge, which writes them in the same transaction), the
+one in the snapshot on every other, a file on one side only counting as
+moved (`_moved_files`). Otherwise the derived rows are not written and
+the project's total is left at 0, so the next run refreshes it in full
+from what the cache then holds; the one-transaction merge still commits
+the rows it spooled. A commit after the snapshot that the refresh's
+reads did see trips the check as well; it costs that one full refresh. A
+file parsed from an `entry_store` hit is no exception: the store stamps
+its entries with the source file's size and mtime, so a hit is never
+older than the disk.
 
 **A run renders what its refresh committed.** Only the refresh writes
 entry rows; the render reads them and writes none. A session file can
