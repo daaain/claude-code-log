@@ -141,6 +141,11 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
 # variable itself overrides this one; a test about the default location takes
 # `@pytest.mark.default_cache_path`, which unsets it instead.
 #
+# A fixture wider than a test (module, session) is set up before this one and
+# sees the variable as the run started, normally unset: it resolves the
+# default location, under its own temp dir. A test that looks that cache up again must resolve the same path,
+# with the marker (test_minimal_pages_browser.py) or an explicit db_path.
+#
 # It holds a MonkeyPatch of its own rather than requesting `monkeypatch`: an
 # autouse fixture that requests it sets it up before the xunit
 # `setup_method` fixture, so the test's patches would be undone only after
