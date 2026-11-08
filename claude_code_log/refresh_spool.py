@@ -73,7 +73,8 @@ CREATE TABLE files (
     cached_mtime REAL NOT NULL,
     message_count INTEGER NOT NULL,
     subagents_fingerprint TEXT,
-    content_version TEXT
+    content_version TEXT,
+    content_bytes INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE messages (
     id INTEGER PRIMARY KEY,
@@ -176,7 +177,8 @@ class SpooledFile:
     or ``append`` (the rows are a tail, to follow exactly
     ``expected_existing`` rows already in the cache). The remaining
     fields are the ``cached_files`` row as of the parse, which the merge
-    writes verbatim.
+    writes verbatim, except ``content_bytes``: the size of the spooled
+    rows' content, which decides how the merge commits.
     """
 
     id: int
@@ -190,6 +192,7 @@ class SpooledFile:
     message_count: int
     subagents_fingerprint: Optional[str]
     content_version: Optional[str]
+    content_bytes: int
 
 
 class RefreshSpool:
@@ -257,8 +260,17 @@ class RefreshSpool:
                 {**record, "mode": mode, "expected_existing": expected_existing},
             )
             file_id = cursor.lastrowid or 0
-            self._conn.executemany(
-                _INSERT_ROW, ({**row, "file_id": file_id} for row in rows)
+            size = 0
+
+            def counted() -> Iterable[Dict[str, Any]]:
+                nonlocal size
+                for row in rows:
+                    size += len(row["content"])
+                    yield {**row, "file_id": file_id}
+
+            self._conn.executemany(_INSERT_ROW, counted())
+            self._conn.execute(
+                "UPDATE files SET content_bytes = ? WHERE id = ?", (size, file_id)
             )
             self._conn.execute("COMMIT")
         except BaseException:
@@ -271,7 +283,7 @@ class RefreshSpool:
         rows = self._conn.execute(
             """SELECT id, file_name, file_path, mode, expected_existing,
                       source_mtime, source_size, cached_mtime, message_count,
-                      subagents_fingerprint, content_version
+                      subagents_fingerprint, content_version, content_bytes
                FROM files ORDER BY id"""
         ).fetchall()
         return [SpooledFile(*row) for row in rows]

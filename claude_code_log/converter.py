@@ -4896,13 +4896,29 @@ def ensure_fresh_cache_detailed(
         if not needs_update:
             return CacheRefresh.NONE  # Cache is already fresh
 
-        # One transaction for the whole refresh (`atomic_refresh`),
-        # whichever path it takes: the per-file entry writes go to a
-        # spool, the session rows, sidecar and aggregates derived from
-        # them are deferred, and the scope's end commits all of it at
-        # once. A refresh that stops anywhere in between leaves the
-        # cache as it was, with nothing recorded as current.
-        with cache_manager.atomic_refresh():
+        # Over rows the cache already holds, the refresh is one scope
+        # (`atomic_refresh`), whichever path it takes: the per-file
+        # entry writes go to a spool, the session rows, sidecar and
+        # aggregates derived from them are deferred, and the scope's
+        # end merges all of it, in one transaction or, when the rows
+        # are spread over many files, one per file under a mark that
+        # the next run heals. A refresh that stops anywhere never
+        # leaves a file recorded as current over derived rows that
+        # predate it.
+        #
+        # A cold build (no cached file for the project) needs no
+        # spool: there are no derived rows to fall out of step with,
+        # and the project's total stays 0 until the aggregates, its
+        # last write, so a build that stops reads as unfinished and the
+        # next run completes it. Its files commit one by one as they
+        # are parsed, which keeps the lock hold of a large project's
+        # first build to its largest file, and its disk to the cache.
+        scope = (
+            cache_manager.atomic_refresh()
+            if cache_manager.has_cached_files()
+            else contextlib.nullcontext()
+        )
+        with scope:
             # Streaming stage 4: when the update is driven purely by
             # changed files over a populated cache, refresh from those
             # files' bounded closure instead of loading the whole
