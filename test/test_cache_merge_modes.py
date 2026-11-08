@@ -14,6 +14,7 @@ spools nothing and writes per file as it parses.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, List
 
@@ -26,6 +27,7 @@ from claude_code_log.cache import (
     MERGE_CACHE_SIZE_KIB,
     CacheManager,
     atomic_merge_max_extra_bytes,
+    connection_lease,
     get_library_version,
 )
 from test.test_cache_atomic_refresh import (
@@ -375,3 +377,125 @@ def test_a_per_file_merge_with_nothing_derived_takes_no_mark(
     assert len(begins) == len(changed) + 1
     assert len(_rows_by_file(manager.db_path)["sess-gamma.jsonl"]) == 2
     assert _total(manager.db_path) == 4
+
+
+# ---- overlapping refreshes -------------------------------------------------
+
+
+def _cold_control(project: Path, tmp_path: Path) -> tuple[dict[str, int], int]:
+    """Session counts and total of a cache built fresh from the same files."""
+    cold = tmp_path / "cold" / project.name
+    cold.mkdir(parents=True)
+    for f in project.glob("*.jsonl"):
+        (cold / f.name).write_bytes(f.read_bytes())
+    manager = CacheManager(cold, get_library_version(), db_path=cold.parent / "c.db")
+    converter.ensure_fresh_cache(cold, manager, silent=True)
+    data = manager.get_cached_project_data()
+    assert data is not None
+    return {sid: s.message_count for sid, s in data.sessions.items()}, (
+        data.total_message_count
+    )
+
+
+def _overtaken_by(
+    project: Path, db_path: Path, fired: List[int], errors: List[BaseException]
+) -> Any:
+    """A hook that, once, grows beta and runs refresh A to completion on
+    its own thread (so its own connection), with its own manager."""
+    beta = project / "sess-beta.jsonl"
+
+    def refresh_a() -> None:
+        try:
+            other = CacheManager(project, get_library_version(), db_path=db_path)
+            converter.ensure_fresh_cache(project, other, silent=True)
+        except BaseException as exc:  # asserted on B's thread
+            errors.append(exc)
+
+    def hook(real: Any) -> Any:
+        def wrapped(self: CacheManager, *args: Any, **kwargs: Any) -> Any:
+            if not fired:
+                fired.append(1)
+                _append(beta, _turn("sess-beta", 1, "late beta"))
+                a = threading.Thread(target=refresh_a)
+                a.start()
+                a.join(timeout=60)
+                assert not a.is_alive(), "refresh A is stuck behind refresh B"
+            return real(self, *args, **kwargs)
+
+        return wrapped
+
+    return hook
+
+
+def _assert_heals_to_the_cold_control(
+    project: Path, tmp_path: Path, db_path: Path
+) -> None:
+    """After at most one more refresh, B's view is gone: every session
+    row and the total are what a fresh cache over the files holds."""
+    expected = _cold_control(project, tmp_path)
+    converter.ensure_fresh_cache(project, _manager(project), silent=True)
+    assert (_sessions(project), _total(db_path)) == expected
+    assert _manager(project).get_modified_files(sorted(project.glob("*.jsonl"))) == []
+
+
+@pytest.mark.parametrize("refresh", ["full", "incremental"])
+@pytest.mark.parametrize("mode", ["one", "per-file"])
+def test_a_refresh_overtaken_on_a_file_it_read_from_the_cache_heals(
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    refresh: str,
+) -> None:
+    """Refresh B parses alpha and takes beta from the cache. Before B
+    commits, beta grows and refresh A commits it, with the derived rows.
+    B's derived rows come from the old beta: written over A's record,
+    which matches the file, nothing would ever recompute them."""
+    if refresh == "full":
+        monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+    monkeypatch.setenv(
+        "CLAUDE_CODE_LOG_ATOMIC_MERGE_MB", "0" if mode == "per-file" else "1000"
+    )
+    db_path = project.parent / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    _pass(project.parent)
+    assert _total(db_path) == 4
+    _append(project / "sess-alpha.jsonl", _turn("sess-alpha", 1, "late alpha"))
+
+    fired: List[int] = []
+    errors: List[BaseException] = []
+    hook = _overtaken_by(project, db_path, fired, errors)
+    real = CacheManager._merge_refresh  # pyright: ignore[reportPrivateUsage]
+    with connection_lease(db_path), monkeypatch.context() as m:
+        m.setattr(CacheManager, "_merge_refresh", hook(real))
+        converter.ensure_fresh_cache(project, _manager(project), silent=True)
+    assert fired, "refresh A never ran inside B: the test is vacuous"
+    assert errors == []
+
+    _assert_heals_to_the_cold_control(project, tmp_path, db_path)
+
+
+def test_a_cold_build_overtaken_on_a_file_it_wrote_heals(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cold build writes each file as it parses it. Before its
+    derived rows, beta grows and refresh A (over the files the build has
+    written, so with a spool) commits it: the build's derived rows come
+    from the old beta, over A's current record."""
+    db_path = project.parent / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+
+    fired: List[int] = []
+    errors: List[BaseException] = []
+    hook = _overtaken_by(project, db_path, fired, errors)
+    with connection_lease(db_path), monkeypatch.context() as m:
+        m.setattr(
+            CacheManager,
+            "update_session_cache",
+            hook(CacheManager.update_session_cache),
+        )
+        converter.ensure_fresh_cache(project, _manager(project), silent=True)
+    assert fired, "refresh A never ran inside the build: the test is vacuous"
+    assert errors == []
+
+    _assert_heals_to_the_cold_control(project, tmp_path, db_path)
