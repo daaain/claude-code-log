@@ -147,15 +147,22 @@ the per-project render fan-out is enabled, any budget left over after one
 worker per stale project is handed to it, § 2.10), and **collect**
 (sequential — per-project index data is read back from the cache and the
 cross-project `index.html` is written last). Under `--from-date` /
-`--to-date` the plan converts a project when one of its visible sessions
-overlaps the window (`CacheManager.has_sessions_in_window`, from the
-session rows' first and last timestamps), when a file changed, whose
-rows cannot yet say what it holds, or when its combined output is missing
-at the destination (a fresh `--output`), which the index links; every
-other project is left untouched and
-reported as having no messages in the window. Converting those too would
-rewrite each one's combined output empty and mark it as rendered from a
-window (§ 2.3), so the next plain run would re-render the archive. Workers
+`--to-date` the pass writes a view of the window, and a **window** phase
+runs between plan and execute: each project's cache is refreshed in the
+parent, serially, and the window is read from it
+(`_project_window_view`). `window_session_ids` (a trunk session with a
+message in the window, among the sessions the index lists) is the one
+reading of it: it decides the session pages the conversion writes (the
+workers get the set, so a session started meanwhile waits for the next
+run), the sessions the index links, and the pages the destination may
+not already hold. That check (`_window_view_files`: the index pages,
+each shown project's combined page and its window's session pages, not
+the vendored assets) runs before anything is written and raises
+`WindowOutputExists` unless the run is forced; nothing is ever removed.
+A project the window shows nothing of is not converted, is reported as
+having no messages in the window and is left out of the index, which
+gives each listed project the window's totals; archived projects are
+left out too. Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
@@ -341,7 +348,9 @@ count describes them: instead of recording one,
 `mark_rendered_from_window` sets the count of each file's `html_cache`
 row (and of page 1's `html_pages` row, which shares the combined file's
 name) to -1, which no session or project matches, so the next
-unfiltered run re-renders it.
+unfiltered run re-renders it. Only a view written in place does: the rows
+are keyed by project and file name, so a view written to another
+directory touches none, and the full view's pages stay current.
 The rows stay, so a paginated project keeps its page count. JSON output
 has no `html_cache` row and goes by its own `version` field; a JSON file
 written from a window carries the window as `date_range`, and

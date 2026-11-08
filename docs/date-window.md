@@ -1,0 +1,112 @@
+# Viewing a date window
+
+`--from-date` and `--to-date` turn a run into a view of that window:
+its index, combined pages, session pages and recent sessions page, and
+every link they show, come from the window.
+
+```bash
+# Yesterday's work across all projects, in a directory of its own
+claude-code-log --from-date "yesterday" --to-date "yesterday" -o ~/yesterday
+
+# One project's last week, as one page of its own
+claude-code-log /path/to/project --from-date "last week" --combined only -o ~/last-week.html
+```
+
+Both bounds take natural language (`"today"`, `"3 days ago"`,
+`"2026-01-02 15:00"`); either may be left out.
+
+## What the view shows
+
+- **The index** lists only the projects with a session in the window, and
+  each project card counts the window: its messages, its tokens, the
+  time between its first and last message. Each session it lists is
+  shown with its usual title and the window's part of it.
+- **A project's combined page** holds the window's messages.
+- **A session page** is written for each session with a message in the
+  window, and only those. A session that only crosses the window, with
+  messages before and after it but none inside, is not part of it.
+- **The recent sessions page** lists the window's sessions, however old,
+  instead of those active in the last three days. Each row counts the
+  window's part of its session, as the index does: its messages, turns
+  and tool calls, and its last prompt and message. At most 60 are listed,
+  newest first, as on any run.
+- **Every page states its window** in its title or under its heading,
+  e.g. *(from 2026-01-02 to 2026-01-02)*, so it is never taken for the
+  whole archive.
+- **The search page** still searches the whole archive, as on any run
+  (it needs `claude-code-log serve`), and says so next to the window.
+
+Archived projects, whose transcripts are gone, are not part of a view:
+there is no source left to take a window of.
+
+## Where the view goes
+
+A date-filtered run writes into a destination that holds none of the
+pages it is about to write. Other files in the directory do not count,
+nor do the vendored `assets/` and referenced images, which are the same
+bytes in any view.
+
+If one of its pages is already there, the run writes nothing and exits
+with an error naming the first such file. This is what happens when you
+re-run a date filter in place, over the pages of an earlier run:
+
+```text
+Error: /home/me/.claude/projects/index.html already exists. A date-filtered run
+writes only into a destination that holds none of the files it writes:
+pass --force to overwrite them (nothing is removed), or choose another
+--output.
+```
+
+For one project, the session pages are written into the project's
+directory whatever `-o` names, so the way out it offers is the combined
+page alone:
+
+```text
+Error: /path/to/project/session-1a2b3c4d.html already exists. A date-filtered
+run writes only into a destination that holds none of the files it writes:
+pass --force to overwrite them (nothing is removed), or write the combined
+page alone elsewhere, with --combined only and --output.
+```
+
+With `--combined no` there is no combined page to send elsewhere, so the
+error offers `--force` alone.
+
+You then have two ways out:
+
+- **`-o` / `--output` another directory.** This is the usual way: the
+  full view stays where it is, and the window's view goes next to it.
+  For one project, `-o` names the combined page alone, and its session
+  pages are still written into the project's directory, where the full
+  view's are. To leave those alone, write the combined page only
+  (`--combined only -o page.html`), or the whole view in place with
+  `--force`.
+- **`--force`** writes the window's view over the existing pages. It
+  removes nothing: pages of the full view that the window does not
+  rewrite (session pages outside the window, other projects' pages) stay
+  where they are, no longer linked from the new index. `--force` is only
+  accepted together with a date window. To clear the others out, mark the
+  time before the run and delete the pages it did not rewrite (check the
+  list without `-delete` first):
+
+    ```bash
+    touch /tmp/before-view
+    claude-code-log --from-date "yesterday" --force
+    find ~/.claude/projects -name '*.html' ! -newer /tmp/before-view -delete
+    ```
+
+## The render cache
+
+The cache records which pages are current, by project and file name. A
+view written in place, with `--force`, marks the pages it replaced, so
+the next run without a date filter rewrites them in full. A view written
+anywhere else leaves those records alone: the full view's pages, which
+it did not touch, stay current.
+
+The transcripts themselves are cached as usual. A date-filtered run
+refreshes the cache exactly as a run without a filter would, so the next
+plain run finds it up to date.
+
+!!! note
+    Sessions from other providers (`--provider codex`) are not covered yet:
+    their date-filtered run still writes over the full view, and takes no
+    `--force`.

@@ -214,7 +214,9 @@
         <h1>Search all transcripts</h1>
         <a href='index.html'>← All projects</a>{% if minimal %}<span class='mn-sp'></span>{% include 'components/minimal/scheme_toggle.html' %}{% endif %}
     </div>
-
+{% if window %}
+    <p class='archive-search-window'>The index beside this page shows the date window {{ window }}; this search covers the whole archive.</p>
+{% endif %}
     <div id='setup' class='archive-search-setup' hidden>
         <p><strong>This page needs the local server.</strong> Archive-wide
             search reads the SQLite cache, which a page opened from

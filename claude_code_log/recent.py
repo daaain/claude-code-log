@@ -83,7 +83,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Optional, cast
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, cast
 
 from .cache import CacheManager, get_cache_db_path, get_library_version
 from .background_work import BackgroundWork
@@ -738,6 +738,57 @@ def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Ro
         conn.close()
 
 
+@dataclass(frozen=True)
+class RecentWindow:
+    """What a date-filtered run's recent page shows instead of the last days.
+
+    ``sessions`` maps ``(project path, session id)`` to the window's part
+    of each session the run wrote, as the index lists it: its
+    ``message_count`` and ``first_timestamp`` / ``last_timestamp``.
+    ``keep`` narrows a session's entries to the window, so its turns,
+    tools and last messages are the window's too. ``label`` names the
+    window (``date_window_label``).
+    """
+
+    label: str
+    sessions: Mapping[tuple[str, str], Mapping[str, Any]]
+    keep: Callable[[list[TranscriptEntry]], list[TranscriptEntry]]
+
+
+def _window_session_rows(db_path: Path, window: RecentWindow) -> list[sqlite3.Row]:
+    """The session rows of ``window``'s newest sessions, newest first.
+
+    Newest by the window's own last message, at most :data:`MAX_SESSIONS`
+    as on any run, and however old: the window, not the clock, decides.
+    A ``mode=ro`` reader, like :func:`_session_rows`.
+    """
+
+    def last(key: tuple[str, str]) -> str:
+        return str(window.sessions[key].get("last_timestamp") or "")
+
+    keys = sorted(window.sessions, key=last, reverse=True)[:MAX_SESSIONS]
+    if not keys or not db_path.exists():
+        return []
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            f"""SELECT s.session_id, s.summary, s.ai_title, s.first_timestamp,
+                      s.last_timestamp, s.message_count, s.first_user_message,
+                      s.cwd, p.project_path
+               FROM sessions s JOIN projects p ON p.id = s.project_id
+               WHERE s.hidden = 0
+                 AND s.session_id IN ({", ".join("?" * len(keys))})""",
+            [sid for _path, sid in keys],
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    found = {(str(Path(row["project_path"])), row["session_id"]): row for row in rows}
+    return [found[key] for key in keys if key in found]
+
+
 def build_recent_payload(
     projects_dir: Path,
     *,
@@ -745,6 +796,7 @@ def build_recent_payload(
     href_for: Optional[Callable[[Path, str], Optional[str]]] = None,
     db_path: Optional[Path] = None,
     memo: Optional[RecentMemo] = None,
+    window: Optional[RecentWindow] = None,
 ) -> dict[str, Any]:
     """The page's data: the recently updated sessions across every project.
 
@@ -754,7 +806,10 @@ def build_recent_payload(
     A link to a page that wasn't written is harmless: the row still
     shows, and the browser reports a missing file only if it is followed.
     With a ``memo`` (``watch`` keeps one), sessions unchanged since the
-    last build aren't read again.
+    last build aren't read again. With a ``window`` (a date-filtered run),
+    the sessions are the window's instead, each with only what the window
+    holds of it, and the payload names the window; no memo is used then,
+    since its summaries are of whole sessions.
     """
     now = now or datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)
@@ -762,7 +817,11 @@ def build_recent_payload(
     # Cached timestamps are ISO 8601 in UTC ("...Z"), so they sort as text.
     cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
     db_path = db_path or get_cache_db_path(projects_dir)
-    rows = _session_rows(db_path, cutoff_iso, MAX_SESSIONS)
+    if window is None:
+        rows = _session_rows(db_path, cutoff_iso, MAX_SESSIONS)
+    else:
+        rows = _window_session_rows(db_path, window)
+        memo = None
 
     managers: dict[str, CacheManager] = {}
     names: dict[str, str] = {}
@@ -785,7 +844,8 @@ def build_recent_payload(
                 managers[key] = manager
 
             def read(manager: CacheManager = manager) -> SessionSummary:
-                return read_session(manager.load_session_entries(session_id))
+                entries = manager.load_session_entries(session_id)
+                return read_session(window.keep(entries) if window else entries)
 
             summary = (
                 memo.summary(
@@ -831,11 +891,18 @@ def build_recent_payload(
                 "last": info["last"],
             }
         )
+        if window is not None:
+            part = window.sessions[(key, session_id)]
+            sessions[-1].update(
+                messages=part.get("message_count", 0),
+                firstAt=_ms(part.get("first_timestamp")),
+                lastAt=_ms(part.get("last_timestamp")),
+            )
 
     if memo is not None:
         memo.keep_only(row["session_id"] for row in rows)
 
-    return {
+    payload: dict[str, Any] = {
         "v": 1,
         "generatedAt": now_ms,
         "windowDays": WINDOW_DAYS,
@@ -844,6 +911,9 @@ def build_recent_payload(
         "wakeGraceMinutes": WAKE_GRACE_MINUTES,
         "sessions": sessions,
     }
+    if window is not None:
+        payload["window"] = window.label
+    return payload
 
 
 def payload_json(payload: dict[str, Any]) -> str:

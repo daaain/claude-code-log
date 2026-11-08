@@ -460,6 +460,7 @@ def test_a_date_filtered_run_refreshes_the_cache_in_full(
         jobs=1,
         from_date="2025-12-31",
         to_date="2026-01-01",
+        force=True,
     )
     after = CacheManager(project, get_library_version()).get_cached_project_data()
     assert after is not None
@@ -505,6 +506,7 @@ def test_a_date_filtered_run_does_not_start_a_pending_refresh(
         jobs=1,
         from_date="2025-12-31",
         to_date="2026-01-01",
+        force=True,
     )
     manager = CacheManager(project, get_library_version())
     data = manager.get_cached_project_data()

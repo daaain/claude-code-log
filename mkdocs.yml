@@ -78,6 +78,7 @@ nav:
       - Themes: themes.md
       - Searching the whole archive: archive-search.md
       - Recent sessions across all projects: recent-sessions.md
+      - Viewing a date window: date-window.md
       - Watching a session as it runs: live-updates.md
       - Restoring archived sessions: restoring-archived-sessions.md
   - Reference:

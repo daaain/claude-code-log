@@ -123,9 +123,18 @@ def _run(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
 ) -> None:
-    """A pass over the whole hierarchy, as ``--all-projects`` runs it."""
+    """A pass over the whole hierarchy, as ``--all-projects`` runs it.
+
+    A filtered pass writes its view in place, over the full one, which
+    takes ``--force``.
+    """
     process_projects_hierarchy(
-        projects_dir, from_date, to_date, jobs=1, **SHAPES[shape]
+        projects_dir,
+        from_date,
+        to_date,
+        jobs=1,
+        force=from_date is not None or to_date is not None,
+        **SHAPES[shape],
     )
 
 
@@ -139,7 +148,7 @@ def _convert(
 
     Unlike the hierarchy pass, which leaves a project with no changed file
     alone, this renders on every run, so a filtered run reaches files
-    that were complete.
+    that were complete. In place, as here, a filtered run is forced.
     """
     options = dict(SHAPES[shape])
     convert_jsonl_to(
@@ -148,6 +157,7 @@ def _convert(
         from_date=from_date,
         to_date=to_date,
         silent=True,
+        force=from_date is not None or to_date is not None,
         **options,
     )
 
@@ -259,6 +269,7 @@ def test_a_json_session_rendered_by_the_pool_from_a_window_is_rewritten(
             to_date=to_date,
             silent=True,
             render_jobs=2,
+            force=from_date is not None,
         )
 
     run()
@@ -438,12 +449,14 @@ def test_a_bound_naming_an_instant_keeps_its_time() -> None:
     assert str(today.time()) == "23:59:59.999999"
 
 
-def test_the_collect_fallback_writes_rows_from_every_message(
+def test_a_filtered_pass_writes_no_session_rows_from_its_index_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The pass's index step falls back to loading the project when the cache
-    has no data for it, and writes session rows from that load; under a
-    window, the load must still be unfiltered.
+    has no data for it, and writes session rows from that load. A filtered
+    pass builds its index from the window it read before converting, so it
+    never takes that fallback; the rows it writes are its unfiltered
+    refresh's.
 
     With a cache manager the project row always exists by then, so the
     fallback is reached here by having the cache report no project data.
@@ -464,11 +477,16 @@ def test_the_collect_fallback_writes_rows_from_every_message(
     monkeypatch.setattr(converter, "_update_cache_with_session_data", spy)
     monkeypatch.setattr(CacheManager, "get_cached_project_data", _no_project_data)
     capsys.readouterr()
-    _run(project.parent, "md-sessions", **FIRST_DAY)
-
-    # Control: the fallback ran.
+    _run(project.parent, "md-sessions")
+    # Control: unfiltered, the fallback runs and writes rows.
     assert "using fallback processing" in capsys.readouterr().out
     assert written, "no session rows were written"
+
+    written.clear()
+    _run(project.parent, "md-sessions", **FIRST_DAY)
+    assert "using fallback processing" not in capsys.readouterr().out
+    # What it does write is its refresh's, which reads the cache as empty
+    # here: rows from every message, as unfiltered.
     second_day = [s for s in _stamps_of_all(project) if s.startswith("2026-01-02")]
     assert second_day
     for stamps in written:

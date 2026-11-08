@@ -257,6 +257,15 @@ def parse_date_bounds(
     return from_dt, to_dt
 
 
+def date_window_label(
+    from_date: Optional[str], to_date: Optional[str]
+) -> Optional[str]:
+    """How a page names a run's date window ("from X to Y"), or None."""
+    parts = [f"from {from_date}"] if from_date else []
+    parts += [f"to {to_date}"] if to_date else []
+    return " ".join(parts) or None
+
+
 def format_duration(total_seconds: float) -> str:
     """A short human duration: ``"120 ms"``, ``"4.2s"``, ``"2m 13s"``.
 
