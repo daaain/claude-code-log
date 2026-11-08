@@ -2146,7 +2146,9 @@ def generate_projects_index_html(
     return renderer.generate_projects_index(project_summaries, from_date, to_date)
 
 
-def generate_archive_search_html(theme: str = DEFAULT_THEME) -> str:
+def generate_archive_search_html(
+    theme: str = DEFAULT_THEME, window: Optional[str] = None
+) -> str:
     """Render the archive-wide search page.
 
     Written on every HTML run, including for people who never start the
@@ -2156,6 +2158,8 @@ def generate_archive_search_html(theme: str = DEFAULT_THEME) -> str:
 
     ``theme`` is the run's HTML theme (``utils.THEMES``): like the index,
     the page is rewritten on every run, so it always follows the run.
+    ``window`` is a date-filtered run's window (``date_window_label``):
+    the search still covers the whole archive, and the page says so.
     """
     from ..search import SEARCH_FIELD_HINTS, SEARCH_FIELD_LABELS, SEARCH_FIELDS
 
@@ -2164,6 +2168,7 @@ def generate_archive_search_html(theme: str = DEFAULT_THEME) -> str:
         env.get_template("archive_search.html").render(
             library_version=get_library_version(),
             theme=normalize_theme(theme),
+            window=window,
             # The field toggles are rendered from the canonical list, so a
             # new group appears in the UI without anyone remembering to add
             # it. Which of them start out *checked* is deliberately not

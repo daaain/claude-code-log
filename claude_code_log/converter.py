@@ -7942,7 +7942,8 @@ def _process_projects_hierarchy(
         from .html.renderer import generate_archive_search_html
 
         atomic_write_text(
-            index_path.parent / "search.html", generate_archive_search_html(theme)
+            index_path.parent / "search.html",
+            generate_archive_search_html(theme, date_window_label(from_date, to_date)),
         )
         _write_recent_page(
             index_path.parent,

@@ -253,6 +253,21 @@ def test_the_recent_page_lists_the_window_s_sessions_with_its_counts(
     assert "<title>Recent sessions (from 2026-01-02 to 2026-01-02)</title>" in page
 
 
+def test_the_search_page_says_it_searches_the_whole_archive(
+    projects: Path, tmp_path: Path
+) -> None:
+    _full(projects)
+    full = (projects / "search.html").read_text(encoding="utf-8")
+    view = tmp_path / "view"
+    _window(projects, view)
+    page = (view / "search.html").read_text(encoding="utf-8")
+    note = re.search(r"<p class='archive-search-window'>(.*?)</p>", page, re.S)
+    assert note is not None, page[:2000]
+    assert "from 2026-01-02 to 2026-01-02" in note.group(1)
+    assert "whole archive" in note.group(1)
+    assert "archive-search-window" not in full
+
+
 def test_a_session_that_arrives_during_the_pass_is_left_to_the_next(
     projects: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
