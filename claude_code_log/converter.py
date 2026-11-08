@@ -4417,7 +4417,7 @@ def convert_jsonl_to(
                 render_pool=render_pool,
                 fragment_store=fragment_store,
                 restrict_to_sessions=shown_sessions,
-                record_rendered=record_window and (update_cache or not windowed),
+                record_rendered=record_window,
             )
 
     finally:

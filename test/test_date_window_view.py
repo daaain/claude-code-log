@@ -392,6 +392,37 @@ def test_one_project_converted_on_its_own_follows_the_same_rule(
     )
 
 
+def test_a_combined_page_exported_elsewhere_still_marks_the_session_pages(
+    projects: Path, tmp_path: Path
+) -> None:
+    """``-o page.html`` on a project sends only the combined page elsewhere:
+    the session pages are still written into the project, over the full
+    view's, so they are left stale like any page a view replaced there."""
+    mixed = projects / "-mixed"
+    _full(projects)
+    result = CliRunner().invoke(
+        main,
+        [
+            str(mixed),
+            "-o",
+            str(tmp_path / "page.html"),
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+            "--force",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "ONLY-DAY-TWO" in (mixed / "session-s-day2.html").read_text(encoding="utf-8")
+    marked = {
+        page
+        for path, page, count, _at in _render_rows(tmp_path / "cache.db")
+        if Path(path).name == "-mixed" and count == -1
+    }
+    assert marked == {f"session-{sid}.html" for sid in INSIDE}
+
+
 def test_one_transcript_file_follows_the_same_rule(
     projects: Path, tmp_path: Path
 ) -> None:
