@@ -223,6 +223,36 @@ def test_the_pages_written_are_the_pages_linked_and_the_pages_checked(
         assert (dest / page).read_text(encoding="utf-8") == "mine"
 
 
+def _recent_payload(index_dir: Path) -> Dict[str, Any]:
+    text = (index_dir / "recent-data.js").read_text(encoding="utf-8")
+    start = text.index("__cclRecent(") + len("__cclRecent(")
+    return json.loads(text[start : text.rindex(");")])
+
+
+def test_the_recent_page_lists_the_window_s_sessions_with_its_counts(
+    projects: Path, tmp_path: Path
+) -> None:
+    """Not the sessions active in the last few days: the window's, however
+    old, each with what the window holds of it. s-span's prompt was on the
+    first day, so in the window it has none; its title stays the whole
+    session's, as on the index."""
+    _full(projects)
+    view = tmp_path / "view"
+    _window(projects, view)
+    payload = _recent_payload(view)
+    sessions = {s["id"]: s for s in payload["sessions"]}
+    assert set(sessions) == INSIDE
+    assert payload["window"] == "from 2026-01-02 to 2026-01-02"
+    assert sessions["s-day2"]["messages"] == 2
+    span = sessions["s-span"]
+    assert span["messages"] == 1
+    assert span["firstAt"] == span["lastAt"] == 1767351600000  # 2026-01-02 11:00Z
+    assert span["lastPrompt"] is None
+    assert span["title"] == "SPAN-ASKED"
+    page = (view / "recent.html").read_text(encoding="utf-8")
+    assert "<title>Recent sessions (from 2026-01-02 to 2026-01-02)</title>" in page
+
+
 def test_a_session_that_arrives_during_the_pass_is_left_to_the_next(
     projects: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

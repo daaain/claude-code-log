@@ -5,7 +5,7 @@
 <head>
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>Recent sessions</title>
+    <title>Recent sessions{% if window %} ({{ window }}){% endif %}</title>
     {#- One look in both themes: the minimal theme's tokens, and the page's own
         stylesheet. The stored light/dark choice applies before first paint.
         The Pygments sheets colour code in the rendered Markdown of an open
@@ -32,7 +32,8 @@
         </nav>
 
         <header class='rc-head'>
-            <h1>Sessions, last update first</h1>
+            <h1>Sessions, last update first</h1>{% if window %}
+            <p class='rc-window'>The sessions of the date window {{ window }}, with what the window holds of each.</p>{% endif %}
             <div class='rc-stats'>
                 <div class='rc-filters' role='group' aria-label='Show sessions'>
                     <button type='button' class='rc-filter' data-filter='all' aria-pressed='true'><span class='rc-k'>sessions</span><span class='rc-n'>–</span></button>

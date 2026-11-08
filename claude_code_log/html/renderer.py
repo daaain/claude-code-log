@@ -2182,7 +2182,9 @@ def generate_archive_search_html(theme: str = DEFAULT_THEME) -> str:
     )
 
 
-def generate_recent_html(theme: str = DEFAULT_THEME) -> str:
+def generate_recent_html(
+    theme: str = DEFAULT_THEME, window: Optional[str] = None
+) -> str:
     """Render the recent sessions page (``recent.html``).
 
     The page holds no data: it loads the sibling ``recent-data.js``
@@ -2190,12 +2192,15 @@ def generate_recent_html(theme: str = DEFAULT_THEME) -> str:
     every refresh, so it is identical from run to run and no transcript
     text is ever inlined into it. It has one look in both themes (the
     minimal theme's tokens); ``theme`` is accepted for symmetry with the
-    other page generators and recorded in the stamp.
+    other page generators and recorded in the stamp. ``window`` is a
+    date-filtered run's window (``date_window_label``), which the page
+    names: its data is then the window's sessions.
     """
     env = get_template_environment()
     return str(
         env.get_template("recent.html").render(
             library_version=get_library_version(),
             theme=normalize_theme(theme),
+            window=window,
         )
     )

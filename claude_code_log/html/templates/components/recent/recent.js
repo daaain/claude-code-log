@@ -285,6 +285,7 @@
         return {
             generatedAt: num(raw.generatedAt),
             windowDays: num(raw.windowDays) || 3,
+            window: str(raw.window),
             ttl: num(raw.cacheTtlMinutes) || 60,
             bgCap: num(raw.bgCapMinutes) || 60,
             wakeGrace: num(raw.wakeGraceMinutes) || 5,
@@ -1283,7 +1284,9 @@
                 emptyEl,
                 payload.sessions.length
                     ? 'No sessions match this filter.'
-                    : 'No sessions updated in the last ' + plural(payload.windowDays, 'day') + '.'
+                    : payload.window
+                      ? 'No sessions in the date window ' + payload.window + '.'
+                      : 'No sessions updated in the last ' + plural(payload.windowDays, 'day') + '.'
             );
         }
         visible.forEach(function (v) {

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from .render_pool import RenderPool
 
 from .utils import (
+    date_window_label,
     DEFAULT_THEME,
     output_theme,
     atomic_write_text,
@@ -6955,6 +6956,8 @@ def _write_recent_page(
     project_summaries: List[Dict[str, Any]],
     theme: str,
     session_pages: bool = True,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
 ) -> None:
     """Write ``recent.html`` and its ``recent-data.js`` next to the index.
 
@@ -6964,24 +6967,51 @@ def _write_recent_page(
     follow ``--output`` / ``--expand-paths`` / variant filenames exactly
     as the index does. Without ``session_pages`` (``--combined only``)
     there are none: the index names each session's file all the same,
-    but nothing writes it. A failure here must never fail the conversion:
-    the page is a convenience next to the index, not part of it.
+    but nothing writes it. Under a date window the page lists the
+    window's sessions, those of the index's cards, each with the window's
+    part of it, and names the window. A failure here must never fail the
+    conversion: the page is a convenience next to the index, not part of
+    it.
     """
-    from .recent import RECENT_DATA, RECENT_PAGE, build_recent_payload, recent_data_js
+    from .recent import (
+        RECENT_DATA,
+        RECENT_PAGE,
+        RecentWindow,
+        build_recent_payload,
+        recent_data_js,
+    )
 
     links: Dict[str, str] = {}
     for summary in project_summaries if session_pages else []:
         for session in summary.get("sessions", []):
             if session.get("id") and session.get("file"):
                 links[str(session["id"])] = str(session["file"])
+    label = date_window_label(from_date, to_date)
     try:
         from .html.renderer import generate_recent_html
 
+        window = (
+            RecentWindow(
+                label=label,
+                sessions={
+                    (str(Path(summary["path"])), str(session["id"])): session
+                    for summary in project_summaries
+                    for session in summary.get("sessions", [])
+                },
+                keep=lambda entries: filter_messages_by_date(
+                    entries, from_date, to_date
+                ),
+            )
+            if label
+            else None
+        )
         payload = build_recent_payload(
-            projects_path, href_for=lambda _project, sid: links.get(sid)
+            projects_path,
+            href_for=lambda _project, sid: links.get(sid),
+            window=window,
         )
         atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
-        atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(theme))
+        atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(theme, label))
     except Exception as exc:  # pragma: no cover - defensive
         print(f"Warning: could not write {RECENT_PAGE}: {exc}")
 
@@ -7920,6 +7950,8 @@ def _process_projects_hierarchy(
             project_summaries,
             theme,
             session_pages=generate_individual_sessions,
+            from_date=from_date,
+            to_date=to_date,
         )
 
     # Count total sessions from project summaries

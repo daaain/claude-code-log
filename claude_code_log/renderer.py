@@ -81,6 +81,7 @@ from .factories.attachment_factory import (
     queued_command_prompt_items,
 )
 from .utils import (
+    date_window_label,
     DEFAULT_THEME,
     format_duration,
     output_theme,
@@ -5330,14 +5331,9 @@ def title_for_projects_index(
                     pass
 
     # Add date range suffix if provided
-    if from_date or to_date:
-        date_range_parts: list[str] = []
-        if from_date:
-            date_range_parts.append(f"from {from_date}")
-        if to_date:
-            date_range_parts.append(f"to {to_date}")
-        date_range_str = " ".join(date_range_parts)
-        title += f" ({date_range_str})"
+    window = date_window_label(from_date, to_date)
+    if window:
+        title += f" ({window})"
 
     return title
 
