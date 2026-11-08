@@ -4,9 +4,10 @@
 Every page such a run writes, and every page and link those pages show,
 comes from the window: the master index lists the projects with a
 session in it, with the window's totals, and each project links only the
-session pages the run wrote. Written outside the project's own
-directory, its pages are not recorded in the render cache as the full
-view's, which shares their file names.
+session pages the run wrote. The view goes into an output directory that
+holds none of the files it writes, or over them with ``--force``, which
+overwrites and removes nothing. Its pages are not recorded in the render
+cache as the full view's, which shares their file names.
 
 The fixture's window is 2026-01-02. In ``-mixed``:
 
@@ -29,7 +30,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pytest
-from claude_code_log.converter import process_projects_hierarchy
+from click.testing import CliRunner
+
+from claude_code_log.cli import main
+from claude_code_log.converter import (
+    WindowOutputExists,
+    convert_jsonl_to,
+    process_projects_hierarchy,
+)
 
 from test.test_date_filtered_runs import _append, _entry, _turn
 
@@ -83,6 +91,7 @@ def _window(
     output_dir: Optional[Path] = None,
     *,
     fmt: str = "html",
+    force: bool = False,
     jobs: int = 1,
 ) -> Path:
     return process_projects_hierarchy(
@@ -90,6 +99,7 @@ def _window(
         jobs=jobs,
         output_format=fmt,
         output_dir=output_dir,
+        force=force,
         **WINDOW,
     )
 
@@ -178,14 +188,14 @@ def test_no_page_of_the_view_links_a_file_it_did_not_write(
 
 
 @pytest.mark.parametrize("jobs", [1, 2])
-def test_the_pages_written_are_the_pages_linked(
+def test_the_pages_written_are_the_pages_linked_and_the_pages_checked(
     projects: Path, tmp_path: Path, jobs: int
 ) -> None:
-    """One set of sessions decides both: which session pages the run
-    writes, and which the index links. Each would otherwise read the
-    window its own way: the session rows' first and last stamps (s-gap
-    straddles the window), or the window's own user messages (s-span has
-    none)."""
+    """One set of sessions decides all three: which session pages the run
+    writes, which the index links, and which files a destination may not
+    hold. Each would otherwise read the window its own way: the session
+    rows' first and last stamps (s-gap straddles the window), or the
+    window's own user messages (s-span has none)."""
     view = tmp_path / "view"
     _window(projects, view, jobs=jobs)
     written = set(_pages(view))
@@ -195,13 +205,30 @@ def test_the_pages_written_are_the_pages_linked(
     linked = {link for link in _hrefs(index) if "session-" in link}
     assert linked == {p for p in written if "/session-" in p}
 
+    # Each page the run writes makes a destination holding it refuse the
+    # run; a page of the full view outside the window does not.
+    for page in sorted(written):
+        dest = tmp_path / f"holds-{page.replace('/', '_')}"
+        (dest / page).parent.mkdir(parents=True)
+        (dest / page).write_text("mine", encoding="utf-8")
+        with pytest.raises(WindowOutputExists) as raised:
+            _window(projects, dest)
+        assert raised.value.path == dest / page
+        assert (dest / page).read_text(encoding="utf-8") == "mine"
+    for page in ("-mixed/session-s-day1.html", "-mixed/session-s-gap.html"):
+        dest = tmp_path / f"holds-{page.replace('/', '_')}"
+        (dest / page).parent.mkdir(parents=True)
+        (dest / page).write_text("mine", encoding="utf-8")
+        _window(projects, dest)
+        assert (dest / page).read_text(encoding="utf-8") == "mine"
+
 
 def test_a_session_that_arrives_during_the_pass_is_left_to_the_next(
     projects: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The pass reads the window before converting and links what it read:
-    a session started in between is not linked, so its page is not
-    written either."""
+    """The pass reads the window before converting, links what it read and
+    checks those pages at the destination: a session started in between is
+    neither, so its page is not written either."""
     from claude_code_log import converter
 
     read = converter._project_window_view
@@ -239,7 +266,57 @@ def test_an_archived_project_is_not_part_of_a_view(
     assert "-idle" not in (view / "index.html").read_text(encoding="utf-8")
 
 
-# ---- The render cache ------------------------------------------------------
+# ---- Where the view goes ---------------------------------------------------
+
+
+def test_a_view_over_a_full_one_is_refused_and_writes_nothing(
+    projects: Path, tmp_path: Path
+) -> None:
+    _full(projects)
+    before = _pages(projects)
+    rows = _render_rows(tmp_path / "cache.db")
+    with pytest.raises(WindowOutputExists) as raised:
+        _window(projects)
+    # The master index is the first file such a run would write.
+    assert raised.value.path == projects / "index.html"
+    assert _pages(projects) == before
+    assert _render_rows(tmp_path / "cache.db") == rows
+
+
+def test_forced_in_place_it_overwrites_and_removes_nothing(
+    projects: Path, tmp_path: Path
+) -> None:
+    _full(projects)
+    _window(projects, force=True)
+    mixed = projects / "-mixed"
+    # Rewritten from the window.
+    combined = (mixed / "combined_transcripts.html").read_text(encoding="utf-8")
+    assert "ONLY-DAY-TWO" in combined and "ONLY-DAY-ONE" not in combined
+    # Left as they were, unlinked: the full view's pages outside the window.
+    for sid in OUTSIDE:
+        assert (mixed / f"session-{sid}.html").is_file()
+    assert "ONLY-DAY-ONE" in (mixed / "session-s-day1.html").read_text(encoding="utf-8")
+    assert (projects / "-idle" / "combined_transcripts.html").is_file()
+    assert "-idle" not in (projects / "index.html").read_text(encoding="utf-8")
+
+
+def test_forced_in_place_it_leaves_the_rewritten_pages_stale(
+    projects: Path, tmp_path: Path
+) -> None:
+    """The next run without a window rebuilds what the view replaced, and
+    only that."""
+    _full(projects)
+    _window(projects, force=True)
+    marked = {
+        (Path(path).name, page)
+        for path, page, count, _at in _render_rows(tmp_path / "cache.db")
+        if count == -1
+    }
+    assert marked == {
+        ("-mixed", "combined_transcripts.html"),
+        ("-mixed", "session-s-day2.html"),
+        ("-mixed", "session-s-span.html"),
+    }
 
 
 def test_a_view_written_elsewhere_leaves_the_render_cache_alone(
@@ -252,3 +329,101 @@ def test_a_view_written_elsewhere_leaves_the_render_cache_alone(
     rows = _render_rows(tmp_path / "cache.db")
     _window(projects, tmp_path / "view")
     assert _render_rows(tmp_path / "cache.db") == rows
+
+
+def test_one_project_converted_on_its_own_follows_the_same_rule(
+    projects: Path, tmp_path: Path
+) -> None:
+    mixed = projects / "-mixed"
+    convert_jsonl_to("html", mixed, silent=True)
+    rows = _render_rows(tmp_path / "cache.db")
+    with pytest.raises(WindowOutputExists) as raised:
+        convert_jsonl_to("html", mixed, silent=True, **WINDOW)
+    assert raised.value.path == mixed / "combined_transcripts.html"
+
+    view = tmp_path / "view"
+    convert_jsonl_to("html", mixed, output_root=view, silent=True, **WINDOW)
+    assert _session_ids(set(_pages(view))) == INSIDE
+    assert _render_rows(tmp_path / "cache.db") == rows
+
+    convert_jsonl_to("html", mixed, silent=True, force=True, **WINDOW)
+    assert "ONLY-DAY-ONE" not in (mixed / "combined_transcripts.html").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_one_transcript_file_follows_the_same_rule(
+    projects: Path, tmp_path: Path
+) -> None:
+    transcript = projects / "-mixed" / "s-day2.jsonl"
+    page = convert_jsonl_to("html", transcript, silent=True)
+    with pytest.raises(WindowOutputExists) as raised:
+        convert_jsonl_to("html", transcript, silent=True, **WINDOW)
+    assert raised.value.path == page
+    elsewhere = tmp_path / "day-two.html"
+    convert_jsonl_to("html", transcript, elsewhere, silent=True, **WINDOW)
+    assert "ONLY-DAY-TWO" in elsewhere.read_text(encoding="utf-8")
+
+
+# ---- The command line ------------------------------------------------------
+
+
+def test_the_refusal_names_the_file_and_both_ways_out(projects: Path) -> None:
+    _full(projects)
+    result = CliRunner().invoke(
+        main,
+        [
+            "--all-projects",
+            "--projects-dir",
+            str(projects),
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert str(projects / "index.html") in result.output
+    assert "--force" in result.output and "--output" in result.output
+
+
+def test_force_is_accepted_with_a_window_only(projects: Path) -> None:
+    result = CliRunner().invoke(
+        main, ["--all-projects", "--projects-dir", str(projects), "--force"]
+    )
+    assert result.exit_code == 2, result.output
+    assert "--force" in result.output
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--all-projects",
+            "--projects-dir",
+            str(projects),
+            "--force",
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_the_provider_pipeline_takes_no_force(tmp_path: Path) -> None:
+    """Its date-filtered run still writes over a full view, so there is
+    nothing for --force to allow there yet."""
+    result = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            "--from-date",
+            "2026-01-02",
+            "--force",
+            "-o",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "--force" in result.output

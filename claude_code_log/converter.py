@@ -3007,6 +3007,7 @@ def convert_jsonl_to_html(
     silent: bool = False,
     page_size: int = 2000,
     depth: RenderingDepth = DEFAULT_DEPTH,
+    force: bool = False,
 ) -> Path:
     """Convert JSONL transcript(s) to HTML file(s).
 
@@ -3025,6 +3026,7 @@ def convert_jsonl_to_html(
         silent,
         page_size=page_size,
         depth=depth,
+        force=force,
     )
 
 
@@ -3829,6 +3831,7 @@ def convert_jsonl_to(
     archive_search_link: Optional[str] = None,
     render_jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    force: bool = False,
     window_sessions: Optional[frozenset[str]] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
@@ -3878,6 +3881,11 @@ def convert_jsonl_to(
             single-threaded behaviour. An explicit int overrides the
             environment. See ``build_render_pool`` for the further
             conditions under which a pool is actually created.
+        force: With a date window, write over the files of the view that
+            already exist at the destination. Without it a windowed run
+            raises ``WindowOutputExists`` before writing anything when one
+            does (see ``window_session_ids`` for which session pages it
+            writes). Nothing is removed either way.
         window_sessions: With a date window, the sessions the caller read
             the window as showing (``process_projects_hierarchy`` links
             these from its index and checked their pages): no other
@@ -4096,21 +4104,36 @@ def convert_jsonl_to(
     messages = deduplicate_messages(messages)
 
     # A date window is a view of its own: its session pages are the
-    # window's sessions, and it is recorded in the render cache only when
-    # written in place, where it replaced pages of the full view.
+    # window's sessions, it goes only where none of its files exists yet
+    # (or over them, forced), and it is recorded in the render cache only
+    # when written in place, where it replaced pages of the full view.
     windowed = from_date is not None or to_date is not None
     shown_sessions: Optional[set[str]] = None
     record_window = True
-    if windowed and input_path.is_dir():
-        cached_rows = cache_manager.get_cached_project_data() if cache_manager else None
-        shown_sessions = window_session_ids(
-            messages, dict(cached_rows.sessions) if cached_rows else {}
-        )
-        if window_sessions is not None:
-            shown_sessions &= window_sessions
-        record_window = (
-            Path(effective_output_dir).resolve() == Path(input_path).resolve()
-        )
+    if windowed:
+        assert output_path is not None
+        if input_path.is_dir():
+            cached_rows = (
+                cache_manager.get_cached_project_data() if cache_manager else None
+            )
+            shown_sessions = window_session_ids(
+                messages, dict(cached_rows.sessions) if cached_rows else {}
+            )
+            if window_sessions is not None:
+                shown_sessions &= window_sessions
+            record_window = (
+                Path(effective_output_dir).resolve() == Path(input_path).resolve()
+            )
+        if not force:
+            view_files = [output_path] if write_combined else []
+            if generate_individual_sessions and shown_sessions:
+                view_files += [
+                    effective_output_dir / f"session-{sid}{suffix}.{ext}"
+                    for sid in sorted(shown_sessions)
+                ]
+            existing = _first_existing(view_files)
+            if existing is not None:
+                raise WindowOutputExists(existing)
 
     # Update title to include date range if specified
     if from_date or to_date:
@@ -5104,6 +5127,33 @@ def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str,
     return sorted(
         session_list, key=lambda s: s.get("timestamp_range", ""), reverse=False
     )
+
+
+class WindowOutputExists(Exception):
+    """A date-filtered run found one of its files already at its destination.
+
+    A window view goes into a destination that holds none of the files it
+    writes, or over them when forced: written over a full view, it would
+    leave that view's other pages beside its own, linked from nowhere, and
+    mixed with it. Raised before anything is written; ``path`` is the
+    first such file.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        super().__init__(
+            f"{path} already exists. A date-filtered run writes only into a "
+            "destination that holds none of the files it writes: pass --force "
+            "to overwrite them (nothing is removed), or choose another --output."
+        )
+
+
+def _first_existing(paths: "Iterator[Path] | list[Path]") -> Optional[Path]:
+    """The first of ``paths`` that exists, if any."""
+    for path in paths:
+        if path.exists():
+            return path
+    return None
 
 
 def window_session_ids(
@@ -6533,6 +6583,37 @@ def _window_project_summary(
     }
 
 
+def _window_view_files(
+    plans: List[_ProjectPlan],
+    *,
+    index_root: Path,
+    output_format: str,
+    combined_name: str,
+    session_suffix: str,
+    write_combined: bool,
+    generate_individual_sessions: bool,
+) -> Iterator[Path]:
+    """Every page a date-filtered pass over ``plans`` writes, index first.
+
+    The rendered pages only: the vendored ``assets/`` and referenced
+    images are the same bytes in any view, so writing over them loses
+    nothing. A session page is ``session-<id><session_suffix>``.
+    """
+    from .recent import RECENT_DATA, RECENT_PAGE
+
+    yield index_root / get_index_filename(output_format)
+    if output_format == "html":
+        yield index_root / "search.html"
+        yield index_root / RECENT_PAGE
+        yield index_root / RECENT_DATA
+    for plan in plans:
+        if write_combined:
+            yield plan.dest_dir / combined_name
+        if generate_individual_sessions and plan.window is not None:
+            for sid in sorted(plan.window.session_ids):
+                yield plan.dest_dir / f"session-{sid}{session_suffix}"
+
+
 def _plan_project(
     project_dir: Path,
     *,
@@ -6779,6 +6860,7 @@ def process_projects_hierarchy(
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
     failed_projects: Optional[List[str]] = None,
+    force: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6851,6 +6933,7 @@ def process_projects_hierarchy(
                 jobs=jobs,
                 entry_store=entry_store,
                 failed_projects=failed_projects,
+                force=force,
             )
         if use_cache:
             # The pass's workers have all exited: the files they rewrote
@@ -6925,6 +7008,7 @@ def _process_projects_hierarchy(
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
     failed_projects: Optional[List[str]] = None,
+    force: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6958,6 +7042,10 @@ def _process_projects_hierarchy(
             staleness plan (``_plan_project``) as well as the conversion.
         failed_projects: When given, the names of the projects that failed
             are appended to it (see ``process_projects_hierarchy``).
+        force: With a date window, write over the view's files that
+            already exist at the destination; without it the pass raises
+            ``WindowOutputExists`` before writing anything when one does.
+            Nothing is removed either way.
 
     With a date window the pass writes a view of it: the master index
     lists the projects with a session in the window (``window_session_ids``),
@@ -7140,7 +7228,8 @@ def _process_projects_hierarchy(
     # written. The session rows describe the files only once refreshed, so
     # each project's cache is refreshed here, in the parent and one project
     # at a time (unfiltered, as the conversion would; the conversion then
-    # finds it fresh).
+    # finds it fresh). The view's files are then checked at the
+    # destination, all of them, before the first is written.
     if window is not None:
         for plan in plans:
             try:
@@ -7155,6 +7244,20 @@ def _process_projects_hierarchy(
                 continue
             plan.needs_work = plan.window.shown
             plan.outside_window = not plan.window.shown
+        if not force:
+            existing = _first_existing(
+                _window_view_files(
+                    [p for p in plans if p.error is None and not p.outside_window],
+                    index_root=index_root,
+                    output_format=output_format,
+                    combined_name=combined_name,
+                    session_suffix=f"{variant}.{combined_ext}",
+                    write_combined=write_combined,
+                    generate_individual_sessions=generate_individual_sessions,
+                )
+            )
+            if existing is not None:
+                raise WindowOutputExists(existing)
 
     to_convert = [p for p in plans if p.needs_work and p.error is None]
     projects_with_updates = sum(1 for p in to_convert if p.stats.files_updated > 0)
@@ -7279,7 +7382,8 @@ def _process_projects_hierarchy(
             # budget for the render fan-out, computed by the parent so the
             # two levels together never exceed `--jobs`.
             "render_jobs": render_jobs,
-            # Phase 1w linked these sessions from the index.
+            # Phase 1w checked the view's files and linked these sessions.
+            "force": True,
             "window_sessions": plan.window.session_ids if plan.window else None,
         }
 

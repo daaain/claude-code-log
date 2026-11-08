@@ -23,6 +23,7 @@ from .watch import (
 )
 from .converter import (
     RegenerationReport,
+    WindowOutputExists,
     convert_jsonl_to,
     convert_jsonl_to_html,
     ensure_fresh_cache,
@@ -1016,6 +1017,16 @@ def main() -> None:
     help='Filter messages up to this date/time (e.g., "1 hour ago", "today", "2025-06-08 15:00")',
 )
 @click.option(
+    "--force",
+    is_flag=True,
+    help=(
+        "With --from-date/--to-date: write the date window's view over the "
+        "files of it that already exist at the destination. Without it, such "
+        "a run refuses to start when any does. Nothing is removed: pages of "
+        "an earlier view that this one does not rewrite stay, unlinked."
+    ),
+)
+@click.option(
     "--all-projects",
     is_flag=True,
     help="Process all projects in ~/.claude/projects/ hierarchy and create linked HTML files",
@@ -1214,6 +1225,7 @@ def convert(
     open_browser: bool,
     from_date: Optional[str],
     to_date: Optional[str],
+    force: bool,
     all_projects: bool,
     no_individual_sessions: bool,
     no_cache: bool,
@@ -1260,6 +1272,11 @@ def convert(
     # usage error here, before any work starts.
     resolved_theme = _resolve_theme(theme)
 
+    # `--force` lets a date window's view overwrite the files of it already
+    # at its destination; there is nothing else for it to force yet.
+    if force and from_date is None and to_date is None:
+        raise click.UsageError("--force is only accepted with --from-date/--to-date.")
+
     # Provider mode has three sub-modes:
     #   * export     — `--session-id <id>`: render one session by id
     #   * single-file — INPUT_PATH is a rollout FILE: render that one session
@@ -1299,6 +1316,10 @@ def convert(
         conflicts: list[str] = []
         if tui:
             conflicts.append("--tui")
+        if force:
+            # The provider pipeline writes its date window over a full view
+            # as before, so there is nothing for --force to allow.
+            conflicts.append("--force")
         if provider_wholesale:
             # Wholesale honors --expand-paths/--filter-path (Obsidian projection),
             # --combined, date range, -o/-f, --open-browser, and the cache flags
@@ -1940,6 +1961,7 @@ def convert(
                 theme=resolved_theme,
                 jobs=jobs,
                 failed_projects=failed_projects,
+                force=force,
             )
 
             # Count processed projects
@@ -1979,6 +2001,11 @@ def convert(
             from .providers import discover_providers
 
             detected = discover_providers().detect_provider_for_path(input_path)
+            if detected is not None and force:
+                raise click.UsageError(
+                    f"--force does not apply to {input_path}, a {detected} "
+                    "input: its date-filtered view is written as before."
+                )
             if detected is not None:
                 if input_path.is_dir():
                     _run_provider_wholesale(
@@ -2122,6 +2149,7 @@ def convert(
             render_jobs=(
                 min(jobs, resolve_render_jobs(None)) if jobs is not None else None
             ),
+            force=force,
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so
@@ -2160,7 +2188,7 @@ def convert(
         if open_browser:
             click.launch(str(output_path))
 
-    except FileNotFoundError as e:
+    except (FileNotFoundError, WindowOutputExists) as e:
         click.echo(f"Error: {e}", err=True)
         if debug:
             import traceback

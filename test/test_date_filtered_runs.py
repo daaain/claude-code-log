@@ -123,9 +123,18 @@ def _run(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
 ) -> None:
-    """A pass over the whole hierarchy, as ``--all-projects`` runs it."""
+    """A pass over the whole hierarchy, as ``--all-projects`` runs it.
+
+    A filtered pass writes its view in place, over the full one, which
+    takes ``--force``.
+    """
     process_projects_hierarchy(
-        projects_dir, from_date, to_date, jobs=1, **SHAPES[shape]
+        projects_dir,
+        from_date,
+        to_date,
+        jobs=1,
+        force=from_date is not None or to_date is not None,
+        **SHAPES[shape],
     )
 
 
@@ -139,7 +148,7 @@ def _convert(
 
     Unlike the hierarchy pass, which leaves a project with no changed file
     alone, this renders on every run, so a filtered run reaches files
-    that were complete.
+    that were complete. In place, as here, a filtered run is forced.
     """
     options = dict(SHAPES[shape])
     convert_jsonl_to(
@@ -148,6 +157,7 @@ def _convert(
         from_date=from_date,
         to_date=to_date,
         silent=True,
+        force=from_date is not None or to_date is not None,
         **options,
     )
 
@@ -259,6 +269,7 @@ def test_a_json_session_rendered_by_the_pool_from_a_window_is_rewritten(
             to_date=to_date,
             silent=True,
             render_jobs=2,
+            force=from_date is not None,
         )
 
     run()

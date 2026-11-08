@@ -936,6 +936,7 @@ def test_a_windowed_pass_heals_a_project_016_zeroed(
             jobs=1,
             from_date=from_date,
             to_date=to_date,
+            force=from_date is not None,
         )
 
     run()

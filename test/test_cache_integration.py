@@ -262,7 +262,15 @@ class TestCacheIntegrationCLI:
         # Run with date filtering (should use cached data where possible)
         result2 = runner.invoke(
             main,
-            [str(project_dir), "--from-date", "2023-01-01", "--to-date", "2023-01-01"],
+            [
+                str(project_dir),
+                "--from-date",
+                "2023-01-01",
+                "--to-date",
+                "2023-01-01",
+                # In place, over the first run's view.
+                "--force",
+            ],
         )
         assert result2.exit_code == 0
 
@@ -436,6 +444,7 @@ class TestCachePerformanceIntegration:
             from_date="2023-01-01",
             to_date="2023-01-01",
             use_cache=True,
+            force=True,
         )
         assert output.exists()
 
