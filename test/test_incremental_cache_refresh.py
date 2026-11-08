@@ -198,6 +198,10 @@ def _run_scenario(
     assert _html_files(inc_dir) == _html_files(full_dir)
 
 
+# Each test compares an incremental refresh with a full one in two copies of
+# the project, and `_db_state` reads every row of the copy's cache. With one
+# shared cache both sides would read both copies' rows and compare equal.
+@pytest.mark.default_cache_path
 class TestIncrementalEquivalence:
     def test_new_session_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -557,6 +561,10 @@ class TestIncrementalEquivalence:
         assert any("#agent-e1c84ba5" in sid for sid in sidecar.parents)
 
 
+# Each test compares an incremental refresh with a full one in two copies of
+# the project, and `_db_state` reads every row of the copy's cache. With one
+# shared cache both sides would read both copies' rows and compare equal.
+@pytest.mark.default_cache_path
 class TestIncrementalDeclines:
     @pytest.mark.parametrize("rewrite", ["timestamp", "uuidless", "duplicate"])
     def test_non_append_rewrite_with_same_uuid_set_declines(

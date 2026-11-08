@@ -140,22 +140,30 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
 # Subprocesses and render workers inherit the variable. A test that sets the
 # variable itself overrides this one; a test about the default location takes
 # `@pytest.mark.default_cache_path`, which unsets it instead.
+#
+# It holds a MonkeyPatch of its own rather than requesting `monkeypatch`: an
+# autouse fixture that requests it sets it up before the xunit
+# `setup_method` fixture, so the test's patches would be undone only after
+# `teardown_method` ran, and a `teardown_method` that relies on them being
+# gone fails (test_commit_linkifier.py's, for one).
 
 
 @pytest.fixture(autouse=True)
 def _isolated_cache_path(
     request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,
-) -> None:
+) -> Generator[None, None, None]:
     """Point CLAUDE_CODE_LOG_CACHE_PATH at a cache database for this test only."""
-    if request.node.get_closest_marker("default_cache_path"):
-        monkeypatch.delenv("CLAUDE_CODE_LOG_CACHE_PATH", raising=False)
-        return
-    cache_dir = tmp_path_factory.mktemp("cache")
-    monkeypatch.setenv(
-        "CLAUDE_CODE_LOG_CACHE_PATH", str(cache_dir / "claude-code-log-cache.db")
-    )
+    with pytest.MonkeyPatch.context() as mp:
+        if request.node.get_closest_marker("default_cache_path"):
+            mp.delenv("CLAUDE_CODE_LOG_CACHE_PATH", raising=False)
+        else:
+            cache_dir = tmp_path_factory.mktemp("cache")
+            mp.setenv(
+                "CLAUDE_CODE_LOG_CACHE_PATH",
+                str(cache_dir / "claude-code-log-cache.db"),
+            )
+        yield
 
 
 # ========== Cache Test Fixtures ==========
