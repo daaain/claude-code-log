@@ -7,10 +7,13 @@ from pathlib import Path
 import pytest
 
 from claude_code_log.migrations.runner import (
+    MIN_SQLITE_VERSION,
+    SQLiteTooOldError,
     _compute_checksum,
     _ensure_schema_version_table,
     _parse_migration_number,
     apply_migration,
+    check_sqlite_version,
     get_applied_migrations,
     get_available_migrations,
     get_current_version,
@@ -491,3 +494,71 @@ class TestRunMigrationsConnectionLifecycle:
             # recorded close() call: a closed handle refuses to operate.
             with pytest.raises(sqlite3.ProgrammingError):
                 conn.execute("SELECT 1")
+
+
+class TestSQLiteVersionRequirement:
+    """The cache refuses an SQLite too old for its schema, by name.
+
+    Migration 016 uses `ALTER TABLE ... DROP COLUMN` (SQLite 3.35). Run on an
+    older SQLite it failed with a bare syntax error, never recorded itself,
+    and failed the same way on every later run. The version is faked here:
+    only `sqlite3.sqlite_version_info` is read by the check.
+    """
+
+    OLD = (3, 31, 1)
+
+    def test_names_the_required_and_the_found_version(self):
+        with pytest.raises(SQLiteTooOldError) as excinfo:
+            check_sqlite_version(self.OLD)
+        message = str(excinfo.value)
+        assert "SQLite 3.35.0 or later" in message
+        assert "SQLite 3.31.1" in message
+
+    def test_the_minimum_itself_and_newer_pass(self):
+        check_sqlite_version(MIN_SQLITE_VERSION)
+        check_sqlite_version((3, 46, 1))
+        check_sqlite_version((4, 0, 0))
+
+    def test_this_interpreters_sqlite_passes(self):
+        """Without it every other cache test here would be refusing."""
+        check_sqlite_version()
+
+    def test_is_not_a_database_error(self):
+        """`CacheManager` deletes a cache on corruption-shaped DatabaseErrors;
+        an old SQLite says nothing about the file."""
+        assert not issubclass(SQLiteTooOldError, sqlite3.DatabaseError)
+
+    def test_run_migrations_refuses_before_touching_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        db_path = tmp_path / "cache.db"
+        monkeypatch.setattr(sqlite3, "sqlite_version_info", self.OLD)
+        with pytest.raises(SQLiteTooOldError, match=r"3\.35\.0.*3\.31\.1"):
+            run_migrations(db_path)
+        assert not db_path.exists()
+
+    def test_cache_manager_refuses_and_keeps_an_existing_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from claude_code_log.cache import CacheManager
+
+        db_path = tmp_path / "cache.db"
+        # Directly, not through a CacheManager: its per-process memo would
+        # skip the runner, and with it the check, for this path.
+        run_migrations(db_path)
+        before = db_path.read_bytes()
+
+        monkeypatch.setattr(sqlite3, "sqlite_version_info", self.OLD)
+        with pytest.raises(SQLiteTooOldError):
+            CacheManager(tmp_path / "project", "1.0.0", db_path=db_path)
+        assert db_path.read_bytes() == before
+
+    def test_minimum_covers_every_drop_column_migration(self):
+        """A migration using DROP COLUMN needs 3.35; the constant must say so."""
+        users = [
+            path.name
+            for _, path in get_available_migrations()
+            if "DROP COLUMN" in path.read_text(encoding="utf-8").upper()
+        ]
+        assert users, "no migration uses DROP COLUMN; is 016 still there?"
+        assert MIN_SQLITE_VERSION >= (3, 35, 0), users

@@ -9,7 +9,8 @@ and SQLite's lock polling is unfair to outsiders (a writer that just
 committed tends to re-acquire before a sleeper wakes), so the second pass
 can lose projects to ``database is locked`` however patient its own
 workers are. It is also the realistic way two refreshes of one project
-overlap and clear each other's ``refresh_pending``.
+overlap (each commits whole, so the later one wins and the next pass
+repairs what it lost; the lock spares the second pass the work).
 
 So a pass takes the **pass lock** first: an exclusive transaction on a
 sidecar SQLite file next to the cache (``<cache>.pass-lock``), held until

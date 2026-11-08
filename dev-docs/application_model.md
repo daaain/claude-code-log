@@ -228,8 +228,9 @@ The queue is per pass, so two *passes* over one cache — a second CLI
 run, or a `serve --watch` tick while a CLI run refreshes the same
 archive — are, to each other, one tight-loop writer each, and the
 unfair polling above applies between them (it is also the realistic
-way two refreshes of one project overlap and clear each other's
-`refresh_pending`). So `process_projects_hierarchy` first takes the
+way two refreshes of one project overlap; each commits whole, § 2.3, so
+the later one wins and the next pass repairs what it lost). So
+`process_projects_hierarchy` first takes the
 **pass lock** ([`pass_lock.py`](../claude_code_log/pass_lock.py)): an
 exclusive transaction on a sidecar SQLite file beside the cache
 (`<cache>.pass-lock`), held around the WAL trim, the conversions, the
@@ -352,36 +353,51 @@ pre-filter (`load_cached_entries_filtered`) and the renderer's cut
 while `now`, `2 hours ago` or any explicit time, midnight included, is an
 instant.
 
-**A refresh that stops part-way is redone, not trusted.** A refresh
-commits each file's entry rows in a transaction of its own, then writes
-the session rows and project aggregates derived from them. Staleness
-reads both halves: a file is modified when its `cached_files` row is
-older than the file, and a rendered session is stale when its `sessions`
-row disagrees with the `html_cache` row of its last render. So a refresh
-that stopped in between (a write lost to `database is locked`, issue
-#332, or a kill) left the files current and the session rows as old as
-the renders, and every later run reported the project as cached while
-its renders lacked the new messages. Since migration 015, every entry
-write sets `projects.refresh_pending` in its own transaction and
-`update_project_aggregates`, the last write of a complete refresh,
-clears it. Every refresh is a complete one, date-filtered runs included
-(above). A refresh, on either path, writes the session
-rows and the cross-session sidecar (§ 2.12) before it, and does not
-pass over a sidecar write it loses: the rolled-back write leaves the old
-sidecar in place, which the closing write would otherwise vouch for.
-Contention fails the refresh, to be redone; any other failure, which
-could recur on every run, drops the sidecar instead
-(`abandon_session_sidecar`), so readers fall back to the full load
-until one writes it afresh. While the flag is set,
-`get_modified_files()` reports every file, which every freshness gate reads (the hierarchy plan, the session-scoped
-and streaming paths, the TUI), and `ensure_fresh_cache` takes the full
-refresh rather than the incremental one (§ 2.14), whose closure could not
-cover rows a previous run left behind. That full refresh loads entries
-through the per-file check (`is_file_cached`), which the flag does not
-touch, so it re-parses only what really changed. The flag is
-project-wide and boolean: two processes refreshing the same project at
-once can still clear each other's, as they could already overwrite each
-other's session rows.
+**A refresh commits whole or not at all.** A refresh writes each
+transcript file's entry rows, then the session rows, project aggregates
+and cross-session sidecar (§ 2.12) derived from them. Staleness reads
+both halves: a file is modified when its `cached_files` row is older
+than the file, and a rendered session is stale when its `sessions` row
+disagrees with the `html_cache` row of its last render. When each of
+those writes was a transaction of its own, a refresh that stopped in
+between (a write lost to `database is locked`, issue #332, or a kill)
+left the files current and the session rows as old as the renders, and
+every later run reported the project as cached while its renders lacked
+the new messages; migration 015's `refresh_pending` flag carried such a
+failure to the next run, with a limit (two processes refreshing one
+project could clear each other's) and special rules of its own. Now
+`ensure_fresh_cache_detailed` runs either path inside
+`CacheManager.atomic_refresh()`: while the refresh parses, each file's
+rows go to a private **spool** file beside the cache
+(`<cache>.spool-<pid>-<n>`,
+[`refresh_spool.py`](../claude_code_log/refresh_spool.py); journal in
+memory, nothing synced, this process's own), with no shared lock held
+and the CPU work of serialising where it was; the derived writes are
+deferred; and one write transaction at the scope's end attaches the
+spool, copies each file's rows in with `INSERT … SELECT` (no Python per
+row under the lock, and less time than the direct `executemany` took),
+runs the deferred writes, and commits. A refresh that stops anywhere
+leaves the cache as it was and the spool is removed; the next run, or
+the pass's in-pass retry, redoes it, re-parsing the modified files. Only
+a process killed mid-parse leaves a spool behind, and a pass removes the
+spools of dead processes before it starts, under its lock. A
+reader on another connection sees either the whole refresh or none of
+it, and two refreshes of one project overlapping commit two
+self-consistent snapshots: the later wins, and if it parsed older files
+its `cached_files` rows say so and the next run repairs it. Inside the
+scope, two TEMP views named `cached_files` and `messages` shadow the
+tables for every read on the scope's connection (the table minus the
+rows the spooled files replace, `UNION ALL` the spool's rows), because
+the incremental refresh (§ 2.14) reads back the rows it has just
+written; a write through them fails, which is the point. A sidecar write
+that fails at the merge for a reason other than contention rolls back
+to a savepoint and drops the `sidecar_state` marker (as
+`abandon_session_sidecar` does for a direct write), so readers fall back
+to the full load until a refresh writes it afresh; contention fails the
+refresh, to be redone. Migration 016 dropped the flag and kept 015's
+one-time heal: a project it still marked gets its message total zeroed,
+which the next run reads as a cache to refresh in full, from the cached
+entries.
 
 **A run renders what its refresh committed.** Only the refresh writes
 entry rows; the render reads them and writes none. A session file can
@@ -662,14 +678,27 @@ Current migrations:
     session-bearing row and *prefer* that to seeking the uuids a query
     asked for, so three queries had to move that predicate out of SQL
     and into Python to keep it from making them slower.
-- `015_project_refresh_pending.sql` — adds `refresh_pending` to
+- `015_project_refresh_pending.sql` — added `refresh_pending` to
   projects: an entry write whose derived session rows and aggregates
-  have not been written yet (§ 2.3). Existing rows start set, because a
+  had not been written yet. Existing rows start set, because a
   cache written before it may already hold that damage and nothing else
   can tell: one full refresh per project, from the cached entries, on
-  the first run after upgrading. For a Codex project that run also
+  the first run after upgrading. Retired by 016 (below), which keeps
+  that heal. For a Codex project that run also
   re-renders every session page, because `render_provider_wholesale`
   picks the pages to re-render from `get_modified_files`.
+- `016_drop_refresh_pending.sql` — drops `refresh_pending`: a refresh
+  commits whole or not at all (§ 2.3), so nothing marks an unfinished
+  one. A project 015 still marked gets `total_message_count` zeroed
+  first, which the next run reads as a cache to refresh in full, from
+  the cached entries: 015's heal at 015's price. `DROP COLUMN` needs
+  SQLite 3.35 (2021), which makes 3.35 the cache's minimum
+  (`MIN_SQLITE_VERSION`): `run_migrations` checks it before opening
+  the file, since on an older SQLite the `DROP` failed as a bare syntax
+  error after the `UPDATE` had committed, unrecorded, so again on
+  every run. The CLI checks it once up front (`convert` unless
+  `--no-cache` or a single file, `serve` unless `--no-convert`,
+  `watch`) and exits 1 with one line naming both versions.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
