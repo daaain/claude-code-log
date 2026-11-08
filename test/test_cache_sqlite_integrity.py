@@ -699,6 +699,10 @@ class TestConnectionCensus:
             1,
             "mode=ro reader: one SELECT across projects, then close",
         ),
+        ("recent.py", "_window_session_rows"): (
+            1,
+            "mode=ro reader: one SELECT of a date window's sessions, then close",
+        ),
         ("pass_lock.py", "_acquire"): (
             1,
             "the sidecar `<cache>.pass-lock` file, not the cache database: "

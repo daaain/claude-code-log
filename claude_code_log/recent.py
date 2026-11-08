@@ -760,6 +760,7 @@ def _window_session_rows(db_path: Path, window: RecentWindow) -> list[sqlite3.Ro
 
     Newest by the window's own last message, at most :data:`MAX_SESSIONS`
     as on any run, and however old: the window, not the clock, decides.
+    A ``mode=ro`` reader, like :func:`_session_rows`.
     """
 
     def last(key: tuple[str, str]) -> str:
