@@ -4134,7 +4134,13 @@ def convert_jsonl_to(
                 ]
             existing = _first_existing(view_files)
             if existing is not None:
-                raise WindowOutputExists(existing)
+                raise WindowOutputExists(
+                    existing,
+                    project_pages=input_path.is_dir()
+                    and generate_individual_sessions
+                    and record_window
+                    and bool(shown_sessions),
+                )
 
     # Update title to include date range if specified
     if from_date or to_date:
@@ -5140,12 +5146,19 @@ class WindowOutputExists(Exception):
     first such file.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, project_pages: bool = False) -> None:
         self.path = path
+        # For one project, --output names the combined page only: its
+        # session pages go into the project whatever it names.
+        way_out = (
+            "write the combined page alone elsewhere, with --combined only and --output"
+            if project_pages
+            else "choose another --output"
+        )
         super().__init__(
             f"{path} already exists. A date-filtered run writes only into a "
             "destination that holds none of the files it writes: pass --force "
-            "to overwrite them (nothing is removed), or choose another --output."
+            f"to overwrite them (nothing is removed), or {way_out}."
         )
 
 

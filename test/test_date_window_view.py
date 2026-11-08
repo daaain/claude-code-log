@@ -503,6 +503,32 @@ def test_the_refusal_names_the_file_and_both_ways_out(projects: Path) -> None:
     assert "--force" in result.output and "--output" in result.output
 
 
+def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
+    projects: Path,
+) -> None:
+    """For a project, ``--output`` names the combined page only: its
+    session pages are written into the project whatever it names, so a
+    refusal there offers the combined page alone instead."""
+    _full(projects)
+    result = CliRunner().invoke(
+        main,
+        [
+            str(projects / "-mixed"),
+            "-o",
+            str(projects.parent / "page.html"),
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert str(projects / "-mixed" / "session-s-day2.html") in result.output
+    assert "--force" in result.output
+    assert "--combined only" in result.output
+    assert "another --output" not in result.output
+
+
 def test_force_is_accepted_with_a_window_only(projects: Path) -> None:
     result = CliRunner().invoke(
         main, ["--all-projects", "--projects-dir", str(projects), "--force"]
