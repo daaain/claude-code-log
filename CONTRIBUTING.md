@@ -660,13 +660,20 @@ The tool implements a SQLite-based caching system for performance:
   its total at 0 until it finishes. Only the refresh writes entry rows: a run
   renders what its refresh committed, so lines written to a session while it
   renders appear on the next run. A date-filtered run refreshes the
-  cache as an unfiltered one would and leaves the files it wrote from its
-  window marked stale, so the next unfiltered run re-renders them. Its
-  refresh therefore loads whole files when they changed and the incremental
-  refresh declines, not just the window's entries, and nothing when no file
-  changed. A date-filtered `--all-projects` pass converts the projects with a
-  session in the window (or a changed file, or no combined page at the
-  destination) and reports the others as having no messages in it. A pass that loses a project ends with a count of the
+  cache as an unfiltered one would (whole files when they changed and the
+  incremental refresh declines, nothing when no file changed); an
+  `--all-projects` pass refreshes every project before converting any,
+  serially in the parent, to read which sessions the window shows. It
+  writes a view of the window (`window_session_ids` decides its session
+  pages, the index's links and the check below alike), into a destination
+  that holds none of its pages or, with `--force`, over them, removing
+  nothing; the vendored `assets/` and referenced images are not checked.
+  Written in place, it leaves the `html_cache`/`html_pages` rows of the
+  files it replaced marked stale, so the next unfiltered run re-renders
+  them; written anywhere else it touches no such row, since they are keyed
+  by project and file name and describe the full view. The master
+  `index.html`, `search.html` and the recent page have no row: every run
+  rewrites them. A pass that loses a project ends with a count of the
   failed projects, and the CLI exits 1
 - **Performance**: 10-100x faster loading for large projects
 

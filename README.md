@@ -121,9 +121,9 @@ claude-code-log --all-projects
 # Process all projects and open in browser
 claude-code-log --open-browser
 
-# Process all projects with date filtering
-claude-code-log --from-date "yesterday" --to-date "today"
-claude-code-log --from-date "last week"
+# A view of a date window, in a directory of its own
+claude-code-log --from-date "yesterday" --to-date "today" -o ~/yesterday
+claude-code-log --from-date "last week" -o ~/last-week
 
 # Skip individual session files (only create combined transcripts)
 claude-code-log --no-individual-sessions
@@ -152,9 +152,16 @@ claude-code-log /path/to/directory -o combined_transcripts.html
 claude-code-log /path/to/directory --open-browser
 
 # Filter by date range (supports natural language)
-claude-code-log /path/to/directory --from-date "yesterday" --to-date "today"
-claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday"
+claude-code-log /path/to/directory --from-date "yesterday" --to-date "today" -o ~/yesterday
+claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday" -o ~/recent
 ```
+
+A date-filtered run writes a view of its window: only the projects and
+sessions with messages in it, with the window's totals. It goes into a
+destination that holds none of the pages it writes, so over the pages of
+an earlier run it refuses to start: give it another `-o`, or `--force` to
+write over them (nothing is removed). See [Viewing a date
+window](https://daaain.github.io/claude-code-log/date-window/).
 
 ### Feeding Past Conversations to an LLM
 

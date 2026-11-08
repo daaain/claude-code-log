@@ -40,7 +40,8 @@ uvx claude-code-log@latest --tui
 - **Interactive timeline** — zoomable, click-to-scroll conversation navigation
 - **Themes** — `--theme minimal` for a compact light/dark page with sub-agents
   and forks as foldable branches ([themes guide](themes.md))
-- **Date range filtering** — natural language (`"today"`, `"last week"`)
+- **Date range filtering** — natural language (`"today"`, `"last week"`); a
+  filtered run writes a view of just that window ([date window guide](date-window.md))
 - **Depth levels & compact mode** — `--depth` and `--compact` for LLM-friendly Markdown
 - **Server-side Markdown** — syntax-highlighted rendering via wenmode
 - **Obsidian / vault output** — `--expand-paths` mirrors each project under its real
