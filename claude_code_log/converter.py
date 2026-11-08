@@ -7244,6 +7244,10 @@ def _process_projects_hierarchy(
                 continue
             plan.needs_work = plan.window.shown
             plan.outside_window = not plan.window.shown
+            # The session pages it writes: the window's, not the stale ones.
+            plan.stats.sessions_regenerated = (
+                len(plan.window.session_ids) if generate_individual_sessions else 0
+            )
         if not force:
             existing = _first_existing(
                 _window_view_files(

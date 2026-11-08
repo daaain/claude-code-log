@@ -266,6 +266,16 @@ def test_an_archived_project_is_not_part_of_a_view(
     assert "-idle" not in (view / "index.html").read_text(encoding="utf-8")
 
 
+def test_the_progress_line_counts_the_window_s_session_pages(
+    projects: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _full(projects)
+    capsys.readouterr()
+    _window(projects, tmp_path / "view")
+    out = capsys.readouterr().out
+    assert f"-mixed: {len(INSIDE)} sessions" in out, out
+
+
 # ---- Where the view goes ---------------------------------------------------
 
 
