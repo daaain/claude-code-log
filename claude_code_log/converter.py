@@ -4913,10 +4913,15 @@ def ensure_fresh_cache_detailed(
         # next run completes it. Its files commit one by one as they
         # are parsed, which keeps the lock hold of a large project's
         # first build to its largest file, and its disk to the cache.
+        #
+        # Either scope reads the project's file records as it opens,
+        # after the gate above and before any read the derived rows
+        # come from, and writes them only if no other refresh has moved
+        # a file since (`CacheManager._moved_files`).
         scope = (
             cache_manager.atomic_refresh()
             if cache_manager.has_cached_files()
-            else contextlib.nullcontext()
+            else cache_manager.cold_build()
         )
         with scope:
             # Streaming stage 4: when the update is driven purely by

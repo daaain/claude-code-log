@@ -471,6 +471,7 @@ def test_a_refresh_overtaken_on_a_file_it_read_from_the_cache_heals(
         converter.ensure_fresh_cache(project, _manager(project), silent=True)
     assert fired, "refresh A never ran inside B: the test is vacuous"
     assert errors == []
+    assert _total(db_path) == 0  # B left the project marked unfinished
 
     _assert_heals_to_the_cold_control(project, tmp_path, db_path)
 
@@ -497,5 +498,44 @@ def test_a_cold_build_overtaken_on_a_file_it_wrote_heals(
         converter.ensure_fresh_cache(project, _manager(project), silent=True)
     assert fired, "refresh A never ran inside the build: the test is vacuous"
     assert errors == []
+    assert _total(db_path) == 0  # the build left the project unfinished
+
+    _assert_heals_to_the_cold_control(project, tmp_path, db_path)
+
+
+@pytest.mark.parametrize("refresh", ["full", "incremental"])
+@pytest.mark.parametrize("mode", ["one", "per-file"])
+def test_a_refresh_overtaken_before_it_read_marks_and_heals(
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    refresh: str,
+) -> None:
+    """The check's false positive, pinned: refresh A commits after B's
+    scope read the records and before B read anything. B's reads see
+    A's rows, so its derived rows would be right; the check cannot tell,
+    and marks the project. That costs the next run a full refresh, and
+    nothing else."""
+    if refresh == "full":
+        monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+    monkeypatch.setenv(
+        "CLAUDE_CODE_LOG_ATOMIC_MERGE_MB", "0" if mode == "per-file" else "1000"
+    )
+    db_path = project.parent / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    _pass(project.parent)
+    _append(project / "sess-alpha.jsonl", _turn("sess-alpha", 1, "late alpha"))
+
+    fired: List[int] = []
+    errors: List[BaseException] = []
+    hook = _overtaken_by(project, db_path, fired, errors)
+    real = CacheManager._create_overlay  # pyright: ignore[reportPrivateUsage]
+    with connection_lease(db_path), monkeypatch.context() as m:
+        m.setattr(CacheManager, "_create_overlay", hook(real))
+        converter.ensure_fresh_cache(project, _manager(project), silent=True)
+    assert fired, "refresh A never ran inside B: the test is vacuous"
+    assert errors == []
+    assert _total(db_path) == 0
 
     _assert_heals_to_the_cold_control(project, tmp_path, db_path)

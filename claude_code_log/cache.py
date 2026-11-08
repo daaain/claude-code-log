@@ -1221,6 +1221,11 @@ def _forget_leftover_spool(conn: sqlite3.Connection) -> None:
             pass
 
 
+# A file's record identity (`CacheManager._file_record_identity`), by
+# file name, for the files of one project.
+_FileRecords = Dict[str, Tuple[Any, ...]]
+
+
 class _PendingRefresh:
     """What an `atomic_refresh` scope accumulates until its merge.
 
@@ -1232,14 +1237,30 @@ class _PendingRefresh:
     rows are no longer what the tail expected to follow, it rewrites
     the file whole from those entries, as the direct path's refused
     append falls back to a full save.
+
+    ``records`` is the project's file records as the scope opened
+    (`CacheManager._project_file_records`): the merge writes the derived
+    rows only if every file it did not write itself still carries its
+    own (`CacheManager._moved_files`).
     """
 
-    def __init__(self, spool: RefreshSpool) -> None:
+    def __init__(self, spool: RefreshSpool, records: _FileRecords) -> None:
         self.spool = spool
+        self.records = records
         self.deferred: List[Callable[[sqlite3.Connection], None]] = []
         self.appends: Dict[
             str, Tuple[Path, List[TranscriptEntry], Optional[str], os.stat_result]
         ] = {}
+
+
+class _ColdBuild:
+    """What a `CacheManager.cold_build` scope remembers until its
+    aggregates: the project's file records as it opened, and the
+    record of each file it has written since."""
+
+    def __init__(self, records: _FileRecords) -> None:
+        self.records = records
+        self.written: Dict[str, Optional[Tuple[Any, ...]]] = {}
 
 
 class CacheManager:
@@ -1289,6 +1310,7 @@ class CacheManager:
         # Inside an `atomic_refresh` scope: the spool and the deferred
         # derived writes; None means every write lands at once.
         self._refresh: Optional[_PendingRefresh] = None
+        self._cold: Optional[_ColdBuild] = None
 
         self._project_id: Optional[int] = None
         if read_only:
@@ -1417,10 +1439,29 @@ class CacheManager:
         So a refresh that stops at any point (a lock-out, a kill, a
         full disk) never records a file as current over session rows
         that predate its entries, and a reader on another connection
-        sees either the whole refresh or none of it. Two refreshes of
-        one project overlapping commit two self-consistent snapshots:
-        the later wins, and if it parsed older files its
-        ``cached_files`` rows say so.
+        sees either the whole refresh or none of it.
+
+        Another refresh of the project may commit while this one runs
+        (only `process_projects_hierarchy` holds the pass lock). A file
+        this one parsed is written with the record of that parse, so if
+        the other's was newer the file reads modified and the next run
+        reparses it. A file it took from the cache is not written, and
+        its record would read current over derived rows computed from
+        the rows it replaced: so the scope reads every file record of
+        the project as it opens, before the body's first read, and the
+        merge writes the derived rows only if each file it did not
+        write still carries that record (`_moved_files`). If one moved,
+        the merge commits the rows and leaves the project marked
+        unfinished (its total at 0), and the next run refreshes it in
+        full from what the cache then holds.
+
+        The snapshot comes after the caller's ``get_modified_files``,
+        which is only a gate: a commit in between is one the body's
+        reads already see, so the check firing on it costs a full
+        refresh and nothing else. Files the body parses come from disk
+        or from an ``entry_store`` hit, which is stamped with the source
+        file's size and mtime (`entry_store.stamp_file`), so never older
+        than the disk, nor than a record another writer took from it.
 
         Needs a single connection for the scope, so it opens a
         ``batch()`` of its own when the caller has none. Nesting joins
@@ -1445,7 +1486,8 @@ class CacheManager:
                     "transaction; a write on it bypassed write_transaction"
                 )
             self._release_leftover_spool(conn)
-            pending = _PendingRefresh(RefreshSpool(self.db_path))
+            records = self._project_file_records(conn)
+            pending = _PendingRefresh(RefreshSpool(self.db_path), records)
             try:
                 conn.execute("ATTACH DATABASE ? AS spool", (str(pending.spool.path),))
                 try:
@@ -1627,6 +1669,16 @@ class CacheManager:
             if file_ids:
                 self._reindex(conn, file_ids)
                 self._update_last_updated(conn)
+            if not pending.deferred:
+                return
+            # The spooled files' records are written above, in this
+            # transaction: only the others can have moved.
+            own: Dict[str, Optional[Tuple[Any, ...]]] = {
+                f.file_name: None for f in spooled
+            }
+            if self._moved_files(conn, pending.records, own):
+                self._mark_refresh_unfinished(conn)
+                return
             for write in pending.deferred:
                 write(conn)
 
@@ -1646,10 +1698,12 @@ class CacheManager:
         anywhere leaves every file whole and the project marked.
 
         The last transaction first checks that each file still carries
-        the record this merge wrote. Another writer may have rewritten
-        one in between, from a newer parse; derived rows from this
-        merge's parse would then read as current over those rows, so
-        they are not written, and the mark stays for the next run.
+        the record this merge wrote, and every other file the record it
+        had as the scope opened (`_moved_files`). Another writer may
+        have rewritten one in between, from a newer parse; derived rows
+        from this merge's view would then read as current over those
+        rows, so they are not written, and the mark stays for the next
+        run.
 
         With nothing deferred there are no derived rows to fall out of
         step, and no mark either.
@@ -1657,23 +1711,12 @@ class CacheManager:
         if pending.deferred:
             with write_transaction(conn):
                 self._mark_refresh_unfinished(conn)
-        merged: Dict[int, Optional[Tuple[Any, ...]]] = {}
+        merged: Dict[str, Optional[Tuple[Any, ...]]] = {}
         for spooled_file in spooled:
-            file_id, record = self._merge_one_file(conn, spooled_file, pending)
-            merged[file_id] = record
+            _file_id, record = self._merge_one_file(conn, spooled_file, pending)
+            merged[spooled_file.file_name] = record
         with write_transaction(conn):
-            moved = [
-                file_id
-                for file_id, record in merged.items()
-                if self._file_record_identity(conn, file_id) != record
-            ]
-            if moved:
-                logger.info(
-                    "%d file(s) of %s rewritten by another writer during the"
-                    " merge; left for the next run to derive",
-                    len(moved),
-                    self.project_path,
-                )
+            if pending.deferred and self._moved_files(conn, pending.records, merged):
                 return
             if merged:
                 self._update_last_updated(conn)
@@ -1694,6 +1737,82 @@ class CacheManager:
                 (self._project_id,),
             ).fetchall()
         return bool(rows)
+
+    @contextmanager
+    def cold_build(self) -> Generator[None, None, None]:
+        """The scope of a refresh without a spool: a project's first build.
+
+        Its files commit one by one as they are parsed, and the project's
+        total stays 0 until the aggregates, its last write. Another
+        refresh may commit in between (over the files already written,
+        so in an `atomic_refresh` scope of its own), and the session
+        rows this build derives would then describe an older view of a
+        file whose record reads current. So the scope reads the
+        project's file records as it opens, remembers the record it
+        leaves on each file it writes, and the aggregates are written
+        only if every file still carries the one or the other
+        (`_moved_files`); otherwise the total is written 0 again, and
+        the next run refreshes the project in full.
+
+        Nesting, a read-only instance or no project row: no scope.
+        """
+        if (
+            self._cold is not None
+            or self._refresh is not None
+            or self._read_only
+            or self._project_id is None
+        ):
+            yield
+            return
+        with self.batch(), self._get_connection() as conn:
+            self._cold = _ColdBuild(self._project_file_records(conn))
+            try:
+                yield
+            finally:
+                self._cold = None
+
+    def _project_file_records(self, conn: sqlite3.Connection) -> _FileRecords:
+        """Every file record of the project, by name, from the table
+        itself (not a scope's overlay)."""
+        rows = conn.execute(
+            "SELECT file_name, source_mtime, source_size, cached_mtime,"
+            " message_count FROM main.cached_files WHERE project_id = ?",
+            (self._project_id,),
+        ).fetchall()
+        return {row[0]: tuple(row[1:]) for row in rows}
+
+    def _moved_files(
+        self,
+        conn: sqlite3.Connection,
+        records: _FileRecords,
+        own: Dict[str, Optional[Tuple[Any, ...]]],
+    ) -> List[str]:
+        """The files whose record another writer has changed since a
+        refresh read ``records``, under the caller's write lock.
+
+        ``own`` holds the files the refresh wrote itself, with the
+        record it left (None: written in this transaction, so it cannot
+        have moved); every other file must still carry its record in
+        ``records``, and a file on one side only has moved.
+        """
+        current = self._project_file_records(conn)
+        moved = sorted(
+            name
+            for name in set(current) | set(records) | set(own)
+            if (
+                own[name] is not None and current.get(name) != own[name]
+                if name in own
+                else current.get(name) != records.get(name)
+            )
+        )
+        if moved:
+            logger.info(
+                "%d file(s) of %s rewritten by another writer during the"
+                " refresh; left for the next run to derive",
+                len(moved),
+                self.project_path,
+            )
+        return moved
 
     def _mark_refresh_unfinished(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -2258,6 +2377,10 @@ class CacheManager:
             file_id = self._replace_file_rows(
                 conn, jsonl_path, serialized_entries, source_stat, subagents_fp
             )
+            if self._cold is not None:
+                self._cold.written[jsonl_path.name] = self._file_record_identity(
+                    conn, file_id
+                )
 
             # Keep the full-archive search index in step with the rows we
             # just replaced, inside the same transaction. This is a no-op
@@ -2418,7 +2541,7 @@ class CacheManager:
             # refused had it seen them. A refusal writes nothing, so the
             # commit it ends with is empty. Inside a `batch()` scope already
             # in a transaction, that one covers it.
-            return self._append_under_lock(
+            appended_ok = self._append_under_lock(
                 conn,
                 jsonl_path,
                 all_entries,
@@ -2427,6 +2550,11 @@ class CacheManager:
                 source_stat,
                 subagents_fp,
             )
+            if appended_ok and self._cold is not None:
+                self._cold.written[jsonl_path.name] = self._file_record_identity(
+                    conn, self._file_id_under_lock(conn, jsonl_path.name)
+                )
+            return appended_ok
 
     def _append_under_lock(
         self,
@@ -2600,6 +2728,20 @@ class CacheManager:
                 ),
             )
 
+        cold = self._cold
+        if cold is not None and self._refresh is None:
+            # A cold build's last write: if another writer moved a file
+            # since the build read or wrote it, the session rows already
+            # written may describe an older view; leave the project
+            # unfinished for the next run instead (`cold_build`).
+            def guarded(conn: sqlite3.Connection) -> None:
+                if self._moved_files(conn, cold.records, cold.written):
+                    self._mark_refresh_unfinished(conn)
+                else:
+                    write(conn)
+
+            self._write_or_defer(guarded)
+            return
         self._write_or_defer(write)
 
     def save_session_sidecar(self, sidecar: SessionSidecar) -> None:
