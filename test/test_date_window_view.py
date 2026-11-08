@@ -223,6 +223,60 @@ def test_the_pages_written_are_the_pages_linked_and_the_pages_checked(
         assert (dest / page).read_text(encoding="utf-8") == "mine"
 
 
+def test_without_a_cache_the_view_shows_the_same_sessions(
+    projects: Path, tmp_path: Path
+) -> None:
+    """``--no-cache`` has no session rows to read the window's sessions
+    from: they come from the transcripts themselves, by the same rules, so
+    the index lists and links the same sessions, whole-session titles and
+    window counts included, and the same session pages are written."""
+    cached = tmp_path / "cached"
+    _window(projects, cached, fmt="json")
+    view = tmp_path / "view"
+    process_projects_hierarchy(
+        projects,
+        jobs=1,
+        output_format="json",
+        output_dir=view,
+        use_cache=False,
+        **WINDOW,
+    )
+    summary = "all-projects-summary.json"
+
+    def cards(root: Path) -> List[Any]:
+        index = json.loads((root / summary).read_text(encoding="utf-8"))
+        return [(p["name"], p["sessions"]) for p in index["projects"]]
+
+    assert cards(view) == cards(cached)
+    assert _session_ids(set(_pages(view))) == INSIDE
+
+    html = tmp_path / "html"
+    process_projects_hierarchy(
+        projects, jobs=1, output_dir=html, use_cache=False, **WINDOW
+    )
+    written = set(_pages(html))
+    assert _session_ids(written) == INSIDE
+    index = (html / "index.html").read_text(encoding="utf-8")
+    linked = {link for link in _hrefs(index) if "session-" in link}
+    assert linked == {p for p in written if "/session-" in p}
+
+
+def test_one_project_without_a_cache_writes_the_window_s_session_pages(
+    projects: Path, tmp_path: Path
+) -> None:
+    view = tmp_path / "view"
+    convert_jsonl_to(
+        "html",
+        projects / "-mixed",
+        output_root=view,
+        use_cache=False,
+        silent=True,
+        **WINDOW,
+    )
+    assert _session_ids(set(_pages(view))) == INSIDE
+    assert not (tmp_path / "cache.db").exists()
+
+
 def _recent_payload(index_dir: Path) -> Dict[str, Any]:
     text = (index_dir / "recent-data.js").read_text(encoding="utf-8")
     start = text.index("__cclRecent(") + len("__cclRecent(")

@@ -4099,6 +4099,7 @@ def convert_jsonl_to(
         title = f"Claude Transcripts - {project_title}"
 
     # Apply date filtering
+    loaded = messages
     messages = filter_messages_by_date(messages, from_date, to_date)
 
     # Deduplicate messages (removes version stutters while preserving concurrent tool results)
@@ -4110,16 +4111,13 @@ def convert_jsonl_to(
     # when written in place, where it replaced pages of the full view.
     windowed = from_date is not None or to_date is not None
     shown_sessions: Optional[set[str]] = None
+    window_rows: Optional[Dict[str, SessionCacheData]] = None
     record_window = True
     if windowed:
         assert output_path is not None
         if input_path.is_dir():
-            cached_rows = (
-                cache_manager.get_cached_project_data() if cache_manager else None
-            )
-            shown_sessions = window_session_ids(
-                messages, dict(cached_rows.sessions) if cached_rows else {}
-            )
+            window_rows = _window_session_rows(cache_manager, loaded)
+            shown_sessions = window_session_ids(messages, window_rows)
             if window_sessions is not None:
                 shown_sessions &= window_sessions
             record_window = (
@@ -4425,6 +4423,7 @@ def convert_jsonl_to(
                 render_pool=render_pool,
                 fragment_store=fragment_store,
                 restrict_to_sessions=shown_sessions,
+                session_rows=window_rows,
                 record_rendered=record_window,
             )
 
@@ -5205,6 +5204,23 @@ def window_session_ids(
     return collect_trunk_session_ids(messages, get_warmup_session_ids(messages)) & shown
 
 
+def _window_session_rows(
+    cache_manager: Optional[CacheManager], loaded: List[TranscriptEntry]
+) -> Dict[str, SessionCacheData]:
+    """The whole-session rows a date window's sessions are chosen among.
+
+    The cache's rows when there is a cache. Without one (``--no-cache``)
+    the same rows are computed from ``loaded``, the project's load before
+    the window's filter: a load without a cache parses the whole files,
+    and a session's row (its first user message, its title) is the whole
+    session's, wherever the window cuts it.
+    """
+    if cache_manager is not None:
+        cached = cache_manager.get_cached_project_data()
+        return dict(cached.sessions) if cached is not None else {}
+    return _build_session_data_from_messages(loaded)
+
+
 @dataclass
 class _WindowView:
     """What a date window shows of one project, for the master index."""
@@ -5213,9 +5229,7 @@ class _WindowView:
     # The index's session entries, without their ``file`` link.
     sessions: List[Dict[str, Any]]
     aggregates: Dict[str, Any]
-    # Whether the project has anything to show. Without a cache there
-    # are no session rows to read sessions from, so it is whether the
-    # window holds a message at all.
+    # Whether the project has a session to show.
     shown: bool
 
 
@@ -5240,11 +5254,10 @@ def _project_window_view(
         silent=True,
         snapshot=cache_manager is not None,
     )
+    rows = _window_session_rows(cache_manager, messages)
     messages = deduplicate_messages(
         filter_messages_by_date(messages, from_date, to_date)
     )
-    cached = cache_manager.get_cached_project_data() if cache_manager else None
-    rows = dict(cached.sessions) if cached is not None else {}
     ids = window_session_ids(messages, rows)
     window_data = compute_session_data(
         messages,
@@ -5274,7 +5287,7 @@ def _project_window_view(
         session_ids=frozenset(ids),
         sessions=sessions,
         aggregates=compute_project_aggregates(messages),
-        shown=bool(ids) if cache_manager is not None else bool(messages),
+        shown=bool(ids),
     )
 
 
@@ -5375,6 +5388,7 @@ def _generate_individual_session_files(
     render_pool: "Optional[RenderPool]" = None,
     fragment_store: "Optional[RenderFragmentStore]" = None,
     restrict_to_sessions: Optional[set[str]] = None,
+    session_rows: Optional[Dict[str, SessionCacheData]] = None,
     record_rendered: bool = True,
 ) -> int:
     """Generate individual files for each session in the specified format.
@@ -5393,6 +5407,10 @@ def _generate_individual_session_files(
             file. Restricted out, it renders complete when its own page's
             load comes around. A date-filtered conversion passes the
             window's sessions (``window_session_ids``). None considers all.
+        session_rows: The session rows to use when there is no cache: a
+            date-filtered conversion passes the ones it chose the window's
+            sessions among (``_window_session_rows``). Without a cache and
+            without them, no session has a row, so none is written.
         record_rendered: Whether to record the files written in the
             render cache. A date-filtered view written outside the
             project's own directory is not: the rows are keyed by file
@@ -5429,6 +5447,8 @@ def _generate_individual_session_files(
             session_data = {s.session_id: s for s in project_cache.sessions.values()}
         # Get working directories for project title
         working_directories = cache_manager.get_working_directories()
+    elif session_rows is not None:
+        session_data = dict(session_rows)
 
     # Only generate HTML for sessions that are tracked in the sessions table
     # (filters out warmup-only and sessions without user messages)
