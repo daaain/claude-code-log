@@ -118,18 +118,25 @@
     function minutesSince(ms, now) {
         return Math.max(0, Math.floor((now - ms) / 60000));
     }
-    // The status block's big number and its unit.
-    function since(ms, now) {
+    // The status block's big number and its unit: minutes while the
+    // prompt cache is warm, then the clock time of the update (with
+    // 'today' or its weekday), so a cold row never reads as an age.
+    function since(ms, now, ttl) {
         const min = minutesSince(ms, now);
-        if (min < 60) return { n: String(min), u: 'min' };
-        if (min < 24 * 60) return { n: Math.floor(min / 60) + ':' + pad(min % 60), u: 'h' };
-        return { n: hhmm(ms), u: weekday(ms) };
+        if (min < ttl) return { n: String(min), u: 'min' };
+        return { n: hhmm(ms), u: sameDay(ms, now) ? 'today' : weekday(ms) };
     }
     function ago(ms, now) {
         const min = minutesSince(ms, now);
         if (min < 60) return min + ' min ago';
         if (min < 24 * 60) return Math.floor(min / 60) + ' h ' + (min % 60) + ' min ago';
         return weekday(ms) + ' ' + hhmm(ms);
+    }
+    // 142000 → '142k', 1250000 → '1.25M', 950 → '950'
+    function tokens(n) {
+        if (n >= 1e6) return parseFloat((n / 1e6).toFixed(2)) + 'M';
+        if (n >= 1e3) return Math.round(n / 1e3) + 'k';
+        return String(n);
     }
     function plural(n, word) {
         return n + ' ' + word + (n === 1 ? '' : 's');
@@ -222,6 +229,8 @@
             messages: num(raw.messages),
             turnCount: num(raw.turnCount),
             toolCount: num(raw.toolCount),
+            // the context the latest call read, in tokens (0: unknown)
+            context: num(raw.context),
             turns: turns
                 .filter(function (t) {
                     return Array.isArray(t) && t.length >= 2;
@@ -460,6 +469,11 @@
                 const left = win.pct(s.lastAt);
                 const band = span('rc-band', left, Math.min(100, win.pct(s.lastAt + ttlMs)) - left);
                 if (cacheLeft(s, ctx) !== null) band.classList.add('rc-band-risk');
+                // What the cache holds: the context the next turn reads.
+                if (s.context > 0) {
+                    band.appendChild(el('span', 'rc-band-ctx', tokens(s.context)));
+                    band.title = tokens(s.context) + ' tokens of context cached';
+                }
                 nodes.push(band);
             }
             shown.forEach(function (t) {
@@ -486,7 +500,11 @@
             label =
                 plural(s.turnCount, 'turn') +
                 (lastTurn ? ', the last ending ' + hhmm(lastTurn[1]) : '') +
-                (s.lastAt + ttlMs > ctx.now ? '; cache warm until ' + hhmm(s.lastAt + ttlMs) : '') +
+                (s.lastAt + ttlMs > ctx.now
+                    ? '; cache warm until ' +
+                      hhmm(s.lastAt + ttlMs) +
+                      (s.context > 0 ? ', holding ' + tokens(s.context) + ' tokens of context' : '')
+                    : '') +
                 (running ? '; ' + plural(running, 'background task') + ' running' : '') +
                 (wakes.length ? '; wakes up at ' + hhmm(wakes[0].at) : '');
         } else {
@@ -1127,10 +1145,10 @@
         row.short = s.short;
         const shownState = effectiveState(s, ctx);
         row.el.className = 'rc-row rc-state-' + shownState;
-        const t = since(s.lastAt, ctx.now);
+        const t = since(s.lastAt, ctx.now, ctx.ttl);
         setText(row.blockN, t.n);
         setText(row.blockU, t.u);
-        row.block.classList.toggle('rc-block-long', t.u !== 'min' && t.u !== 'h');
+        row.block.classList.toggle('rc-block-long', t.u !== 'min');
         setText(row.blockStatus, STATES[shownState]);
         row.label = s.title + ', ' + STATES[shownState] + ', updated ' + ago(s.lastAt, ctx.now);
         applyExpanded(row);
@@ -1147,6 +1165,7 @@
             s.messages,
             s.bg,
             s.wakes,
+            s.context,
             ctx.bgCap,
             ctx.wakeGrace
         ]);
@@ -1336,13 +1355,14 @@
             return node;
         }
         const band = el('span', 'rc-band');
+        band.appendChild(el('span', 'rc-band-ctx', '120k'));
         box.replaceChildren(
             item(mark('prompt'), 'prompt'),
             item(mark('asst'), 'reply'),
             item(mark('ask'), 'asked you'),
             item(mark('err'), 'error'),
             item(el('span', 'rc-tick'), 'tool call'),
-            item(band, 'prompt cache warm'),
+            item(band, 'prompt cache warm, with its context size'),
             item(el('span', 'rc-bg rc-bg-running'), 'background work'),
             item(mark('task'), 'work reported'),
             item(mark('wake'), 'wake-up')

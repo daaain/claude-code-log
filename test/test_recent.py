@@ -85,19 +85,28 @@ class _Session:
         )
 
     def reply(
-        self, minutes_ago: float, text: str, model: str = "claude-opus", **extra: Any
+        self,
+        minutes_ago: float,
+        text: str,
+        model: str = "claude-opus",
+        usage: Optional[dict[str, int]] = None,
+        **extra: Any,
     ) -> None:
+        """Claude's text reply; ``usage`` is its API call's token usage."""
+        message: dict[str, Any] = {
+            "id": f"m-{self._n}",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": text}],
+        }
+        if usage is not None:
+            message["usage"] = usage
         self._base(
             "assistant",
             minutes_ago,
             requestId=f"req-{self._n}",
-            message={
-                "id": f"m-{self._n}",
-                "type": "message",
-                "role": "assistant",
-                "model": model,
-                "content": [{"type": "text", "text": text}],
-            },
+            message=message,
             **extra,
         )
 
@@ -411,6 +420,37 @@ def test_sidechain_entries_are_left_out(tmp_path: Path) -> None:
     info = s.summary(tmp_path)
     assert info["turnCount"] == 1
     assert info["state"] == "done"
+
+
+def _usage(fresh: int, written: int, read: int) -> dict[str, int]:
+    """An API call's usage: fresh input, cache written, cache read."""
+    return {
+        "input_tokens": fresh,
+        "cache_creation_input_tokens": written,
+        "cache_read_input_tokens": read,
+        "output_tokens": 500,
+    }
+
+
+def test_the_context_is_what_the_latest_call_read(tmp_path: Path) -> None:
+    """The context is the latest main-chain call's input + cache tokens."""
+    s = _Session()
+    s.prompt(30, "Start.")
+    s.reply(29, "Started.", usage=_usage(3, 20_000, 0))
+    s.prompt(20, "Go on.")
+    s.reply(19, "Going.", usage=_usage(5, 1_000, 20_000))
+    # Neither a sub-agent's call nor a synthetic error is the session's.
+    s.reply(18, "sub-agent reply", usage=_usage(1, 0, 90_000), isSidechain=True)
+    s.reply(17, "API Error: overloaded", model="<synthetic>", usage=_usage(0, 0, 0))
+    assert s.summary(tmp_path)["context"] == 21_005
+
+
+def test_no_usage_is_no_context(tmp_path: Path) -> None:
+    """With no usage on record the context is unknown, not zero."""
+    s = _Session()
+    s.prompt(30, "Start.")
+    s.reply(29, "Started.")
+    assert s.summary(tmp_path)["context"] is None
 
 
 def test_turns_older_than_the_horizon_are_counted_not_listed(tmp_path: Path) -> None:
