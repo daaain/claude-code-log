@@ -19,9 +19,11 @@ file: no server is involved.
 
 ## What a row shows
 
-- **How long ago it last changed, and whose move it is.** The block at the
-  start of the row says *asked you* (the last reply ends on a question,
-  or Claude is waiting on an answer to its questions or on your approval
+- **When it last changed, and whose move it is.** The block at the
+  start of the row counts the minutes since the last update while the
+  prompt cache is still warm, then switches to the clock time of that
+  update (with *today* or the weekday). Under the time it says *asked
+  you* (the last reply ends on a question, or Claude is waiting on an answer to its questions or on your approval
   of its plan), *error* (an API error was the last entry), *finished* (the
   turn ended with nothing asked), *background* (it finished, but work it
   started in the background is still running or a wake-up is due) or
@@ -47,9 +49,11 @@ file: no server is involved.
   wake-up is an alarm clock at the time it is due, often in the hour
   ahead.
 - **The cache countdown.** The prompt cache lasts an hour from the last
-  update, drawn as a pale band. From 45 minutes on, the row says how many
-  minutes are left: reply soon and the next turn still reads the cached
-  context.
+  update, drawn as a blue band ending at its expiry. The band's far end
+  shows the context size: the tokens the session's latest call read,
+  which is what the next turn starts from. From 45 minutes on, the row
+  says how many minutes are left: reply soon and the next turn still
+  reads the cached context.
 
 Press the block (or the chevron beside it) to open the row: the turn,
 tool-call and message counts on the left, and your last prompt and the

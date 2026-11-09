@@ -44,6 +44,7 @@ Payload shape (all times are epoch milliseconds, UTC)::
           "wakes": [[atMs, label], ...],
           "earlierTurns": 0,
           "tools": [ms, ...],
+          "context": 142000 | null,
           "lastPrompt": {"at": ms, "html": "..."} | null,
           "last": {"at": ms, "who": "claude" | "question" | "plan",
                    "html": "..."}
@@ -55,7 +56,10 @@ Payload shape (all times are epoch milliseconds, UTC)::
 
 ``turns`` holds only the turns that ended within :data:`TURN_HORIZON_HOURS`
 (the strip shows less than that); ``earlierTurns`` counts the rest, so
-the page can say "+N earlier turns" without carrying them. Each turn's
+the page can say "+N earlier turns" without carrying them.
+``context`` is the size of the context the session's latest API call
+read (its input, cache creation and cache read tokens): what the next
+turn starts from, and what the prompt cache holds while it is warm. Each turn's
 snippets (the start of its prompt, and of how it ended) are what the
 strip's markers show on hover; an implicit turn has no prompt.
 
@@ -347,6 +351,7 @@ class SessionSummary:
     background: BackgroundWork
     last_prompt: Optional[dict[str, Any]]
     last: Optional[dict[str, Any]]
+    context: Optional[int] = None
 
     def at(self, now_ms: int, exited_at: Optional[int] = None) -> dict[str, Any]:
         """The session's row data as of ``now_ms``; ``exited_at`` when its
@@ -385,6 +390,7 @@ class SessionSummary:
             "wakes": [] if exited else self.background.pending_wakes(horizon),
             "lastPrompt": self.last_prompt,
             "last": self.last,
+            "context": self.context,
         }
 
 
@@ -461,6 +467,7 @@ def read_session(entries: Iterable[TranscriptEntry]) -> SessionSummary:
     branch: Optional[str] = None
     cwd: Optional[str] = None
     background = BackgroundWork()
+    context: Optional[int] = None
 
     for entry in entries:
         if not isinstance(
@@ -544,6 +551,15 @@ def read_session(entries: Iterable[TranscriptEntry]) -> SessionSummary:
             turns.append(current)
         current["end"] = max(current["end"], at)
         synthetic = entry.message.model == "<synthetic>"
+        usage = entry.message.usage
+        if usage is not None and not synthetic:
+            size = (
+                (usage.input_tokens or 0)
+                + (usage.cache_creation_input_tokens or 0)
+                + (usage.cache_read_input_tokens or 0)
+            )
+            if size:
+                context = size
         for item in entry.message.content:
             if isinstance(item, ToolUseContent):
                 current["tools"].append(at)
@@ -590,6 +606,7 @@ def read_session(entries: Iterable[TranscriptEntry]) -> SessionSummary:
     return SessionSummary(
         branch=branch,
         cwd=cwd,
+        context=context,
         state=state,
         turns=turns,
         background=background,
@@ -889,6 +906,7 @@ def build_recent_payload(
                 "wakes": info["wakes"],
                 "lastPrompt": info["lastPrompt"],
                 "last": info["last"],
+                "context": info["context"],
             }
         )
         if window is not None:

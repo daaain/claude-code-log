@@ -9,6 +9,7 @@ which freezes the page's clock.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from pathlib import Path
 from typing import Any, Optional
@@ -564,7 +565,14 @@ def test_background_list_orders_running_first(page: Page, tmp_path: Path) -> Non
 def test_filters_cache_and_grouping(page: Page, tmp_path: Path) -> None:
     sessions = [
         _session("aaaa1111", 3 * MIN, "busy"),
-        _session("bbbb2222", 50 * MIN, "asked", project="tangible", projectDir="-t"),
+        _session(
+            "bbbb2222",
+            50 * MIN,
+            "asked",
+            project="tangible",
+            projectDir="-t",
+            context=142_300,
+        ),
         _session("cccc3333", 2 * HOUR, "done"),
         _session("dddd4444", 30 * HOUR, "done", project="tangible", projectDir="-t"),
     ]
@@ -575,13 +583,28 @@ def test_filters_cache_and_grouping(page: Page, tmp_path: Path) -> None:
     }
     assert counts == {"all": "4", "move": "3", "urgent": "1", "cache": "1"}
 
-    # 50 min since the update: the cache has 10 min left, chip and band.
+    # 50 min since the update: the cache has 10 min left, chip and band;
+    # the band carries the context size it holds.
     cached = _row(page, "bbbb2222")
     expect(cached.locator(".rc-chip")).to_have_text("cache 10 min")
     expect(cached.locator(".rc-band.rc-band-risk")).to_have_count(1)
-    # Under a day: H:MM h; older: a weekday, and the strip's summary.
-    expect(_row(page, "cccc3333").locator(".rc-block-u")).to_have_text("h")
-    expect(_row(page, "cccc3333").locator(".rc-block-n")).to_have_text("2:00")
+    expect(cached.locator(".rc-band-ctx")).to_have_text("142k")
+    expect(cached.locator(".rc-strip")).to_have_attribute(
+        "aria-label", re.compile(r"holding 142k tokens of context")
+    )
+    # No usage on record: a bare band.
+    expect(_row(page, "aaaa1111").locator(".rc-band-ctx")).to_have_count(0)
+    # Cache warm: minutes. Cold: the update's clock time, with 'today'
+    # or its weekday (the browser and Python share the local zone).
+    expect(cached.locator(".rc-block-u")).to_have_text("min")
+    expect(cached.locator(".rc-block-n")).to_have_text("50")
+    now_local = datetime.fromtimestamp(NOW / 1000)
+    for key, ago in (("cccc3333", 2 * HOUR), ("dddd4444", 30 * HOUR)):
+        at = datetime.fromtimestamp((NOW - ago) / 1000)
+        unit = "today" if at.date() == now_local.date() else at.strftime("%a")
+        block = _row(page, key)
+        expect(block.locator(".rc-block-n")).to_have_text(at.strftime("%H:%M"))
+        expect(block.locator(".rc-block-u")).to_have_text(unit)
     old = _row(page, "dddd4444")
     expect(old.locator(".rc-outside")).to_contain_text("2 turns · 12 messages")
     expect(old.locator(".rc-bar")).to_have_count(0)
