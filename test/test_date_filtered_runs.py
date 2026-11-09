@@ -200,6 +200,24 @@ def test_no_cache_hierarchy_writes_session_pages_linked_from_index(
     assert not (tmp_path / "cache.db").exists()
 
 
+def test_no_cache_hierarchy_refreshes_existing_session_page_after_append(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An uncached rerun must refresh a session page when its source grows."""
+    project = _build_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    process_projects_hierarchy(project.parent, jobs=1, use_cache=False)
+    page = project / "session-sess-alpha.html"
+    late = "LATE-UNCACHED-TURN"
+    assert late not in page.read_text(encoding="utf-8")
+
+    _append(project / "sess-alpha.jsonl", _turn("sess-alpha", 2, 2, late))
+    process_projects_hierarchy(project.parent, jobs=1, use_cache=False)
+
+    assert late in page.read_text(encoding="utf-8")
+    assert not (tmp_path / "cache.db").exists()
+
+
 # The hierarchy pass converts only a project with a changed file, so it
 # reaches a filtered run through an append; a project converted on its own
 # reaches it with or without one.

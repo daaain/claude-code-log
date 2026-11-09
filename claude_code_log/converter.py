@@ -5543,10 +5543,12 @@ def _generate_individual_session_files(
                     or not session_file_path.exists()
                 )
             else:
-                # Fallback: no cache, or a format that tracks its own
-                # freshness (JSON) rather than the shared version marker.
+                # Without a cache there is no source fingerprint for an existing
+                # session page; the renderer's version check alone misses appends.
+                # JSON tracks its own version field when a cache is present.
                 should_regenerate_session = (
-                    renderer.is_outdated(session_file_path)
+                    cache_manager is None
+                    or renderer.is_outdated(session_file_path)
                     or from_date is not None
                     or to_date is not None
                     or not session_file_path.exists()
