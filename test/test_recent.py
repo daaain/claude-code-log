@@ -92,6 +92,7 @@ class _Session:
         usage: Optional[dict[str, int]] = None,
         **extra: Any,
     ) -> None:
+        """Claude's text reply; ``usage`` is its API call's token usage."""
         message: dict[str, Any] = {
             "id": f"m-{self._n}",
             "type": "message",

@@ -565,6 +565,8 @@ def test_background_list_orders_running_first(page: Page, tmp_path: Path) -> Non
 
 @pytest.mark.browser
 def test_filters_cache_and_grouping(page: Page, tmp_path: Path) -> None:
+    """Filter counts, the cache chip and band (with its context size), the
+    since column (minutes while warm, clock time once cold) and grouping."""
     sessions = [
         _session("aaaa1111", 3 * MIN, "busy"),
         _session(
