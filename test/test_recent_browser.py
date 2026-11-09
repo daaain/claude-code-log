@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,6 +24,9 @@ NOW = 1793465000000
 MIN = 60000
 HOUR = 60 * MIN
 EVIL = "</script><img src=x onerror=window.__pwned=1>"
+# The page's short weekdays (en-GB), by datetime.weekday(): fixed here,
+# since strftime("%a") follows the process locale.
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 def _session(
@@ -601,7 +603,7 @@ def test_filters_cache_and_grouping(page: Page, tmp_path: Path) -> None:
     now_local = datetime.fromtimestamp(NOW / 1000)
     for key, ago in (("cccc3333", 2 * HOUR), ("dddd4444", 30 * HOUR)):
         at = datetime.fromtimestamp((NOW - ago) / 1000)
-        unit = "today" if at.date() == now_local.date() else at.strftime("%a")
+        unit = "today" if at.date() == now_local.date() else WEEKDAYS[at.weekday()]
         block = _row(page, key)
         expect(block.locator(".rc-block-n")).to_have_text(at.strftime("%H:%M"))
         expect(block.locator(".rc-block-u")).to_have_text(unit)

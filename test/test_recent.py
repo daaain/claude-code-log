@@ -422,6 +422,7 @@ def test_sidechain_entries_are_left_out(tmp_path: Path) -> None:
 
 
 def _usage(fresh: int, written: int, read: int) -> dict[str, int]:
+    """An API call's usage: fresh input, cache written, cache read."""
     return {
         "input_tokens": fresh,
         "cache_creation_input_tokens": written,
@@ -431,6 +432,7 @@ def _usage(fresh: int, written: int, read: int) -> dict[str, int]:
 
 
 def test_the_context_is_what_the_latest_call_read(tmp_path: Path) -> None:
+    """The context is the latest main-chain call's input + cache tokens."""
     s = _Session()
     s.prompt(30, "Start.")
     s.reply(29, "Started.", usage=_usage(3, 20_000, 0))
@@ -443,6 +445,7 @@ def test_the_context_is_what_the_latest_call_read(tmp_path: Path) -> None:
 
 
 def test_no_usage_is_no_context(tmp_path: Path) -> None:
+    """With no usage on record the context is unknown, not zero."""
     s = _Session()
     s.prompt(30, "Start.")
     s.reply(29, "Started.")
