@@ -4113,7 +4113,12 @@ def convert_jsonl_to(
     shown_sessions: Optional[set[str]] = None
     window_rows: Optional[Dict[str, SessionCacheData]] = None
     record_window = True
-    if input_path.is_dir() and cache_manager is None and generate_individual_sessions:
+    if (
+        input_path.is_dir()
+        and cache_manager is None
+        and generate_individual_sessions
+        and not windowed
+    ):
         # The session writer needs rows even when no render cache was requested.
         window_rows = _build_session_data_from_messages(loaded)
     if windowed:
@@ -6817,6 +6822,7 @@ def _plan_project(
             bool(modified_files)
             or bool(stale_sessions)
             or unrefreshed
+            or (cache_manager is None and generate_individual_sessions)
             or (
                 combined_ext == "html"
                 and generate_individual_sessions

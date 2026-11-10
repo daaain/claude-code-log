@@ -200,6 +200,28 @@ def test_no_cache_hierarchy_writes_session_pages_linked_from_index(
     assert not (tmp_path / "cache.db").exists()
 
 
+def test_no_cache_hierarchy_without_combined_writes_session_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session-only uncached pass must schedule each fresh project."""
+    project = _build_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    process_projects_hierarchy(
+        project.parent,
+        jobs=1,
+        use_cache=False,
+        write_combined=False,
+        output_format="html",
+    )
+    index = (project.parent / "index.html").read_text(encoding="utf-8")
+    for sid in SESSIONS:
+        page = project / f"session-{sid}.html"
+        assert page.name in index
+        assert page.is_file(), f"index links to missing {page.name}"
+        assert f"first {sid}" in page.read_text(encoding="utf-8")
+    assert not (tmp_path / "cache.db").exists()
+
+
 def test_no_cache_hierarchy_refreshes_existing_session_page_after_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
