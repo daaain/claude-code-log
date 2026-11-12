@@ -4113,6 +4113,14 @@ def convert_jsonl_to(
     shown_sessions: Optional[set[str]] = None
     window_rows: Optional[Dict[str, SessionCacheData]] = None
     record_window = True
+    if (
+        input_path.is_dir()
+        and cache_manager is None
+        and generate_individual_sessions
+        and not windowed
+    ):
+        # The session writer needs rows even when no render cache was requested.
+        window_rows = _build_session_data_from_messages(loaded)
     if windowed:
         assert output_path is not None
         if input_path.is_dir():
@@ -5540,10 +5548,12 @@ def _generate_individual_session_files(
                     or not session_file_path.exists()
                 )
             else:
-                # Fallback: no cache, or a format that tracks its own
-                # freshness (JSON) rather than the shared version marker.
+                # Without a cache there is no source fingerprint for an existing
+                # session page; the renderer's version check alone misses appends.
+                # JSON tracks its own version field when a cache is present.
                 should_regenerate_session = (
-                    renderer.is_outdated(session_file_path)
+                    cache_manager is None
+                    or renderer.is_outdated(session_file_path)
                     or from_date is not None
                     or to_date is not None
                     or not session_file_path.exists()
@@ -6812,6 +6822,7 @@ def _plan_project(
             bool(modified_files)
             or bool(stale_sessions)
             or unrefreshed
+            or (cache_manager is None and generate_individual_sessions)
             or (
                 combined_ext == "html"
                 and generate_individual_sessions
