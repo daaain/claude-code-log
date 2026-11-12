@@ -29,6 +29,11 @@ LIGHT_BG = "rgb(255, 255, 255)"  # --bg #ffffff
 DARK_FG = "rgb(228, 230, 233)"  # --fg #e4e6e9
 PROJECT = "-home-u-testproj"
 
+# The module-scoped `archive` builds its cache before the per-test cache path
+# is set (test/conftest.py), so it lands at the default location; each test's
+# `server` must resolve the same one.
+pytestmark = pytest.mark.default_cache_path
+
 
 @pytest.fixture(scope="module")
 def archive(tmp_path_factory: pytest.TempPathFactory) -> Path:

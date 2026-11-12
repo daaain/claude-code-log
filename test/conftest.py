@@ -122,6 +122,55 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     return None
 
 
+# ========== Cache isolation: every test gets its own cache database ==========
+# A CacheManager built without a db_path, and a conversion run without
+# CLAUDE_CODE_LOG_CACHE_PATH, put the cache at
+# `<projects_dir>/claude-code-log-cache.db`. A test whose project sits directly
+# in the system temp dir (`tempfile.TemporaryDirectory()`) therefore shares
+# `<tmp>/claude-code-log-cache.db` with every other such test, every run and
+# every checkout on the machine. Two things break: the file outlives the run
+# and keeps whatever schema the last code to open it migrated it to, so a
+# checkout with an older migration chain fails on columns it does not know;
+# and on a fresh temp dir several xdist workers run the migrations on the
+# same new file at once (`UNIQUE constraint failed: _schema_version.version`).
+#
+# So every test starts with CLAUDE_CODE_LOG_CACHE_PATH pointing at a file of
+# its own. The directory is a fresh one beside the test's `tmp_path`, not
+# inside it, so what a test finds in `tmp_path` is only what it put there.
+# Subprocesses and render workers inherit the variable. A test that sets the
+# variable itself overrides this one; a test about the default location takes
+# `@pytest.mark.default_cache_path`, which unsets it instead.
+#
+# A fixture wider than a test (module, session) is set up before this one and
+# sees the variable as the run started, normally unset: it resolves the
+# default location, under its own temp dir. A test that looks that cache up again must resolve the same path,
+# with the marker (test_minimal_pages_browser.py) or an explicit db_path.
+#
+# It holds a MonkeyPatch of its own rather than requesting `monkeypatch`: an
+# autouse fixture that requests it sets it up before the xunit
+# `setup_method` fixture, so the test's patches would be undone only after
+# `teardown_method` ran, and a `teardown_method` that relies on them being
+# gone fails (test_commit_linkifier.py's, for one).
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache_path(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[None, None, None]:
+    """Point CLAUDE_CODE_LOG_CACHE_PATH at a cache database for this test only."""
+    with pytest.MonkeyPatch.context() as mp:
+        if request.node.get_closest_marker("default_cache_path"):
+            mp.delenv("CLAUDE_CODE_LOG_CACHE_PATH", raising=False)
+        else:
+            cache_dir = tmp_path_factory.mktemp("cache")
+            mp.setenv(
+                "CLAUDE_CODE_LOG_CACHE_PATH",
+                str(cache_dir / "claude-code-log-cache.db"),
+            )
+        yield
+
+
 # ========== Cache Test Fixtures ==========
 # These fixtures use explicit db_path for true test isolation,
 # enabling parallel test execution without database conflicts.

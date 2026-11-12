@@ -282,6 +282,7 @@ class TestCLIWithProjectsDir:
         assert "Successfully processed" in result.output
         assert (temp_projects_copy / "index.html").exists()
 
+    @pytest.mark.default_cache_path
     def test_clear_cache_with_projects_dir(self, temp_projects_copy: Path) -> None:
         """Test cache clearing with custom projects directory."""
         runner = CliRunner()
@@ -461,6 +462,7 @@ class TestMultiCwdSessions:
 class TestCacheWithRealData:
     """Test cache functionality with realistic project data."""
 
+    @pytest.mark.default_cache_path
     def test_cache_creation_all_projects(self, temp_projects_copy: Path) -> None:
         """Test cache is created correctly for all projects."""
         process_projects_hierarchy(temp_projects_copy)

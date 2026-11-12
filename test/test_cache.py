@@ -98,6 +98,7 @@ def sample_entries():
 class TestCacheManager:
     """Test the CacheManager class."""
 
+    @pytest.mark.default_cache_path
     def test_initialization(self, temp_project_dir, mock_version):
         """Test cache manager initialization."""
         cache_manager = CacheManager(temp_project_dir, mock_version)
@@ -111,6 +112,7 @@ class TestCacheManager:
         )
         assert cache_manager.db_path.exists()
 
+    @pytest.mark.default_cache_path
     def test_database_path(self, cache_manager, temp_project_dir):
         """Test that SQLite database is created at the correct location."""
         # Database should be at parent level (projects_dir/claude-code-log-cache.db)
@@ -898,6 +900,7 @@ class TestCacheErrorHandling:
 class TestCachePathEnvVar:
     """Test CLAUDE_CODE_LOG_CACHE_PATH environment variable."""
 
+    @pytest.mark.default_cache_path
     def test_default_path_without_env_var(self, tmp_path):
         """Test default cache path when env var is not set."""
         project_dir = tmp_path / "project"

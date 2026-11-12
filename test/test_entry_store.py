@@ -650,6 +650,11 @@ def _count_append_only_writes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
+# Each test compares two projects, and each project's rows are read from the
+# cache at its own default location (`_message_rows` reads every row of the
+# file). One shared cache would hold both projects' rows and compare them with
+# themselves.
+@pytest.mark.default_cache_path
 class TestAppendOnlyWrites:
     """Only the new rows are written — and the table must not tell."""
 
