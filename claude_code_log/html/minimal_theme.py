@@ -254,20 +254,41 @@ def _in_out(parts: dict[str, int]) -> tuple[int, int]:
     return total_in, parts.get("output", 0)
 
 
-def compact_token_usage(token_usage: Optional[str]) -> str:
-    """``Input: 3 | Output: 1400 | Cache Read: 61200`` → ``61.2k · 1.4k``.
+_ROUGH_DECIMAL = re.compile(r"^(\d{2,})\.\d([kMB])$")
 
-    In is the context the turn consumed (input + cache creation + cache
-    read), out is the output; the full breakdown stays available as the
-    gutter's tooltip.
+
+def _rough_count(value: int) -> str:
+    """``compact_count`` without a decimal once the value is at least 10k."""
+    return _ROUGH_DECIMAL.sub(r"\1\2", compact_count(value))
+
+
+def compact_token_usage(token_usage: Optional[str]) -> str:
+    """Compact token usage while keeping cache reuse and new input distinct.
+
+    ``Cache Read`` is shown before the ``+`` and ``Input`` plus ``Cache
+    Creation`` after it, so ``97k+20k 364`` means 97k reused tokens and 20k
+    new input tokens, with 364 output tokens. A leading ``+`` marks a turn
+    that created cache without reading any. The full breakdown stays
+    available as the gutter's tooltip.
     """
     if not token_usage:
         return ""
     parts = _token_parts(token_usage)
     if not parts:
         return ""
-    total_in, total_out = _in_out(parts)
-    return f"{compact_count(total_in)} · {compact_count(total_out)}"
+    cache_read = parts.get("cache read", 0)
+    cache_creation = parts.get("cache creation", 0)
+    new_input = parts.get("input", 0) + cache_creation
+    total_out = parts.get("output", 0)
+    has_cache = "cache read" in parts or "cache creation" in parts
+    if cache_read and new_input:
+        context = f"{_rough_count(cache_read)}+{_rough_count(new_input)}"
+    elif new_input and cache_creation:
+        context = f"+{_rough_count(new_input)}"
+    else:
+        context = _rough_count(cache_read + new_input)
+    separator = " " if has_cache else " · "
+    return f"{context}{separator}{compact_count(total_out)}"
 
 
 def gutter_time(formatted_timestamp: Optional[str]) -> str:

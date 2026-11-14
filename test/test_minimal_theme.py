@@ -303,9 +303,17 @@ class TestCompactNumbers:
     def test_compact_count(self, value: int, text: str) -> None:
         assert minimal_theme.compact_count(value) == text
 
-    def test_token_usage_is_context_in_and_output(self) -> None:
-        usage = "Input: 3 | Output: 1400 | Cache Creation: 1000 | Cache Read: 60200"
-        assert minimal_theme.compact_token_usage(usage) == "61.2k · 1.4k"
+    def test_token_usage_distinguishes_cache_read_from_new_input(self) -> None:
+        issue_example = (
+            "Input: 2 | Output: 364 | Cache Creation: 20012 | Cache Read: 97521"
+        )
+        assert minimal_theme.compact_token_usage(issue_example) == "97k+20k 364"
+        assert (
+            minimal_theme.compact_token_usage(
+                "Input: 3 | Output: 1400 | Cache Creation: 1000"
+            )
+            == "+1k 1.4k"
+        )
         assert (
             minimal_theme.compact_token_usage("Input: 25 | Output: 120") == "25 · 120"
         )
