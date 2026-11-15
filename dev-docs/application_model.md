@@ -1965,6 +1965,83 @@ guarantee and which wenmode's own Markdown renderer would not either
 (it backslash-escapes `_`, `[`, `|`, `*` in text: measured at 217 of
 531 real bodies touched).
 
+**Every Markdown body passes one gate.** `_render_message` runs each
+formatter's output — built-in or plugin `format_markdown` — through
+`_gate_body`, the body counterpart of the heading gate
+(`safe_markdown_inline`), so a formatter that interpolates transcript
+text without escaping it still cannot leave live markup in the `.md`
+(GHSA-3jq4-r9jm-q682: before the gate, escaping was a per-formatter
+choice that assistant text, thinking and most tool bodies never made).
+The renderer's own tags — `<details>`, `<summary>`, `<code>`, session
+anchors, table-cell `<br>` — are written through `_own_tag`, which hides
+them from the gate behind a marker carrying a random per-process token;
+transcript text cannot forge it. A formatter's return value is
+therefore only final after the gate. `test/test_xss_markdown_surfaces.py`
+taints every text field of every `test/test_data` fixture and asserts the
+rendered `.md` parses with no live payload tag.
+
+The gate judges each body alone, but the `.md` is read as one document,
+so the gate then seals the body (`_seal_body`): it is made to parse in
+the document exactly as it parsed alone. Two things would otherwise move
+a body's raw code into prose. A fence the body leaves open would be
+closed by the next body's opening fence, putting that body's fenced HTML
+outside it. An indented first line would continue a list item or
+footnote the previous body ended in (the TodoWrite checklist followed by
+its result is one such pair). So an open top-level fence is closed with
+its own character and length, and a body that starts indented gets a
+`<!-- -->` line first, the CommonMark idiom for ending a list. Any other
+body starts at column 0 after a blank line, and that closes every block
+the previous body could leave open (the gate leaves no HTML block open).
+The test file checks a matrix of open endings × code-holding starts with
+wenmode and markdown-it.
+
+**wenmode doesn't get the last word on what is code.** Everything above
+trusts the gate's parser to tell code from prose, and viewers' parsers
+disagree with it, inline code most of all: a GFM table splits a code
+span at a pipe, a bare-URL autolink (VS Code's preview) swallows its
+opening backtick, an image's alt text ends it early. So:
+
+- A **code span holding `<`** is rewritten as the renderer's own
+  `<code>` element with its text entity-encoded (`_code_span_as_html`):
+  it renders the same in GitHub, VS Code and Obsidian, and no transcript
+  `<` is left outside fenced or indented code for any parser to misread.
+  The exception is a line opening with three backticks, which the span's
+  backticks keep from being a fence opener: there the span stays, with
+  its `<` as `&lt;`.
+- A **multi-line HTML block** is opened rather than escaped whole
+  (`_open_html_blocks`): only the `<` that starts it is escaped and the
+  text parsed again, so a fence inside stays code, a code span inside
+  gets the rewrite above, and inner tags are escaped as tags. Its text
+  then reads as Markdown, as MDX-style content means it to.
+- **Line endings** are normalised first (`_normalize_breaks`): wenmode
+  ends lines on `\u2028`, `\x0b`, `\x85` and the like where CommonMark
+  doesn't. **Headings and labels** are kept to one line
+  (`safe_markdown_label`), link labels also get their brackets escaped
+  (`safe_markdown_link_label`), and a `<summary>` is HTML-escaped around
+  our own tags.
+- A **link or image with a harmful target** (the HTML renderer's scheme
+  denylist, `html.utils.is_harmful_url`) is rewritten as the literal text
+  it was written as, and a reference definition with one is broken where
+  it's written, since its use may sit in another body. WebSearch result
+  URLs go through `_markdown_safe_url`; index link targets start with
+  `./` and are percent-encoded (`_relative_md_target`).
+- A **second opinion** (`neutralise_foreign_html`): markdown-it in two
+  configurations (CommonMark with tables, and `gfm-like` with linkify
+  and footnotes) parses each gated body, each label and the finished
+  document. If either finds raw HTML that isn't one of our own tags
+  (`_OWN_HTML_RE`), or fails to parse, every tag-like `<` that doesn't
+  start one is escaped, code included. Over a 7.6 GB archive of real
+  transcripts it never fired.
+
+The sweep in `test/test_xss_markdown_surfaces.py` taints every field in
+fourteen shapes, each a known disagreement or link trick, and judges the
+`.md` with three viewer configurations (one with Obsidian-style plugins
+the gate doesn't use, with markdown-it's own link filter off). On the
+same archive, against `main`: no errors, and the visible text differs only
+where raw HTML is now shown as text, links and code that were broken now
+render, and fences inside HTML blocks render as code. Markdown export
+takes about twice the CPU.
+
 **The wenmode pin is deliberate.** `wenmode>=0.15.1,<0.16`: the
 extensions subclass wenmode rules and renderers, so a minor bump is a
 re-tested step, not a lockfile refresh. 0.15.1 fixed the five parser

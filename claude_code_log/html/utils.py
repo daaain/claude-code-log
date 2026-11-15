@@ -476,6 +476,23 @@ _GOOD_DATA_PREFIXES = (
 )
 
 
+def is_harmful_url(value: str) -> bool:
+    """Whether a link or image target from a transcript must not stay live.
+
+    The one scheme policy for both outputs: the HTML renderer drops such a
+    target, and the Markdown gate turns such a link into literal text.
+    Unparseable targets count as harmful.
+    """
+    try:
+        normalized = _normalize_url_for_scheme_check(value)
+        scheme = urlsplit(normalized).scheme.lower()
+    except ValueError:
+        return True
+    return scheme in _HARMFUL_URL_SCHEMES and not normalized.lower().startswith(
+        _GOOD_DATA_PREFIXES
+    )
+
+
 class _TranscriptHTMLRenderer(HTMLRenderer):
     """wenmode's HTML renderer with a denylist URL policy.
 
@@ -488,16 +505,7 @@ class _TranscriptHTMLRenderer(HTMLRenderer):
     """
 
     def sanitize_url(self, value: str) -> Optional[str]:
-        try:
-            normalized = _normalize_url_for_scheme_check(value)
-            scheme = urlsplit(normalized).scheme.lower()
-        except ValueError:
-            return None
-        if scheme in _HARMFUL_URL_SCHEMES and not normalized.lower().startswith(
-            _GOOD_DATA_PREFIXES
-        ):
-            return None
-        return value
+        return None if is_harmful_url(value) else value
 
 
 class _TranscriptHtmlHandlers:

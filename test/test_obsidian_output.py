@@ -459,7 +459,7 @@ class TestCombinedFlag:
         assert "- **joe/**" in index_md
         # Leaf session links (markdown link syntax pointing into the
         # expanded tree).
-        assert "(home/joe/project/A/session-" in index_md
+        assert "(./home/joe/project/A/session-" in index_md
         # The traditional flat `## [project](combined.md)` heading
         # shape must NOT appear in tree mode.
         assert "## [home/joe/project/A]" not in index_md
@@ -696,8 +696,8 @@ class TestCombinedFlag:
         assert "- **joe/**" in joined
         assert "- **project/**" in joined
         # Both leaf links must be present, with forward slashes only.
-        assert "(home/joe/project/B/session-abcdef1234.md)" in joined
-        assert "(home/joe/project/A/session-deadbeef99.md)" in joined
+        assert "(./home/joe/project/B/session-abcdef1234.md)" in joined
+        assert "(./home/joe/project/A/session-deadbeef99.md)" in joined
         assert "\\" not in joined
 
     def test_cli_combined_only_alias_with_no_individual_sessions(

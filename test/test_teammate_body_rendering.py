@@ -181,13 +181,15 @@ class TestMarkdown:
         assert "> The **summary** is below." in md
 
     def test_peer_values_are_escaped(self, md: str) -> None:
-        # No live tag outside code, in data or prose bodies: the only raw
-        # ``<img`` left are the short values, each inside its inline code
-        # span; the one carrying backticks gets a span wide enough to hold
-        # them, so it cannot end the span early.
-        assert "> **note:** `<img src=x onerror=alert(1)>`" in md
-        assert f"> **tick:** ``{XSS_TICK}``" in md
-        assert md.count("<img") == 2
+        # No raw ``<img`` anywhere: a short value is shown as code, and a
+        # code span holding ``<`` is written as our own ``<code>`` element
+        # with its contents encoded (parsers disagree too much about spans).
+        assert (
+            "> **note:** <code>&#60;img src&#61;x onerror&#61;alert&#40;1&#41;&#62;</code>"
+            in md
+        )
+        assert "> **tick:** <code>a&#96; &#60;img src&#61;x" in md
+        assert md.count("<img") == 0
         assert "&lt;img src=y onerror=alert(3)&gt;" in md
 
     def test_framing_is_italic(self, md: str) -> None:
