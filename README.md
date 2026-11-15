@@ -223,7 +223,10 @@ claude-code-log --theme classic   # still classic
 
 Themes write the same files (`combined_transcripts.html`, `session-*.html`, …) rather than separate ones, and each page records the theme it was rendered in, so switching theme regenerates the whole archive (and switching back regenerates it again). `--theme` is HTML-only; with `--format md` it is ignored with a warning. An unknown `CLAUDE_CODE_LOG_THEME` value is an error. The [themes guide](https://daaain.github.io/claude-code-log/themes/) walks through the minimal theme's toolbar, branch modes and dark mode, with screenshots.
 
-![The minimal theme with two background agents folded to one line each](docs/assets/themes/main-light.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/themes/main-dark.png">
+  <img src="docs/assets/themes/main-light.png" alt="The minimal theme with two background agents folded to one line each">
+</picture>
 
 ## Project Hierarchy Output
 
