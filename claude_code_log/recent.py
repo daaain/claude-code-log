@@ -104,7 +104,8 @@ from .models import (
     UserTranscriptEntry,
 )
 from .html.utils import render_markdown, render_user_markdown
-from .utils import get_project_display_name
+from .transcript_ids import session_path
+from .utils import get_project_display_name, relative_href
 
 RECENT_PAGE = "recent.html"
 RECENT_DATA = "recent-data.js"
@@ -706,7 +707,7 @@ def _worktree(cwd: Optional[str], project: str) -> Optional[str]:
 
 def _default_href(project_dir: Path, session_id: str) -> str:
     """Where the default layout puts a session page, relative to the index."""
-    return f"{project_dir.name}/session-{session_id}.html"
+    return relative_href(f"{project_dir.name}/session-{session_id}.html")
 
 
 def _no_href(_project_dir: Path, _session_id: str) -> None:
@@ -874,9 +875,11 @@ def build_recent_payload(
         except Exception:
             # One unreadable project must not take the page down.
             continue
-        exited_at = session_exit(
-            project_path / f"{session_id}.jsonl",
-            not_before=_ms(row["last_timestamp"]) or 0,
+        own_file = session_path(project_path, session_id)
+        exited_at = (
+            session_exit(own_file, not_before=_ms(row["last_timestamp"]) or 0)
+            if own_file is not None
+            else None
         )
         info = summary.at(now_ms, exited_at)
         project = names[key]

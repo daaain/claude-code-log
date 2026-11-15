@@ -8396,11 +8396,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -16985,11 +16990,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -19477,11 +19487,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -19824,7 +19839,7 @@
       <div class='project-card'>
           <div class='project-name'>
               
-              <a href='-Users-test-project-beta/combined_transcripts.html'>Users/test/project/beta</a>
+              <a href='./-Users-test-project-beta/combined_transcripts.html'>Users/test/project/beta</a>
               
               
               <span class="transcript-link-hint">(← open combined transcript)</span>
@@ -19849,7 +19864,7 @@
       <div class='project-card'>
           <div class='project-name'>
               
-              <a href='-Users-test-project-alpha/combined_transcripts.html'>alpha</a>
+              <a href='./-Users-test-project-alpha/combined_transcripts.html'>alpha</a>
               
               
               <span class="transcript-link-hint">(← open combined transcript)</span>
@@ -19885,7 +19900,7 @@
           
           <div class='session-nav-item'
               >
-              <a href='-Users-test-project-alpha/session-session-abc12345.html'
+              <a href='./-Users-test-project-alpha/session-session-abc12345.html'
                   class='session-link'>
                   <div class='session-link-title'>
                       
@@ -22505,22 +22520,30 @@
               let inFlight = null;
               let lastQueryKey = '';
   
+              // Results are written as markup, links inside quoted
+              // attributes, so quotes are escaped too (the
+              // textContent/innerHTML idiom leaves them alone).
               function escapeHtml(text) {
-                  const div = document.createElement('div');
-                  div.textContent = text == null ? '' : String(text);
-                  return div.innerHTML;
+                  return (text == null ? '' : String(text))
+                      .replace(/&/g, '&amp;')
+                      .replace(/</g, '&lt;')
+                      .replace(/>/g, '&gt;')
+                      .replace(/"/g, '&quot;')
+                      .replace(/'/g, '&#39;');
               }
   
               // Highlight the searched terms inside an excerpt. The server
               // builds excerpts but deliberately does not mark them up, so
-              // escaping happens here, before any markup is introduced.
+              // escaping happens here: the terms are matched in the raw text
+              // and each piece is escaped on its own, so a term can't match
+              // inside an entity (`quot` in `&quot;`) and split it.
               //
               // The term rules mirror `search.fts_escape`: an unquoted word of
               // PREFIX_MIN characters or more matched as a prefix, so highlight
               // the whole word it was found in — highlighting `render` inside
               // `renderer` and leaving the rest plain would look like a bug.
               function highlight(text, query) {
-                  const safe = escapeHtml(text);
+                  const raw = text == null ? '' : String(text);
                   const patterns = [];
                   (query.match(/"[^"]*"\*?|\S+/g) || []).forEach((raw) => {
                       let term = raw;
@@ -22542,11 +22565,17 @@
                       // highlight past it would overstate the match.
                       patterns.push(prefix ? escaped + '[^\\W_]*' : escaped);
                   });
-                  if (!patterns.length) return safe;
-                  return safe.replace(
-                      new RegExp('(' + patterns.join('|') + ')', 'gi'),
-                      '<span class="search-highlight">$1</span>'
-                  );
+                  if (!patterns.length) return escapeHtml(raw);
+                  const pattern = new RegExp(patterns.join('|'), 'gi');
+                  let html = '';
+                  let last = 0;
+                  for (const match of raw.matchAll(pattern)) {
+                      html += escapeHtml(raw.slice(last, match.index)) +
+                          '<span class="search-highlight">' +
+                          escapeHtml(match[0]) + '</span>';
+                      last = match.index + match[0].length;
+                  }
+                  return html + escapeHtml(raw.slice(last));
               }
   
               // --- field selection -----------------------------------------
@@ -35825,11 +35854,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -52164,11 +52198,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -58678,11 +58717,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -58987,17 +59031,17 @@
           
           
           <div class='project-card mn-project'>
-              <div class='mn-prow'><span class='project-name'><a href='-Users-test-project-beta/combined_transcripts.html'>Users/test/project/beta</a></span>
+              <div class='mn-prow'><span class='project-name'><a href='./-Users-test-project-beta/combined_transcripts.html'>Users/test/project/beta</a></span>
               <span class='project-stats mn-pmeta' title='3 transcript files · 25 messages'>3 files · 25 msgs · <span class='mn-when' data-mn-from='2023-11-14T22:15:00Z'>2023-11-14</span></span>
               </div>
           </div>
           
           <div class='project-card mn-project'>
-              <details class='mn-pdetails'><summary class='mn-prow'><span class='project-name'><a href='-Users-test-project-alpha/combined_transcripts.html'>alpha</a></span>
+              <details class='mn-pdetails'><summary class='mn-prow'><span class='project-name'><a href='./-Users-test-project-alpha/combined_transcripts.html'>alpha</a></span>
               <span class='project-stats mn-pmeta' title='5 transcript files · 42 messages · Input: 1000 | Output: 2000 | Cache Creation: 500 | Cache Read: 1500 · 2025-01-01 09:00:00 to 2025-01-15 10:00:00 (UTC)'>1 session · 42 msgs · 3k in · 2k out · <span class='mn-when' data-mn-from='2025-01-01T09:00:00Z' data-mn-to='2025-01-15T10:00:00Z'>2025-01-01 – 2025-01-15</span></span>
               </summary>
               <div class='mn-sessions'>
-                  <a class='session-link mn-srow' href='-Users-test-project-alpha/session-session-abc12345.html'><span class='mn-sgut' title='2025-01-15 10:00:00 (UTC)'><span class='mn-sd'></span><span class='mn-st'></span></span><span class='mn-sbody'><span class='session-link-title'>Test session summary</span><span class='session-preview'>Hello, this is a test</span><span class='session-link-meta'>session- · 10 msgs</span></span></a>
+                  <a class='session-link mn-srow' href='./-Users-test-project-alpha/session-session-abc12345.html'><span class='mn-sgut' title='2025-01-15 10:00:00 (UTC)'><span class='mn-sd'></span><span class='mn-st'></span></span><span class='mn-sbody'><span class='session-link-title'>Test session summary</span><span class='session-preview'>Hello, this is a test</span><span class='session-link-meta'>session- · 10 msgs</span></span></a>
               </div>
               </details>
           </div>
@@ -62699,11 +62743,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -63016,13 +63065,13 @@
           
           <li class='project-tree-leaf'>
               <div class='project-card mn-project'>
-              <details class='mn-pdetails'><summary class='mn-prow'><span class='project-name'><a href='-Users-test-project-alpha/combined_transcripts.html'>alpha</a></span>
+              <details class='mn-pdetails'><summary class='mn-prow'><span class='project-name'><a href='./-Users-test-project-alpha/combined_transcripts.html'>alpha</a></span>
               <span class='project-stats mn-pmeta' title='5 transcript files · 42 messages · Input: 1000 | Output: 2000 | Cache Creation: 500 | Cache Read: 1500 · 2025-01-01 09:00:00 to 2025-01-15 10:00:00 (UTC)'>2 sessions · 42 msgs · 3k in · 2k out · <span class='mn-when' data-mn-from='2025-01-01T09:00:00Z' data-mn-to='2025-01-15T10:00:00Z'>2025-01-01 – 2025-01-15</span></span>
               <span class='project-teams mn-pextra'>teams <code>blue</code> <code>red</code></span>
               </summary>
               <div class='mn-sessions'>
-                  <a class='session-link mn-srow' href='-Users-test-project-alpha/session-def67890.html'><span class='mn-sgut' data-mn-ts='2025-01-02T08:30:00Z' data-mn-to='2025-01-02T09:00:00Z' title='2025-01-02 08:30:00 to 2025-01-02 09:00:00 (UTC)'><span class='mn-sd'>2025-01-02</span><span class='mn-st'>08:30</span></span><span class='mn-sbody'><span class='session-preview'>A session without a summary</span><span class='session-link-meta'>def67890 · 4 msgs</span></span></a>
-                  <a class='session-link mn-srow' href='-Users-test-project-alpha/session-session-abc12345.html'><span class='mn-sgut' title='2025-01-15 10:00:00 (UTC)'><span class='mn-sd'></span><span class='mn-st'></span></span><span class='mn-sbody'><span class='session-link-title'>Test session summary</span><span class='session-preview'>Hello, this is a test</span><span class='session-link-meta'>session- · 10 msgs</span></span></a>
+                  <a class='session-link mn-srow' href='./-Users-test-project-alpha/session-def67890.html'><span class='mn-sgut' data-mn-ts='2025-01-02T08:30:00Z' data-mn-to='2025-01-02T09:00:00Z' title='2025-01-02 08:30:00 to 2025-01-02 09:00:00 (UTC)'><span class='mn-sd'>2025-01-02</span><span class='mn-st'>08:30</span></span><span class='mn-sbody'><span class='session-preview'>A session without a summary</span><span class='session-link-meta'>def67890 · 4 msgs</span></span></a>
+                  <a class='session-link mn-srow' href='./-Users-test-project-alpha/session-session-abc12345.html'><span class='mn-sgut' title='2025-01-15 10:00:00 (UTC)'><span class='mn-sd'></span><span class='mn-st'></span></span><span class='mn-sbody'><span class='session-link-title'>Test session summary</span><span class='session-preview'>Hello, this is a test</span><span class='session-link-meta'>session- · 10 msgs</span></span></a>
               </div>
               </details>
           </div>
@@ -76126,11 +76175,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -87743,11 +87797,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -96835,11 +96894,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -105874,11 +105938,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -114858,11 +114927,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -123670,11 +123744,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -132287,11 +132366,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches
@@ -140853,11 +140937,16 @@
       }
   
       // Escape text for interpolation into innerHTML-backed markup — the
-      // indexed content is arbitrary conversation text.
+      // indexed content is arbitrary conversation text, and links (session
+      // ids) go inside quoted attributes, so quotes are escaped too: the
+      // textContent/innerHTML idiom leaves them alone.
       function escapeHtml(text) {
-          const div = document.createElement('div');
-          div.textContent = text ?? '';
-          return div.innerHTML;
+          return String(text ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
       }
   
       // Highlight text in search results (always case-insensitive). Matches

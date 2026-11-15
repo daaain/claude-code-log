@@ -177,7 +177,7 @@ class TestChoiceCarriesOver:
         page.locator("[data-mn-theme='dark']").click()
 
         # The project's name links to its combined transcript.
-        page.locator(f".project-name a[href^='{PROJECT}/']").click()
+        page.locator(f".project-name a[href^='./{PROJECT}/']").click()
         page.wait_for_load_state()
         assert page.url.endswith("combined_transcripts.html")
         expect(page.locator("html")).to_have_attribute("data-theme", "dark")
@@ -203,7 +203,7 @@ class TestChoiceCarriesOver:
 
         # A session row (inside the project's <details>) opens its page.
         project = page.locator(".mn-project").filter(
-            has=page.locator(f"a[href^='{PROJECT}/']")
+            has=page.locator(f"a[href^='./{PROJECT}/']")
         )
         project.locator("summary.mn-prow").click(position={"x": 4, "y": 8})
         project.locator(".mn-srow").first.click()

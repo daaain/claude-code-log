@@ -354,6 +354,10 @@ def format_websearch_output(output: WebSearchOutput) -> str:
 # -- TodoWrite Tool -----------------------------------------------------------
 
 
+_TODO_STATUSES = frozenset({"pending", "in_progress", "completed"})
+_TODO_PRIORITIES = frozenset({"high", "medium", "low"})
+
+
 def format_todowrite_input(todo_input: TodoWriteInput) -> str:
     """Format TodoWrite tool use content as a todo list.
 
@@ -379,8 +383,15 @@ def format_todowrite_input(todo_input: TodoWriteInput) -> str:
         priority = todo.priority or "medium"
         status_emoji = status_emojis.get(status, "⏳")
 
-        # CSS class for styling
-        item_class = f"todo-item {status} {priority}"
+        # CSS class for styling. Both values are free-form in the tool
+        # input, so only the ones the stylesheets know become classes —
+        # anything else would be written raw into the attribute.
+        classes = ["todo-item"]
+        if status in _TODO_STATUSES:
+            classes.append(status)
+        if priority in _TODO_PRIORITIES:
+            classes.append(priority)
+        item_class = " ".join(classes)
 
         id_html = f'<span class="todo-id">#{todo_id}</span>' if todo.id else ""
         todo_items.append(f"""

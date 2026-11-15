@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import os
 import re
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator
@@ -45,6 +46,7 @@ from .utils import (
     is_agent_session,
     parse_date_bounds,
     project_transcript_bytes,
+    relative_href,
     should_use_as_session_starter,
     create_session_preview,
     get_warmup_session_ids,
@@ -71,6 +73,12 @@ from .cache import (
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
+from .transcript_ids import (
+    is_plain_id,
+    sanitize_entry_ids,
+    session_file_name,
+    session_path,
+)
 from .factories.teammate_factory import find_team_lead_body
 from .models import (
     AiTitleTranscriptEntry,
@@ -569,6 +577,7 @@ def load_transcript(
     # Track unrecognized message types already warned about so we emit at
     # most one warning per distinct type per file (these tend to repeat a lot).
     warned_unrecognized_types: set[str | None] = set()
+    warned_bad_ids: set[str] = set()
 
     # With a store, read bytes rather than text: that yields both the
     # offset and the rolling hash a later tick needs to resume from what
@@ -616,6 +625,24 @@ def load_transcript(
                             f"Line {line_no} of {jsonl_path} is not a JSON object: {line}"
                         )
                         continue
+
+                    # Ids become file names, a `claude --resume` argument
+                    # and markup, so an invalid one is replaced before
+                    # anything below reads it (transcript_ids.py). The
+                    # value itself is never echoed: it may carry escapes.
+                    # Shown even in a silent (`--all-projects`) run: it is the
+                    # only sign that a transcript carried a crafted id.
+                    replaced = sanitize_entry_ids(entry_dict)
+                    if replaced:
+                        fields = [f for f in replaced if f not in warned_bad_ids]
+                        if fields:
+                            warned_bad_ids.update(fields)
+                            print(
+                                f"Warning: line {line_no} of {jsonl_path} has an "
+                                f"invalid {', '.join(fields)}; its session is "
+                                f"rendered under a quarantined id",
+                                file=sys.stderr,
+                            )
 
                     # Check for agentId BEFORE Pydantic parsing
                     # agentId can be at top level OR nested in toolUseResult
@@ -750,6 +777,11 @@ def load_transcript(
             jsonl_path.stem
         )  # e.g., "29ccd257-68b1-427f-ae5f-6524b7cb6f20"
         for agent_id in agent_ids:
+            # The id names a file to read: never one that could leave the
+            # session's directories (ingestion replaces invalid ids; this
+            # also covers ids reaching here from the sidecar or a cache).
+            if not is_plain_id(agent_id):
+                continue
             # Try legacy location first (same directory as session file)
             agent_file = parent_dir / f"agent-{agent_id}.jsonl"
             # Skip if the agent file is the same as the current file (self-reference)
@@ -1654,17 +1686,23 @@ def _resolve_session_source_files(
             name for name in session_files if not (directory_path / name).exists()
         ]
         if not session_files:
-            if strict or (directory_path / f"{sid}.jsonl").exists():
+            if strict or _own_file_exists(directory_path, sid):
                 return None
             continue  # archived: no source anywhere, nothing to render
         if missing:
             if strict or len(missing) != len(session_files):
                 return None
-            if (directory_path / f"{sid}.jsonl").exists():
+            if _own_file_exists(directory_path, sid):
                 return None
             continue  # archived: every mapped source is gone
         needed_files |= session_files
     return needed_files
+
+
+def _own_file_exists(directory_path: Path, session_id: str) -> bool:
+    """Whether ``<session_id>.jsonl`` exists; never for an id that isn't plain."""
+    path = session_path(directory_path, session_id)
+    return path is not None and path.exists()
 
 
 def _load_sessions_partial(
@@ -4127,7 +4165,7 @@ def convert_jsonl_to(
             view_files = [output_path] if write_combined else []
             if generate_individual_sessions and shown_sessions:
                 view_files += [
-                    effective_output_dir / f"session-{sid}{suffix}.{ext}"
+                    effective_output_dir / session_file_name(sid, f"{suffix}.{ext}")
                     for sid in sorted(shown_sessions)
                 ]
             existing = _first_existing(view_files)
@@ -5512,13 +5550,13 @@ def _generate_individual_session_files(
                 session_title += f" ({date_range_str})"
 
             # Check if session file needs regeneration
-            session_file_name = f"session-{session_id}{suffix}.{ext}"
-            session_file_path = output_dir / session_file_name
+            session_page_name = session_file_name(session_id, f"{suffix}.{ext}")
+            session_file_path = output_dir / session_page_name
 
             # Use incremental regeneration: check per-session staleness via
             # html_cache. Works for the marker-tracked formats (HTML +
             # Markdown) — rows are keyed by the variant-specific filename
-            # (session_file_name) and the check compares against the file's
+            # (session_page_name) and the check compares against the file's
             # real location (issue: keying on the default "session-{id}.html"
             # name / source dir made every Markdown or --output run
             # "not_cached" forever, re-rendering each session on every run).
@@ -5526,7 +5564,7 @@ def _generate_individual_session_files(
             # reads its own `version` field (see `_tracks_version_marker`).
             if cache_manager is not None and _tracks_version_marker(format):
                 is_stale, _reason = cache_manager.is_transcript_stale(
-                    session_file_name,
+                    session_page_name,
                     session_id,
                     output_dir=output_dir,
                     combined_linked=combined_available,
@@ -5559,7 +5597,7 @@ def _generate_individual_session_files(
                     RenderUnit(
                         kind="session",
                         key=session_id,
-                        file_name=session_file_name,
+                        file_name=session_page_name,
                         title=session_title,
                         # No combined file to point at — the back-link
                         # would 404, so leave it out. See
@@ -5802,7 +5840,7 @@ def generate_single_session_file(
         output_file = output
         output_dir = output.parent
     else:
-        output_file = input_path / f"session-{matched_id}{suffix}.{ext}"
+        output_file = input_path / session_file_name(matched_id, f"{suffix}.{ext}")
 
     # Generate content and write
     renderer = get_renderer(
@@ -6245,7 +6283,7 @@ def render_provider_wholesale(
             session_key = info.session_id
             session_title = info.title or f"{provider_name.title()}: {session_key}"
             if write_individual:
-                output_name = f"session-{session_key}{suffix}.{ext}"
+                output_name = session_file_name(session_key, f"{suffix}.{ext}")
                 source_changed = (
                     info.source_path is not None
                     and info.source_path.resolve() in modified_sources
@@ -6661,7 +6699,7 @@ def _window_view_files(
             yield plan.dest_dir / combined_name
         if generate_individual_sessions and plan.window is not None:
             for sid in sorted(plan.window.session_ids):
-                yield plan.dest_dir / f"session-{sid}{session_suffix}"
+                yield plan.dest_dir / session_file_name(sid, session_suffix)
 
 
 def _plan_project(
@@ -7034,7 +7072,7 @@ def _write_recent_page(
     for summary in project_summaries if session_pages else []:
         for session in summary.get("sessions", []):
             if session.get("id") and session.get("file"):
-                links[str(session["id"])] = str(session["file"])
+                links[str(session["id"])] = relative_href(str(session["file"]))
     label = date_window_label(from_date, to_date)
     try:
         from .html.renderer import generate_recent_html

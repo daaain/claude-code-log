@@ -1185,6 +1185,10 @@ def get_template_environment() -> Environment:
     # Cast to Any to bypass Jinja2's overly strict globals type
     globals_dict: Any = env.globals
     globals_dict["starts_with_emoji"] = starts_with_emoji
+    # Links built from directory names and session ids (the index page).
+    from ..utils import relative_href
+
+    env.filters["rel_href"] = relative_href
     # Minimal-theme gutter/meta helpers — called only from the template's
     # `{% if minimal %}` branches, so classic output never touches them.
     from . import minimal_icons, minimal_theme

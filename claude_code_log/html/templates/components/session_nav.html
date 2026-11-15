@@ -54,7 +54,7 @@
                 infix from the converter), and fall back to the legacy
                 `{link_prefix}session-{id}.html` shape for call sites
                 that don't populate it. -#}
-            <a href='{% if mode == "expandable" %}{% if session.file %}{{ session.file }}{% else %}{{ link_prefix }}session-{{ session.id }}.html{% endif %}{% else %}{{ link_prefix }}#msg-d-{{ session.message_index }}{% endif %}'
+            <a href='{% if mode == "expandable" %}{% if session.file %}{{ session.file|rel_href }}{% else %}{{ (link_prefix ~ 'session-' ~ session.id ~ '.html')|rel_href }}{% endif %}{% else %}{{ link_prefix }}#msg-d-{{ session.message_index }}{% endif %}'
                 class='session-link'>
                 <div class='session-link-title'>
                     {% if session.summary %}

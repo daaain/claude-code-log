@@ -13,6 +13,7 @@ from typing import Any, Callable, Sequence, cast
 
 from pydantic import BaseModel
 
+from ..transcript_ids import sanitize_entry_ids
 from ..models import (
     # Content types
     ContentItem,
@@ -236,6 +237,9 @@ def create_transcript_entry(data: dict[str, Any]) -> TranscriptEntry:
     Raises:
         ValueError: If the data doesn't match any known transcript entry type
     """
+    # Every entry — parsed from JSONL or rebuilt from a cache row — passes
+    # here, so an invalid id never reaches a model (transcript_ids.py).
+    sanitize_entry_ids(data)
     entry_type = data.get("type")
     creator = ENTRY_CREATORS.get(entry_type)  # type: ignore[arg-type]
     if creator is not None:

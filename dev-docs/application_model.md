@@ -1893,6 +1893,28 @@ allowlist would anticipate, and none of those can execute script.
 `test/test_xss_browser.py` and `test/test_markdown_rendering.py` pin
 it.
 
+**Attributes need their quotes escaped, and links a fixed start.**
+Transcript values and directory names also land inside attributes.
+Every link built from a project directory name or a session id goes
+through `utils.relative_href`: the index page's project, variant and
+session links (the `rel_href` Jinja filter), the recent page's payload,
+and `search.build_link` for `serve`'s archive search. It percent-encodes
+each path segment, so a quote can't close the `href`, and starts the
+link with `./`, so a directory named `javascript:alert(1)` can't read as
+a URL scheme. Leading empty segments are dropped, so no link is absolute
+or a `//host` network path, and a backslash is a separator only on
+Windows: anywhere else it is part of a directory name and is encoded,
+since a browser would read `\\evil.example\x` as `//evil.example/x`.
+The search pages write result rows as markup with
+`escapeHtml` (`components/search.html`, `archive_search.html`, whose
+helper `minimal/search_rows.js` shares), which escapes `& < > " '` by
+string replacement: the `textContent`/`innerHTML` idiom leaves quotes
+alone, and the index finder reads its links back with
+`getAttribute('href')`, which decodes `&#34;` to `"`. A CSS class taken
+from tool input passes an allow-list instead (TodoWrite's `status` and
+`priority`). `test/test_xss_attributes.py` and
+`test/test_xss_attributes_browser.py` pin it.
+
 **Front matter is data, and only at the top of a whole body.** Read as
 plain Markdown, the closing `---` of a YAML front-matter block is a
 setext underline, so the block became one heading. A whole body — a
@@ -2283,6 +2305,45 @@ Cache reads/writes happen *in parallel* with the main pipeline:
 `cache.py` is consulted before parsing (cache hit → skip parse), after
 rendering (write the rendered HTML), and during TUI navigation (the
 TUI never re-parses).
+
+**Ids are checked where entries are read.** A transcript's `sessionId`
+and `agentId` become file names (`session-<id>.html`, `<id>.jsonl`,
+`agent-<id>.jsonl`), the `claude --resume` argument, links and Textual
+markup, and they are as untrusted as the content. Claude Code writes
+UUIDs and short hex ids, so
+[`transcript_ids.py`](../claude_code_log/transcript_ids.py) holds them to
+`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`; a session id may also carry the
+loader's own `#agent-<id>` suffixes ([agents.md](agents.md)), which reach
+the cache. `sanitize_entry_ids` replaces an invalid `sessionId`,
+`agentId`, `spawnedAgentId` or `toolUseResult.agentId` with
+`quarantined-<hash>`: stable, so the bad session's entries still group
+and render, under a name nothing downstream can misread. It runs in the
+JSONL parse loop (which warns on stderr with the file and line, never
+the value) and in `create_transcript_entry`, which every cache row
+passes through on load; the Codex provider applies the same rule to a
+rollout's thread id. The sinks check again, because a cache built
+elsewhere never meets the parser: `session_path` and
+`session_file_name` refuse a non-plain id, agent-file lookups skip one,
+the TUI resumes with `claude --resume=<id>` (attached, so the id can't
+be read as another option), a cached page path is deleted only when it
+is a bare `combined_transcripts*` name, and `--expand-paths` drops `..`
+from a recorded `cwd` and skips a project that would still land outside
+`-o`. The parse loop's warning is printed even in a silent
+(`--all-projects`) run. Caches built before 1.7.1 are rebuilt once
+(§ 2.3), since their derived rows hold the original ids.
+
+The TUI never splices a transcript or path value into Textual markup:
+Rich's `escape` misses tags Textual's own parser accepts (`[ @click=…]`
+with a leading space, `[$var]`), and malformed markup raises. Labelled
+values go through `Content.from_markup("[bold]…[/bold] $value",
+value=…)`, and notifications and plain `Static`s that carry data use
+`markup=False`; only `DataTable` cells, which Rich parses, keep Rich's
+escaper. A quarantined session is listed as current while a file it
+came from (the cache's session-to-file map) exists, is shown by its
+hash with a `[QUARANTINED]` marker, and can't be resumed, archived or
+restored: it has no `<id>.jsonl` of its own. Table rows are keyed by
+the full session id, so selection never depends on the displayed
+prefix.
 
 ---
 

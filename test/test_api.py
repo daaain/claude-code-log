@@ -160,7 +160,7 @@ def test_search_filtered_by_session(client: Any) -> None:
 def test_results_carry_a_deep_link(client: Any) -> None:
     _, body = client("/api/search", q="sqlite")
     link = body["results"][0]["link"]
-    assert link.startswith("-home-u-alpha/session-s-a.html?")
+    assert link.startswith("./-home-u-alpha/session-s-a.html?")
     assert "uuid=u-2" in link
     assert "q=sqlite" in link
 

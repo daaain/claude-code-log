@@ -1112,7 +1112,7 @@ def test_payload_lists_recent_sessions_across_projects(archive: Path) -> None:
     assert session["state"] == "asked"
     assert session["project"] == "foldyard"
     assert session["short"] == "aaaa1111"
-    assert session["href"] == "-home-u-code-foldyard/session-aaaa1111-recent.html"
+    assert session["href"] == "./-home-u-code-foldyard/session-aaaa1111-recent.html"
     assert payload["generatedAt"] == NOW_MS
     assert payload["v"] == 1
 

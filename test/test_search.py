@@ -357,7 +357,7 @@ def test_mixing_absolute_and_delta_is_rejected() -> None:
 def test_link_carries_both_uuid_and_query() -> None:
     """uuid anchors the card; q lets in-page search open collapsed details."""
     link = build_link("proj-slug", "sess-1", "uuid-9", "assistant", "needle")
-    assert link.startswith("proj-slug/session-sess-1.html?")
+    assert link.startswith("./proj-slug/session-sess-1.html?")
     assert "uuid=uuid-9" in link
     assert "q=needle" in link
 
@@ -370,7 +370,7 @@ def test_types_without_a_rendered_card_get_session_links(message_type: str) -> N
 
 
 def test_link_without_a_session_falls_back_to_the_project() -> None:
-    assert build_link("proj", None, "uuid", "assistant", "q") == "proj/"
+    assert build_link("proj", None, "uuid", "assistant", "q") == "./proj/"
 
 
 @pytest.mark.parametrize(
@@ -527,7 +527,7 @@ def test_search_filters_by_session(cache: sqlite3.Connection) -> None:
 def test_search_results_are_linkable(cache: sqlite3.Connection) -> None:
     ensure_index(cache)
     result = search(cache, "sqlite")[0]
-    assert result.link == "-home-u-alpha/session-sess-1.html?uuid=uuid-2&q=sqlite"
+    assert result.link == "./-home-u-alpha/session-sess-1.html?uuid=uuid-2&q=sqlite"
     assert result.field == "text"
     assert "sqlite" in result.snippet
 
@@ -849,7 +849,7 @@ def test_windows_style_project_paths_produce_portable_links(tmp_path: Path) -> N
     hits = search(conn, "windows")
     assert hits, "expected a hit"
     assert hits[0].project_slug == "-home-u-alpha"
-    assert hits[0].link.startswith("-home-u-alpha/session-")
+    assert hits[0].link.startswith("./-home-u-alpha/session-")
 
 
 def test_searching_before_the_index_exists_raises(cache: sqlite3.Connection) -> None:

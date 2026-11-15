@@ -51,6 +51,7 @@ from .migrations.runner import (
     check_sqlite_version,
 )
 from .models import RenderingDepth
+from .transcript_ids import session_file_name
 from .render_pool import resolve_render_jobs
 from .search import (
     ENV_INDEX_FIELDS,
@@ -229,7 +230,7 @@ def _render_provider_input_file(
             lambda tmpdir: render(tmpdir / f"session.{extension}"),
         )
         return
-    filename = f"session-{session_key}.{extension}"
+    filename = session_file_name(session_key, f".{extension}")
     if output is None:
         destination = Path.cwd() / filename
     elif output_path_is_file(output):
@@ -1690,7 +1691,9 @@ def convert(
                 )
                 return
 
-            filename = f"session-{matched_id}.{get_file_extension(output_format)}"
+            filename = session_file_name(
+                matched_id, f".{get_file_extension(output_format)}"
+            )
             if output is None:
                 destination = Path.cwd() / filename
             elif _output_path_is_file(output):

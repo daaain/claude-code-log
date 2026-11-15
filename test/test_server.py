@@ -370,3 +370,20 @@ def test_server_reports_its_bound_port(archive: Path) -> None:
     with ArchiveServer(archive, port=0) as srv:
         assert srv.port > 0
         assert srv.url == f"http://127.0.0.1:{srv.port}"
+
+
+def test_api_500_does_not_echo_the_exception(
+    archive: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """An exception's text can carry local paths; it goes to stderr only."""
+
+    def boom(_params: dict[str, str]) -> Any:
+        raise RuntimeError("/home/someone/private/path")
+
+    with ArchiveServer(archive, port=0, api_routes={"/api/boom": boom}) as srv:
+        status, body, _ = _get(f"{srv.url}/api/boom")
+    assert status == 500
+    assert b"private" not in body
+    err = capfd.readouterr().err
+    assert "RuntimeError: /home/someone/private/path" in err
+    assert "Traceback" in err

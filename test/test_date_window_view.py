@@ -140,8 +140,13 @@ def _hrefs(text: str) -> Set[str]:
     """The relative page links in an index page or the recent-data script."""
     found = re.findall(r"""href=['"]([^'"#?]+)""", text)
     found += re.findall(r'"href":\s*"([^"#?]+)"', text)
-    # Not the search script's template literals, nor absolute links.
-    return {link for link in found if not link.startswith(("http", "/", "$"))}
+    # Not the search script's template literals, nor absolute links; the
+    # pages write their relative links as `./…` (`utils.relative_href`).
+    return {
+        link.removeprefix("./")
+        for link in found
+        if not link.startswith(("http", "/", "$"))
+    }
 
 
 def _session_ids(names: Set[str]) -> Set[str]:

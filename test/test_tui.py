@@ -457,6 +457,8 @@ class TestSessionBrowser:
         with patch("claude_code_log.tui.webbrowser.open") as mock_browser:
             async with app.run_test() as pilot:
                 await pilot.pause(0.1)
+                # Mounting selects the cursor's row; pick session-123 explicitly.
+                app.selected_session_id = "session-123"
 
                 # Test export action
                 app.action_export_selected()
@@ -499,6 +501,8 @@ class TestSessionBrowser:
 
             async with app.run_test() as pilot:
                 await pilot.pause(0.1)
+                # Mounting selects the cursor's row; pick session-123 explicitly.
+                app.selected_session_id = "session-123"
 
                 # Test resume action
                 app.action_resume_selected()
@@ -507,7 +511,7 @@ class TestSessionBrowser:
                 mock_suspend.assert_called_once()
                 # Check that execvp was called with correct arguments
                 mock_execvp.assert_called_once_with(
-                    "claude", ["claude", "-r", "session-123"]
+                    "claude", ["claude", "--resume=session-123"]
                 )
 
     @pytest.mark.asyncio
@@ -978,7 +982,7 @@ class TestIntegration:
                 # Stats should show zero sessions
                 stats = cast(Label, app.query_one("#stats"))
                 stats_text = str(stats.content)
-                assert "Sessions:[/bold] 0" in stats_text
+                assert "Sessions: 0" in stats_text
 
     @pytest.mark.asyncio
     async def test_archived_project_loads_archived_sessions(self):
@@ -1240,11 +1244,11 @@ class TestUnifiedSessionList:
                 stats_text = str(stats.content)
 
                 # Should show combined sessions count (2)
-                assert "Sessions:[/bold] 2" in stats_text
+                assert "Sessions: 2" in stats_text
                 # Should show combined messages count (5 + 3 = 8)
-                assert "Messages:[/bold] 8" in stats_text
+                assert "Messages: 8" in stats_text
                 # Should show combined tokens (100+200+50+100 = 450)
-                assert "Tokens:[/bold] 450" in stats_text
+                assert "Tokens: 450" in stats_text
                 # Should indicate archived count
                 assert "1 archived" in stats_text
 

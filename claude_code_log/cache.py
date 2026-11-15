@@ -298,6 +298,17 @@ def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool
     return bool(cached) != desired
 
 
+def _is_bare_page_name(name: object) -> bool:
+    """True for a combined page's own file name (``combined_transcripts*.html``)."""
+    return (
+        isinstance(name, str)
+        and name.startswith("combined_transcripts")
+        and "/" not in name
+        and "\\" not in name
+        and name.endswith((".html", ".md"))
+    )
+
+
 @functools.lru_cache(maxsize=1)
 def get_library_version() -> str:
     """Get the current library version from package metadata or pyproject.toml.
@@ -3471,6 +3482,12 @@ class CacheManager:
             # from them, and nothing about the source files changes to
             # trigger a reparse.
             "1.6.0": "1.7.0",
+            # 1.7.1 replaces invalid transcript session/agent ids with a
+            # quarantined stand-in where entries are read. Entry rows pass
+            # through that check again on load, but the derived rows
+            # (sessions, rendered-page records, the search index) of a
+            # cache built earlier still hold the original ids.
+            "1.7.0": "1.7.1",
         }
 
         cache_ver = version.parse(cache_version)
@@ -4268,7 +4285,13 @@ class CacheManager:
                 """SELECT html_path FROM html_pages WHERE project_id = ?""",
                 (self._project_id,),
             ).fetchall()
-            html_paths = [row["html_path"] for row in rows]
+            # The callers delete these files. A row is data from a cache
+            # that may have been built elsewhere, so only a bare page name
+            # is returned: never a path that could name a file outside the
+            # project's output directory.
+            html_paths = [
+                row["html_path"] for row in rows if _is_bare_page_name(row["html_path"])
+            ]
 
             # Delete all pages (cascade deletes page_sessions)
             conn.execute(

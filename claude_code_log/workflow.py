@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from claude_code_log.transcript_ids import is_plain_id
+
 logger = logging.getLogger(__name__)
 
 _WF_META_RE = re.compile(
@@ -435,6 +437,10 @@ def parse_workflow_run(
 
     agents: list[WorkflowAgent] = []
     for aid in all_ids:
+        # Journal and snapshot ids are transcript data; one that could name
+        # a file outside the run directory is dropped (transcript_ids.py).
+        if not is_plain_id(aid):
+            continue
         meta = agent_meta.get(aid, {})
         agent_file = run_dir / f"agent-{aid}.jsonl"
         entries: list[Any] = []

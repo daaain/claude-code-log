@@ -82,7 +82,7 @@
             {% if project.combined_suppressed %}
             <span class="project-name-text">{{ project.display_name }}</span>
             {% else %}
-            <a href='{{ project.html_file }}'>{{ project.display_name }}</a>
+            <a href='{{ project.html_file|rel_href }}'>{{ project.display_name }}</a>
             {% endif %}
             {% if project.is_archived %}
             <span class="archived-badge">Archived</span>
@@ -94,7 +94,7 @@
         <div class='project-variants'>
             <span class="variant-hint">Variants:</span>
             {% for variant in project.html_variants %}
-            <a class='variant-link' href='{{ variant.file }}'>{{ variant.label }}</a>
+            <a class='variant-link' href='{{ variant.file|rel_href }}'>{{ variant.label }}</a>
             {% endfor %}
         </div>
         {% endif %}
