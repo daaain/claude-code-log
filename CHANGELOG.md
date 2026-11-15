@@ -6,7 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.8.0] - 2026-11-15
+
+### Security
+
+1.8.0 is the first release on PyPI with these fixes (1.7.1 was tagged but never
+published). Please upgrade; the advisories have the details.
+
+- **Markdown output no longer carries raw HTML or harmful links from transcripts**
+  ([GHSA-3jq4-r9jm-q682](https://github.com/daaain/claude-code-log/security/advisories/GHSA-3jq4-r9jm-q682)):
+  message text in `--format md` output could hold HTML or `javascript:` links that
+  run in a Markdown viewer which renders them.
+- **Transcript values are escaped in HTML attributes**
+  ([GHSA-3xqc-5553-2xpg](https://github.com/daaain/claude-code-log/security/advisories/GHSA-3xqc-5553-2xpg)):
+  a session id, project directory or TodoWrite status could break out of an
+  attribute in the generated pages and search results.
+- **Transcript ids are validated**
+  ([GHSA-53rg-36px-8vpj](https://github.com/daaain/claude-code-log/security/advisories/GHSA-53rg-36px-8vpj)):
+  an invalid `sessionId` or `agentId` is quarantined with a warning, so it can no
+  longer reach file paths, the `claude` command line when resuming from the TUI,
+  or terminal markup.
+
+### Changed
+
+- **Read the stored snapshots as UTF-8 in the version guard**
+- **Take the backtracking out of the Markdown gate's line regexes**
+- **Keep the version out of the minimal theme's stored snapshots**
+
+
 ## [1.7.1] - 2026-11-15
+
+Tagged but not published to PyPI (CI failed on the release commit); everything
+below ships in 1.8.0, including the security fixes listed there.
 
 ### Changed
 
