@@ -371,12 +371,21 @@ def _single_line(text: str) -> str:
     return _normalize_breaks(text).replace("\n", " ")
 
 
+# The container prefix a line may open with: blockquote markers, list
+# markers and indentation. Each list marker is followed by one blank and
+# then any run of blanks and ``>``: written as ``[ \t]+[ \t>]*``, a run of
+# blanks could split between the two in many ways, and each further marker
+# multiplied them, so a line of ``-  -  -  …`` that then failed to match
+# backtracked exponentially. Here every character has one place to go.
+_CONTAINER_PREFIX = r"[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t][ \t>]*)*"
+
 # A link reference definition: ``[label]: target`` at the start of a line.
-# Any container prefix (blockquote markers, list markers, indentation) may
-# come first: a definition is valid inside a quote or a list item.
+# Any container prefix may come first: a definition is valid inside a quote
+# or a list item. The target may sit on the next line (``(?:[ \t]*\n)?``,
+# the same strings as ``[ \t]*\n?[ \t>]*`` without its quadratic split).
 _DEFINITION_RE = re.compile(
-    r"(?m)^([ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+[ \t>]*)*)"
-    r"\[([^\]\n]{1,999})\]:[ \t]*\n?[ \t>]*<?([^\s>]+)"
+    rf"(?m)^({_CONTAINER_PREFIX})"
+    r"\[([^\]\n]{1,999})\]:(?:[ \t]*\n)?[ \t>]*<?([^\s>]+)"
 )
 
 
@@ -459,9 +468,7 @@ def _inert_literal(source: str) -> str:
 
 # A line opening with a run of three or more backticks, after any container
 # prefix (blockquote markers, list markers, indentation).
-_BACKTICK_RUN_LINE_RE = re.compile(
-    r"[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+[ \t>]*)*`{3,}"
-)
+_BACKTICK_RUN_LINE_RE = re.compile(rf"{_CONTAINER_PREFIX}`{{3,}}")
 
 
 def _code_span_as_html(value: str) -> str:
@@ -488,9 +495,7 @@ _ASCII_PUNCTUATION = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 
 
 # A line whose first thing, after any container prefix, is a tag.
-_TAG_LINE_START_RE = re.compile(
-    r"(?m)^[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+[ \t>]*)*<[A-Za-z/!?]"
-)
+_TAG_LINE_START_RE = re.compile(rf"(?m)^{_CONTAINER_PREFIX}<[A-Za-z/!?]")
 
 
 def _open_html_blocks(text: str, rounds: int = 64) -> tuple[str, bool]:

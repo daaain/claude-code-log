@@ -732,3 +732,29 @@ def test_a_code_span_around_a_first_pass_marker_keeps_it() -> None:
     twice = _gate_body(f"[`{first}<z>`]")
     assert "\ue000" not in twice and "\ue001" not in twice
     assert _raw_html_payloads(twice) == []
+
+
+# A container prefix of many list markers with wide blanks between them
+# used to backtrack exponentially (four times longer per two markers) in
+# every regex that allows one, and a definition with a long run of blanks
+# and no target took quadratic time. 26 markers took several seconds per
+# regex, a few more would take hours; now each body takes milliseconds.
+_MARKERS = "-  " * 26
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(f"{_MARKERS}x\n[a]: y", id="definition-prefix"),
+        pytest.param("[a]:" + " " * 30000, id="definition-blanks"),
+        pytest.param(f"{_MARKERS}x <b>", id="tag-line-start"),
+        pytest.param(f"{_MARKERS}x `<b>`", id="backtick-run-line"),
+    ],
+)
+def test_hostile_container_prefixes_gate_in_linear_time(body: str) -> None:
+    import time
+
+    started = time.perf_counter()
+    gated = _gate_body(body)
+    assert time.perf_counter() - started < 1.0
+    assert _raw_html_payloads(gated) == []

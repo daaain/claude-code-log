@@ -1279,7 +1279,7 @@ def _replace_with_retry(tmp_path: Path, path: Path) -> None:
 
 # C0 and C1 control characters except tab: a terminal acts on them (clear
 # the screen, set the title, OSC 52 clipboard writes).
-_CONTROL_CHARS_RE = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f]")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f]")
 
 
 def printable(value: object) -> str:
