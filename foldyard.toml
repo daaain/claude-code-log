@@ -103,7 +103,7 @@ recommend = [
 # below it. Same progressive opt-in as the rest of this file.
 [claude]
 keyless = "oauth"      # Bearer on api.anthropic.com ← `claude setup-token` on the host
-transcript_sync_seconds = 10
+transcript_sync_seconds = 5
 system_prompt = """
 You are root in this project's foldyard dev box, started by `fy claude` with permission
 prompts skipped. Orientation, so you don't have to re-derive it:
@@ -269,3 +269,6 @@ install = "uv run --frozen playwright install chromium"
 
 # VS Code attach (`fy code`) — persist the vscode-server volume across box recreations.
 [vscode]
+extensions = ["anthropic.claude-code", "tamasfe.even-better-toml"]
+[vscode.settings]
+"remote.autoForwardPorts" = false

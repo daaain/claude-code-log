@@ -341,6 +341,57 @@ example:
 backup:
     rsync -a ~/.claude/projects ~/.claude-backup/projects
 
+# A copy of your real ~/.claude/projects in .ccl-data/projects, to experiment on
+# without touching the original. Both recipes run on your computer, not in a dev
+# box. In a box, keep the SQLite cache off the shared mount:
+#   CLAUDE_CODE_LOG_CACHE_PATH=~/ccl-cache.db just cli .ccl-data/projects ...
+# CCL's own output (top-level *.html and cache db; per project *.html, images/,
+# cache/) is never carried over: the clone deletes it, the sync skips it.
+_ccl_src := env_var('HOME') / ".claude/projects"
+_ccl_dest := ".ccl-data/projects"
+
+_host-only:
+    @if [ -n "${IN_DEVBOX:-}" ]; then echo "✗ run this on your computer: it reads your real ~/.claude/projects" >&2; exit 1; fi
+
+# Deletes any existing copy, so it always starts fresh. A copy-on-write clone
+# (`cp -c` on macOS, `--reflink=auto` elsewhere): near-instant, and it takes no
+# extra disk until a file changes. Clear the box's cache db too if you use one.
+# Replace .ccl-data/projects with a fresh clone of your real transcripts
+clone-real-transcripts: _host-only
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{ _ccl_src }}" dest="{{ _ccl_dest }}"
+    rm -rf "$dest"
+    mkdir -p "$(dirname "$dest")"
+    echo "▶ cloning $src → $dest"
+    if [ "$(uname)" = Darwin ]; then
+        cp -Rc "$src" "$dest"
+    else
+        cp -R --reflink=auto "$src" "$dest"
+    fi
+    find "$dest" -mindepth 1 -maxdepth 1 \( -name '*.html' -o -name 'claude-code-log-cache.db*' \) -exec rm -rf {} +
+    find "$dest" -mindepth 2 -maxdepth 2 \( -name '*.html' -o -name images -o -name cache \) -exec rm -rf {} +
+    echo "✓ $(du -sh "$dest" | awk '{print $1}') in $dest"
+
+# New transcripts come in, grown ones are updated, nothing is deleted, and a
+# transcript an experiment changed is restored from the original.
+# Bring newer transcripts into .ccl-data/projects, keeping CCL's output there
+sync-real-transcripts: _host-only
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{ _ccl_src }}" dest="{{ _ccl_dest }}"
+    if [ ! -d "$dest" ]; then
+        echo "✗ no copy at $dest yet: run \`just clone-real-transcripts\` first" >&2
+        exit 1
+    fi
+    echo "▶ syncing newer transcripts from $src → $dest"
+    rsync -a \
+        --exclude '/*.html' --exclude '/*/*.html' \
+        --exclude '/*/images/' --exclude '/*/cache/' \
+        --exclude '/claude-code-log-cache.db*' \
+        "$src/" "$dest/"
+    echo "✓ $(du -sh "$dest" | awk '{print $1}') in $dest"
+
 clear-cache:
     just cli --clear-cache
     just cli --clear-html
