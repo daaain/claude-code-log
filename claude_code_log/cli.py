@@ -782,16 +782,20 @@ def _clear_caches(input_path: Path, all_projects: bool) -> None:
         click.echo(f"Warning: Failed to clear cache: {e}")
 
 
-def _list_generated_outputs(directory: Path, file_ext: str) -> list[Path]:
+def _list_generated_outputs(
+    directory: Path, file_ext: str, *, strict: bool = False
+) -> list[Path]:
     """Return only files this tool generates, not every file with the extension.
 
     Safe for JSON in particular, where the project directory may contain
-    unrelated user `.json` files that must not be deleted.
+    unrelated user `.json` files that must not be deleted. ``strict``
+    applies the same naming rule to every format: for a directory
+    ``--output``, which may be a vault of the user's own pages.
     """
-    if file_ext == "json":
+    if file_ext == "json" or strict:
         return [
-            *directory.glob("combined_transcripts*.json"),
-            *directory.glob("session-*.json"),
+            *directory.glob(f"combined_transcripts*.{file_ext}"),
+            *directory.glob(f"session-*.{file_ext}"),
         ]
     return list(directory.glob(f"*.{file_ext}"))
 
@@ -804,7 +808,7 @@ def _clear_unreferenced_images(directory: Path, file_ext: str) -> int:
         return 0
     from .image_export import prune_unreferenced_images
 
-    return prune_unreferenced_images(directory, grace_seconds=0)
+    return prune_unreferenced_images(directory, grace_seconds=0) or 0
 
 
 def _clear_output_files(
@@ -877,7 +881,9 @@ def _clear_output_files(
         elif input_path.is_dir():
             # Clear output files for single directory
             click.echo(f"Clearing {ext_upper} files for {input_path}...")
-            output_files = _list_generated_outputs(input_path, file_ext)
+            output_files = _list_generated_outputs(
+                input_path, file_ext, strict=output_dir is not None
+            )
             for output_file in output_files:
                 output_file.unlink()
             images_removed = _clear_unreferenced_images(input_path, file_ext)
@@ -2228,19 +2234,16 @@ def convert(
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
             theme=resolved_theme,
-            # An explicit `-o` *file* always regenerates: the version-marker
-            # skip only knows the embedded version, not which source produced
-            # the file, so it would keep stale content at a user-chosen path
-            # (issue #221). A single transcript into an `-o` directory too:
-            # its page is named after the file alone, so another source of
-            # the same name would pass the same check. A project into an
-            # `-o` directory keeps the cache's per-source incremental skip
-            # (is_transcript_stale), which already tracks the source (a
-            # different transcript to the same dir still regenerates), and
-            # `--all-projects` calls this with output=None anyway, so its
-            # skip is never forced.
-            force_regenerate=output is not None
-            and (_output_path_is_file(output) or input_path.is_file()),
+            # An explicit `-o` always regenerates: the version-marker skip
+            # only knows the embedded version, not which source produced the
+            # file, so it would keep stale content at a user-chosen path
+            # (issue #221). A directory too: a single transcript's page is
+            # named after the file alone, and a project's combined page
+            # after nothing of the project, while the cache's skip
+            # (is_transcript_stale) checks the version and the message
+            # count, which another source can match. `--all-projects` calls
+            # this with output=None, so its skip is never forced.
+            force_regenerate=output is not None,
             report=report,
             # A single-project conversion has the whole machine to itself,
             # so `--jobs` is the cap for its render fan-out. Whether that

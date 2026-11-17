@@ -157,6 +157,21 @@ def _oriented_size(im: "Image.Image") -> tuple[int, int]:
     return width, height
 
 
+# The Pillow decoder for each media type an image may be exported as, and
+# the only one tried for it. Image.open picks a decoder from the bytes, so
+# without the list a transcript image declared as PNG could reach any of
+# Pillow's ~40 decoders (TIFF, FlashPix, PDF, EPS, ...), where most of its
+# security fixes land.
+_DECODERS = {
+    "image/png": ("PNG",),
+    "image/jpeg": ("JPEG",),
+    "image/gif": ("GIF",),
+    "image/webp": ("WEBP",),
+}
+# What an exported file on disk can be: the encoder's output or the source.
+_ON_DISK_DECODERS = ("AVIF", "WEBP", "PNG", "JPEG", "GIF")
+
+
 def _compress(
     raw: bytes, media_type: str
 ) -> tuple[bytes, str, Optional[int], Optional[int]]:
@@ -171,7 +186,7 @@ def _compress(
     try:
         from PIL import Image, ImageOps
 
-        im = Image.open(io.BytesIO(raw))
+        im = Image.open(io.BytesIO(raw), formats=_DECODERS.get(media_type, ()))
         with im:
             size = _oriented_size(im)
             encoder = _encoder()
@@ -213,7 +228,7 @@ def _image_size_on_disk(path: Path) -> tuple[Optional[int], Optional[int]]:
     try:
         from PIL import Image
 
-        im = Image.open(path)
+        im = Image.open(path, formats=_ON_DISK_DECODERS)
         with im:
             return _oriented_size(im)
     except Exception:
@@ -493,9 +508,11 @@ def _references_in(page: Path) -> set[bytes]:
 
 def prune_unreferenced_images(
     output_dir: Path, *, grace_seconds: float = PRUNE_GRACE_SECONDS
-) -> int:
+) -> Optional[int]:
     """Delete the exported images in ``output_dir/images`` that no page in
-    ``output_dir`` references, and return how many went.
+    ``output_dir`` references, and return how many went: None when the
+    scan could not finish (a page or the folder unreadable), so nothing
+    was removed and the caller should try again later.
 
     Every HTML and Markdown page in the directory counts, whichever run or
     format wrote it, so an image is only removed once nothing beside it
@@ -514,7 +531,7 @@ def prune_unreferenced_images(
                 referenced |= _references_in(page)
         candidates = list(images_dir.iterdir())
     except OSError:
-        return 0
+        return None
     cutoff = time.time() - grace_seconds
     removed = 0
     for path in candidates:
@@ -547,6 +564,9 @@ def sweep_images_once(output_dir: Path, version: str) -> int:
     except OSError:
         pass
     removed = prune_unreferenced_images(output_dir)
+    if removed is None:
+        # Not swept: leave the marker for the next conversion to retry.
+        return 0
     try:
         if marker.parent.is_dir():
             marker.write_text(version + "\n", encoding="utf-8")

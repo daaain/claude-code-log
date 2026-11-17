@@ -2,6 +2,7 @@
 
 import pytest
 from pathlib import Path
+from typing import cast
 
 from claude_code_log.image_export import (
     _encoding_tag,
@@ -493,9 +494,9 @@ class TestExportCompressedImage:
         assert result is not None
         assert result.src.endswith(encoder[1]), "expected a re-encode, not the source"
         with Image.open(tmp_path / result.src) as out:
-            rgba = out.convert("RGBA")
-            assert rgba.getpixel((250, 100))[3] < 16  # keyed: transparent
-            assert rgba.getpixel((50, 100))[3] > 240  # noise: opaque
+            alpha = out.convert("RGBA").getchannel("A")
+            assert cast(int, alpha.getpixel((250, 100))) < 16  # keyed: transparent
+            assert cast(int, alpha.getpixel((50, 100))) > 240  # noise: opaque
 
     def test_animated_gif_is_kept_as_is(self, tmp_path: Path):
         import base64
@@ -535,6 +536,49 @@ class TestExportCompressedImage:
         assert export_compressed_image("image/svg+xml", svg, tmp_path) is None
         assert export_compressed_image("image/png", "@@not base64@@", tmp_path) is None
         assert not (tmp_path / "images").exists()
+
+
+class TestOnlyTheDeclaredDecoder:
+    """Pillow decodes an image only as the format its media type declares,
+    so hostile bytes never reach its other decoders (TIFF, FlashPix, ...)."""
+
+    def test_a_tiff_declared_as_png_is_not_decoded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import base64
+        import io
+
+        from PIL import Image
+
+        import claude_code_log.image_export as image_export
+
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 200), "red").save(buf, "TIFF")
+        raw = buf.getvalue()
+        opened: list[str] = []
+        real_open = Image.open
+
+        def spy(fp: object, mode: str = "r", formats: object = None) -> object:
+            image = real_open(fp, mode, formats)  # type: ignore[arg-type]
+            opened.append(image.format or "")
+            return image
+
+        monkeypatch.setattr(Image, "open", spy)
+        result = image_export.export_compressed_image(
+            "image/png", base64.b64encode(raw).decode("ascii"), tmp_path
+        )
+
+        assert opened == []
+        assert result is not None and result.width is None
+        assert (tmp_path / result.src).read_bytes() == raw
+
+    def test_the_declared_format_still_compresses(self, tmp_path: Path):
+        from claude_code_log.image_export import export_compressed_image
+
+        result = export_compressed_image(
+            "image/png", _b64_image("PNG", (300, 200)), tmp_path
+        )
+        assert result is not None and result.width == 300
 
 
 class TestHtmlRendererImageModes:
@@ -817,6 +861,23 @@ class TestPruneUnreferencedImages:
         self._image(tmp_path, "2" * 16)
         assert sweep_images_once(tmp_path, "1.9.0") == 0
         assert sweep_images_once(tmp_path, "1.9.1") == 1
+
+    def test_an_unfinished_scan_is_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import claude_code_log.image_export as image_export
+
+        self._image(tmp_path, "3" * 16)
+        (tmp_path / "page.html").write_text("", encoding="utf-8")
+
+        def unreadable(_page: Path) -> set[bytes]:
+            raise PermissionError("locked")
+
+        monkeypatch.setattr(image_export, "_references_in", unreadable)
+        assert image_export.sweep_images_once(tmp_path, "1.9.0") == 0
+        assert not (tmp_path / "images" / image_export.SWEEP_MARKER).exists()
+        monkeypatch.undo()
+        assert image_export.sweep_images_once(tmp_path, "1.9.0") == 1
 
     def test_reusing_an_image_marks_it_used(self, tmp_path: Path):
         import time

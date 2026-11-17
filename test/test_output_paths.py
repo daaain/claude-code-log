@@ -421,6 +421,48 @@ class TestCliOutputDirectory:
         assert not list(out.glob("*.html"))
         assert (project / "combined_transcripts.html").exists()
 
+    def test_clear_output_leaves_the_directory_s_other_pages(
+        self, tmp_path: Path
+    ) -> None:
+        """A directory --output may be a vault: only pages named as this
+        tool names them are cleared there."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "notes.md").write_text("mine", encoding="utf-8")
+        runner = CliRunner()
+        args = [str(project), "-f", "md", "-o", str(vault)]
+        assert runner.invoke(cli_main, args).exit_code == 0
+        assert (vault / "session-sess1.md").exists()
+
+        result = runner.invoke(cli_main, [*args, "--clear-output"])
+        assert result.exit_code == 0, result.output
+        assert not (vault / "session-sess1.md").exists()
+        assert not list(vault.glob("combined_transcripts*.md"))
+        assert (vault / "notes.md").read_text(encoding="utf-8") == "mine"
+
+    def test_another_project_with_as_many_messages_replaces_the_page(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "out"
+        runner = CliRunner()
+        for name, marker in (("a", "FROM-PROJECT-A"), ("b", "FROM-PROJECT-B")):
+            project = tmp_path / name
+            project.mkdir()
+            _write_session(project / "sess.jsonl", "sess")
+            path = project / "sess.jsonl"
+            path.write_text(path.read_text().replace("hi 0", marker), encoding="utf-8")
+            os.utime(path, (1_000_000_000, 1_000_000_000))
+            # Rendered in place first, so the cache records its page as
+            # current at this message count.
+            assert runner.invoke(cli_main, [str(project)]).exit_code == 0
+            result = runner.invoke(cli_main, [str(project), "-o", str(out)])
+            assert result.exit_code == 0, result.output
+        page = (out / "combined_transcripts.html").read_text(encoding="utf-8")
+        assert "FROM-PROJECT-B" in page and "FROM-PROJECT-A" not in page
+
     def test_a_file_suffix_still_names_the_combined_page(self, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         project.mkdir()
