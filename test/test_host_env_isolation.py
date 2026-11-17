@@ -61,6 +61,8 @@ def test_a_poisoned_host_environment_does_not_reach_the_tests() -> None:
         env=poisoned,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -122,7 +124,10 @@ def _env_name_nodes(tree: ast.Module) -> list[ast.expr]:
 
 
 def _settings_the_package_reads() -> set[str]:
-    trees = {path: ast.parse(path.read_text()) for path in PACKAGE.rglob("*.py")}
+    trees = {
+        path: ast.parse(path.read_text(encoding="utf-8"))
+        for path in PACKAGE.rglob("*.py")
+    }
     # Names are resolved package-wide: a constant defined in one module
     # (search.ENV_SEARCH_FIELDS) is often read through an import in another.
     constants: dict[str, str] = {}
