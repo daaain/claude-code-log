@@ -39,12 +39,14 @@ from claude_code_log.write_queue import (
 )
 
 _started: Any = None
+_waiter_ready: Any = None
 
 
-def _init(turns: Optional[WriteTurns], started: Any) -> None:
-    global _started
+def _init(turns: Optional[WriteTurns], started: Any, waiter_ready: Any = None) -> None:
+    global _started, _waiter_ready
     install_write_turns(turns)
     _started = started
+    _waiter_ready = waiter_ready
 
 
 def _make_db(path: Path) -> None:
@@ -57,6 +59,9 @@ def _make_db(path: Path) -> None:
 
 def _hold_then_write(db: str, hold_seconds: float) -> str:
     conn = sqlite3.connect(db, timeout=0.2)
+    # Not before the waiter's connection is open (see _write_after_holder).
+    if not _waiter_ready.wait(30):
+        raise TimeoutError("the waiter never opened its connection")
     with write_transaction(conn):
         conn.execute("INSERT INTO t VALUES (0, x'00')")
         _started.set()
@@ -67,12 +72,14 @@ def _hold_then_write(db: str, hold_seconds: float) -> str:
 
 def _write_after_holder(db: str) -> str:
     conn = sqlite3.connect(db, timeout=0.2)
-    # Read once so this connection has the WAL open. Otherwise the
-    # holder's close() sees itself as the last connection and checkpoints
-    # under an exclusive lock just as this writer gets its turn: on a slow
-    # CI disk that outlasts the 0.2 s timeout, and the test fails on the
-    # close rather than on the turn it is about.
+    # Read once so this connection has the WAL open, and only then let the
+    # holder write. Otherwise the holder's close() sees itself as the last
+    # connection and checkpoints under an exclusive lock just as this
+    # writer gets its turn (or just as this read runs): on a slow CI disk
+    # that outlasts the 0.2 s timeout, and the test fails on the close
+    # rather than on the turn it is about.
     conn.execute("SELECT 1 FROM t LIMIT 1").fetchall()
+    _waiter_ready.set()
     _started.wait(30)
     try:
         with write_transaction(conn):
@@ -87,11 +94,12 @@ def _write_after_holder(db: str) -> str:
 def _run_long_holder_pair(db_path: Path, turns: bool) -> List[str]:
     ctx = multiprocessing.get_context("spawn")
     started = ctx.Event()
+    waiter_ready = ctx.Event()
     with ProcessPoolExecutor(
         max_workers=2,
         mp_context=ctx,
         initializer=_init,
-        initargs=(WriteTurns(ctx) if turns else None, started),
+        initargs=(WriteTurns(ctx) if turns else None, started, waiter_ready),
     ) as pool:
         holder = pool.submit(_hold_then_write, str(db_path), 1.5)
         waiter = pool.submit(_write_after_holder, str(db_path))
