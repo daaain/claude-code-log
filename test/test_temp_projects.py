@@ -85,6 +85,11 @@ def test_without_working_dirs_the_folder_name_decides() -> None:
     # Bounded: a sibling of Temp is a real folder.
     assert not is_temp_project("C--Users-u-AppData-Local-Templates", [])
     assert not is_temp_project("C--Users-u-AppData-Local-Templates-x", [])
+    # Anchored to a Windows drive: on Unix, ~/AppData/Local/Temp is a
+    # folder like any other.
+    assert is_temp_project("d--Users-u-AppData-Local-Temp-x", [])
+    assert not is_temp_project("-home-u-AppData-Local-Temp-notes", [])
+    assert not is_temp_project("-home-u-AppData-Local-Temp", [])
     assert not is_temp_project("-Users-u-tmp-notes", [])
     assert not is_temp_project("-tmpfiles-x", [])
     assert not is_temp_project("-Users-u-code-repo", [])

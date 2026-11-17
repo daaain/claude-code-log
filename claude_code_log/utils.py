@@ -372,6 +372,8 @@ _TEMP_ROOTS = (
 )
 # Windows' per-user temp dir (%TEMP%), matched anywhere below a drive.
 _WINDOWS_TEMP_SEGMENT = "/appdata/local/temp"
+# A project folder named after a Windows cwd starts with its drive: ``C--``.
+_ENCODED_WINDOWS_DRIVE = re.compile(r"[a-z]--")
 
 SHOW_TEMP_PROJECTS_ENV_VAR = "CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS"
 
@@ -402,7 +404,12 @@ def _decoded_project_dir_is_temp(project_dir_name: str) -> bool:
     roots themselves contain no dashes, so their prefixes survive it.
     """
     lowered = project_dir_name.lower()
-    if lowered.endswith("-appdata-local-temp") or "-appdata-local-temp-" in lowered:
+    # A Windows cwd (``C:\Users\…``) is encoded ``C--Users-…``: only such a
+    # name can be under %TEMP%. On Unix, ~/AppData/Local/Temp is a folder
+    # like any other.
+    if _ENCODED_WINDOWS_DRIVE.match(lowered) and (
+        lowered.endswith("-appdata-local-temp") or "-appdata-local-temp-" in lowered
+    ):
         return True
     return any(
         project_dir_name == root.replace("/", "-")
