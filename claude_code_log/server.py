@@ -75,6 +75,12 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     allowed_hosts: frozenset[str] = frozenset()
     server_version = f"claude-code-log/{get_library_version()}"
     sys_version = ""
+    # HTML's referenced images are AVIF, which Python's mimetypes only
+    # learned in 3.11.
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".avif": "image/avif",
+    }
 
     # Digest of the file this request is answering with, computed in
     # `send_head` and emitted by `end_headers`. `None` for everything

@@ -590,6 +590,14 @@ class ImageContent(BaseModel, MessageContent):
     source: ImageSource
 ```
 
+A Read of an image file records it twice: as an `image` block inside the
+tool_result, which is what renders, and again as
+`toolUseResult.file.base64`. `UserTranscriptEntry` drops the second copy
+when the entry is parsed (`_drop_read_image_copy`), keeping the file's
+other fields. In a real archive that copy was over 40% of all image bytes,
+and nothing reads it. It is never held in memory, passed to render workers
+or written to the cache. The JSONL keeps it.
+
 ### `[Image #N]` placeholders and `imagePasteIds`
 
 A pasted image leaves an `[Image #N]` placeholder in the surrounding text and

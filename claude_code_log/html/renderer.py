@@ -392,11 +392,13 @@ class HtmlRenderer(Renderer):
             return f'<div class="markdown">{render_markdown(md_source)}</div>'
         return super()._dispatch_format(obj, message)
 
-    def __init__(self, image_export_mode: str = "embedded"):
+    def __init__(self, image_export_mode: str = "referenced"):
         """Initialize the HTML renderer.
 
         Args:
-            image_export_mode: Image export mode - "placeholder", "embedded", or "referenced".
+            image_export_mode: Image export mode - "placeholder", "embedded", or
+                "referenced" (the default: compressed files beside the page,
+                embedded when the render has no output directory).
         """
         super().__init__()
         self.image_export_mode = image_export_mode
@@ -524,19 +526,69 @@ class HtmlRenderer(Renderer):
 
     def _format_image(self, image: ImageContent) -> str:
         """Format image based on export mode."""
-        from ..image_export import export_image
+        tag = self._image_tag(
+            image.source.media_type, image.source.data, "image", "uploaded-image"
+        )
+        return "[Image]" if tag is None else tag
 
+    def _format_tool_result_image(self, media_type: str, data: str) -> Optional[str]:
+        """Tool-result images follow the export mode like any other image.
+
+        An image the mode can't emit is dropped, as an unsafe one always
+        was — except in placeholder mode, which marks where it was.
+        """
+        tag = self._image_tag(
+            media_type, data, "Tool result image", "tool-result-image"
+        )
+        if tag is None and self.image_export_mode == "placeholder":
+            return "[Image]"
+        return tag
+
+    def _image_tag(
+        self, media_type: str, data: str, alt: str, css_class: str
+    ) -> Optional[str]:
+        """The ``<img>`` for one image under the export mode, or None.
+
+        Referenced mode writes a compressed, content-addressed file beside
+        the page (``image_export.export_compressed_image``) and loads it
+        lazily, with its size reserved. Without an output directory to
+        write into (a page rendered in memory) it embeds instead.
+        """
+        from ..image_export import export_compressed_image, export_image
+        from ..models import ImageSource
+
+        if self.image_export_mode == "referenced" and self._output_dir is not None:
+            exported = export_compressed_image(media_type, data, self._output_dir)
+            if exported is None:
+                return None
+            size = (
+                f' width="{exported.width}" height="{exported.height}"'
+                if exported.width and exported.height
+                else ""
+            )
+            return (
+                f'<img src="{escape_html(exported.src)}" alt="{alt}" '
+                f'class="{css_class}"{size} loading="lazy" decoding="async" />'
+            )
+        mode = (
+            "embedded"
+            if self.image_export_mode == "referenced"
+            else self.image_export_mode
+        )
         src = export_image(
-            image,
-            self.image_export_mode,
+            ImageContent(
+                type="image",
+                source=ImageSource(type="base64", media_type=media_type, data=data),
+            ),
+            mode,
             output_dir=self._output_dir,
         )
         if src is None:
-            return "[Image]"
+            return None
         # Escape the src: export_image allowlists the media type and
         # validates the base64, but the data: URL (embedded mode) still
         # must not be able to break out of the attribute (issue #277).
-        return f'<img src="{escape_html(src)}" alt="image" class="uploaded-image" />'
+        return f'<img src="{escape_html(src)}" alt="{alt}" class="{css_class}" />'
 
     # -------------------------------------------------------------------------
     # System Content Formatters
@@ -971,7 +1023,7 @@ class HtmlRenderer(Renderer):
         self, output: ToolResultContent, _: TemplateMessage
     ) -> str:
         """Format → <pre>raw content</pre> (fallback for unknown tools)."""
-        return format_tool_result_content_raw(output)
+        return format_tool_result_content_raw(output, self._format_tool_result_image)
 
     def format_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Format → prompt text if long, empty if shown in title."""
@@ -993,7 +1045,7 @@ class HtmlRenderer(Renderer):
         self, output: ToolExecutionOutput, _: TemplateMessage
     ) -> str:
         """Format execution status and labelled result emissions."""
-        return format_tool_execution_output(output)
+        return format_tool_execution_output(output, self._format_tool_result_image)
 
     def title_ToolExecutionInput(
         self, _input: ToolExecutionInput, message: TemplateMessage

@@ -181,6 +181,8 @@ cython_debug/
 test_output
 .DS_Store
 test/test_data/*.html
+# Vendored front-end assets the tests copy beside those pages
+test/test_data/assets/
 .claude-trace
 .specstory
 
@@ -213,3 +215,5 @@ claude-code-log-cache.db
 # <<< foldyard (managed) <<<
 # Demo video recordings (scripts/demos/record.py)
 /.demos/
+# A copy of your real transcripts to experiment on (`just clone-real-transcripts`)
+/.ccl-data/

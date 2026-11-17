@@ -562,7 +562,7 @@ def _fingerprints_match(cached: str, current: str) -> bool:
 # its name. Bump it and every cached blob is re-parsed once. Leave it alone
 # for field additions/removals/renames — those move the digest by
 # themselves, which is the point.
-_CONTENT_SCHEMA_SALT = "1"
+_CONTENT_SCHEMA_SALT = "2"  # 2: Read results drop toolUseResult.file.base64
 
 
 def _nested_models(annotation: object) -> Generator[type[BaseModel], None, None]:

@@ -291,7 +291,7 @@ Markdown export provides a lightweight, portable alternative to HTML:
 - **Message Excerpts**: Section titles include message previews for quick navigation
 - **Code Preservation**: Syntax highlighting hints via fenced code blocks
 - **Embedded Viewer**: TUI includes built-in Markdown viewer with table of contents
-- **Image Support**: Configurable image handling (placeholder, embedded base64, or referenced files)
+- **Image Support**: Configurable image handling (placeholder, embedded base64, or referenced files — the default, which HTML compresses to AVIF)
 - **`--compact` Mode**: Merge consecutive same-type section headings — most useful with `--depth agent` or `assistant` where tool stripping creates runs of Assistant or User sections
 
 ## Installation

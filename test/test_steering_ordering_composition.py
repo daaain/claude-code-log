@@ -174,7 +174,11 @@ def test_image_steering_suppression_composes_with_chronological_splice(tmp_path)
 
     # The image-bearing card renders (the #294 fix), and its paired remove is
     # suppressed — exactly one steering card, not a duplicate legacy one.
-    assert f"base64,{_PNG}" in html, "image-bearing steering card did not render"
+    # (HTML references images by default: the card's <img> carries the
+    # exported file, not the base64.)
+    assert 'class="uploaded-image"' in html, (
+        "image-bearing steering card did not render"
+    )
     assert html.count("User (steering)") == 1, (
         "expected the remove suppressed (1 steering card); a count of 2 means "
         "the remove was orphaned — the two fixes did not compose"

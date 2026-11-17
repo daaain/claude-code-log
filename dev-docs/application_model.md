@@ -890,7 +890,30 @@ format-agnostic: HTML and Markdown both call into it. Three modes
 - `embedded` — base64-encode the image directly into the output as
   a data URL.
 - `referenced` — write the image to disk next to the output and
-  embed a `src=` reference.
+  embed a `src=` reference. The default for both formats.
+
+Referenced files land in `images/` beside the page, named
+`image_<digest><ext>`. Markdown writes the source bytes, its digest
+taken over them. HTML re-encodes through `export_compressed_image`
+(Pillow): AVIF at quality 50, speed 8, longest side capped at 2000px,
+full 4:4:4 chroma for non-JPEG sources (mostly screenshots, where
+subsampling smears coloured text), no EXIF in the output, and a PNG
+colour key (tRNS) turned into a real alpha channel, which AVIF needs to
+keep those pixels transparent. Its
+digest covers the source bytes *and* the encoder settings
+(`_encoding_tag`), so a file is found again — by any pass, run or
+worker — without decoding the source, and a settings change renames
+every file instead of leaving old encodings behind a current name. The
+source is written unchanged when re-encoding would not help (animated,
+no smaller than the source, Pillow without AVIF or WebP) or Pillow
+cannot read it. Each HTML `<img>` carries `loading="lazy"` and the
+displayed (EXIF-oriented, scaled) `width`/`height`, so lazy loading
+doesn't shift the layout; the sizes come from the encode or, for a
+file already on disk, from its header. A render with no output
+directory (an in-memory page) embeds instead, as does every stdout
+stream, whose temp directory is discarded. Before this, an image-heavy
+session's page held each Read-tool screenshot as inline base64 — a
+real 350MB session page is 30MB plus 73MB of AVIF files.
 
 `embedded` and `referenced` both refuse an image unless
 `is_safe_image_source` passes: the media type must be PNG, JPEG, GIF
@@ -900,15 +923,19 @@ transcript's `media_type` and `data` are untrusted (an image can come
 back from a tool, an MCP server or a web page), and a crafted
 `media_type` used to break out of the `<img src>` attribute (issue
 #277); the HTML sinks also `escape_html` the final `src`. Tool-result
-images go through the same gate, and plugins get it from
+images go through the same gate and, in HTML, the same export mode
+(`HtmlRenderer._format_tool_result_image`), and plugins get it from
 `claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
 
-Default is `embedded` for HTML (single self-contained file) and
-`referenced` for Markdown (keeps the `.md` text small and lets
-images live as separate PNGs alongside).
+Default is `referenced` for both: an HTML page or `.md` file then
+needs the `images/` directory beside it. `embedded` drops that
+requirement, but an HTML page is still not a single self-contained
+file: its timeline loads vis-timeline from the `assets/` directory
+beside it (below).
 
 Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
-from a BLAKE2b digest of the decoded bytes — so a given image maps to
+from a BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
+exports, the encoder settings, as above) — so a given image maps to
 exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already
 the right bytes; writers go through a unique temp file + atomic
@@ -1176,8 +1203,8 @@ starts if some batch clears `worth_dispatching` above.
 `image_export_mode="referenced"` used to decline too, when renders
 allocated `images/image_NNNN.png` names from a per-call counter that
 collided across passes and processes; referenced filenames are now
-content-addressed (`image_export.export_image` digests the decoded
-bytes and writes via temp-file + atomic replace), so any pass, run, or
+content-addressed (`image_export` digests the decoded bytes and
+writes via temp-file + atomic replace), so any pass, run, or
 worker exporting the same image converges on the same file and the
 mode fans out like any other.
 
