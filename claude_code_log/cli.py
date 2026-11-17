@@ -998,10 +998,11 @@ def main() -> None:
         "Output destination. Use '-' (or /dev/stdout) to stream the "
         "rendered document to stdout (status goes to stderr) for piping. "
         "With a recognised file suffix (.html/.md/.markdown/.json) treated "
-        "as a single output file; otherwise treated as a directory root "
-        "(and now also honoured for --all-projects, where outputs land at "
-        "<output>/<project>/...). Pair with --expand-paths to project "
-        "back to the real on-disk tree."
+        "as a single output file (for a project directory, its combined "
+        "page; the session pages stay beside the transcripts); otherwise "
+        "treated as a directory that every page is written under (for "
+        "--all-projects, at <output>/<project>/...). Pair with "
+        "--expand-paths to project back to the real on-disk tree."
     ),
 )
 @click.option(
@@ -2152,11 +2153,15 @@ def convert(
         # print a success line on top of its own "is current, skipping
         # regeneration" line, and don't claim to have "combined" anything
         # when only session files were written.
+        # A suffix-less --output is a directory: every page goes under it,
+        # the session pages too, as it does for --all-projects. A file
+        # suffix names the combined page (or the single transcript's page).
+        output_is_dir = output is not None and not _output_path_is_file(output)
         report = RegenerationReport()
         output_path = convert_jsonl_to(
             output_format,
             input_path,
-            output,
+            None if output_is_dir else output,
             from_date,
             to_date,
             write_individual,
@@ -2168,6 +2173,7 @@ def convert(
             # User's `-o` path is a one-off export, not a cached artifact:
             # don't occupy a cache slot keyed by an arbitrary destination.
             update_cache=output is None,
+            output_root=output if output_is_dir else None,
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,

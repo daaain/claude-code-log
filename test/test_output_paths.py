@@ -354,6 +354,47 @@ class TestConverterVariantPaths:
 # ---------------------------------------------------------------------------
 
 
+class TestCliOutputDirectory:
+    """A suffix-less ``-o`` is a directory for one project or one file too,
+    not a file name: every page goes under it, and nothing beside the
+    transcripts."""
+
+    def test_one_project_writes_every_page_under_it(self, tmp_path: Path) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        _write_session(project / "sess2.jsonl", "sess2")
+        out = tmp_path / "out"
+        result = CliRunner().invoke(cli_main, [str(project), "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert (out / "combined_transcripts.html").is_file()
+        assert (out / "session-sess1.html").is_file()
+        assert (out / "session-sess2.html").is_file()
+        assert sorted(p.name for p in project.iterdir()) == [
+            "sess1.jsonl",
+            "sess2.jsonl",
+        ]
+
+    def test_one_file_lands_in_it_under_its_own_name(self, tmp_path: Path) -> None:
+        source = tmp_path / "sess1.jsonl"
+        _write_session(source, "sess1")
+        out = tmp_path / "out"
+        result = CliRunner().invoke(cli_main, [str(source), "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert (out / "sess1.html").is_file()
+        assert not (tmp_path / "sess1.html").exists()
+
+    def test_a_file_suffix_still_names_the_combined_page(self, tmp_path: Path) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        page = tmp_path / "page.html"
+        result = CliRunner().invoke(cli_main, [str(project), "-o", str(page)])
+        assert result.exit_code == 0, result.output
+        assert page.is_file()
+        assert (project / "session-sess1.html").is_file()
+
+
 class TestCacheVariantCoexistence:
     def test_variant_cache_buckets_are_independent(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")

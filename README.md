@@ -145,7 +145,8 @@ claude-code-log transcript.jsonl
 # Specific directory
 claude-code-log /path/to/transcript/directory
 
-# Custom output location
+# Custom output location: a directory for every page, or a file for the combined page
+claude-code-log /path/to/directory -o ~/exports/my-project
 claude-code-log /path/to/directory -o combined_transcripts.html
 
 # Open in browser after conversion
@@ -160,9 +161,10 @@ A date-filtered run writes a view of its window: only the projects and
 sessions with messages in it, with the window's totals. It goes into a
 destination that holds none of the pages it writes, so over the pages of
 an earlier run it refuses to start: give it another `-o`, or `--force` to
-write over them (nothing is removed). For one directory, `-o` names the
-combined page alone and the session pages go into the directory, hence
-`--combined only` above. See [Viewing a date
+write over them (nothing is removed). For one directory, an `-o` file
+(`-o page.html`) names the combined page alone and the session pages go
+into the directory, hence `--combined only` above; an `-o` directory takes
+every page. See [Viewing a date
 window](https://daaain.github.io/claude-code-log/date-window/).
 
 ### Feeding Past Conversations to an LLM

@@ -3974,6 +3974,9 @@ def convert_jsonl_to(
         # Single file mode - cache only available for directory mode
         if output_path is None:
             output_path = input_path.with_suffix(f"{suffix}.{ext}")
+            if output_root is not None:
+                output_root.mkdir(parents=True, exist_ok=True)
+                output_path = output_root / output_path.name
         messages = load_transcript(input_path, silent=silent)
         # Parent agent entries and assign synthetic session IDs (same as
         # directory mode) so DAG-based ordering handles sidechain placement.
@@ -5193,20 +5196,20 @@ class WindowOutputExists(Exception):
         self, path: Path, *, project_pages: bool = False, combined: bool = True
     ) -> None:
         self.path = path
-        # For one project, --output names the combined page only: its
-        # session pages go into the project whatever it names. Without a
-        # combined page, nothing is left for --output to move.
+        # For one project, an --output *file* names the combined page only:
+        # its session pages go into the project. Without a combined page,
+        # nothing is left for such an --output to move.
         if not project_pages:
             way_out = ", or choose another --output"
         elif combined:
             way_out = (
-                ", or write the combined page alone elsewhere, with "
-                "--combined only and --output"
+                ", or choose an --output directory, or write the combined page "
+                "alone elsewhere, with --combined only and an --output file"
             )
         else:
             way_out = (
-                "; a project's session pages are written into it, whatever "
-                "--output names"
+                ", or choose an --output directory: a project's session pages "
+                "are written into it otherwise"
             )
         super().__init__(
             f"{path} already exists. A date-filtered run writes only into a "
