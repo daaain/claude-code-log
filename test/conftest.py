@@ -288,11 +288,25 @@ def browser_context_args(browser_context_args):
 
 @pytest.fixture(scope="session")
 def browser_type_launch_args(browser_type_launch_args):
-    """Configure browser launch arguments."""
+    """Configure browser launch arguments.
+
+    RenderDocument is off. With it, Chromium gives a navigation a new
+    document host, and under load a ``file://`` page's localStorage write
+    can be lost across it: the reloaded or linked page reads the value from
+    before the write, and so does every other page from then on. With 8
+    busy cores, 16 of 30 reloads after the theme toggle lost the choice from
+    disk, none of 30 when served, and none of 30 from disk with the feature
+    off. ``test_minimal_pages_browser``'s from-disk theme tests failed this
+    way about one xdist run in three.
+    """
     return {
         **browser_type_launch_args,
         "headless": True,  # Set to False for debugging
         "slow_mo": 0,  # Add delay for debugging
+        "args": [
+            *browser_type_launch_args.get("args", []),
+            "--disable-features=RenderDocument",
+        ],
     }
 
 
