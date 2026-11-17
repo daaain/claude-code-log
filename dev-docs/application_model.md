@@ -940,7 +940,10 @@ exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already
 the right bytes; writers go through a unique temp file + atomic
 `os.replace`, so concurrent exporters of the same image replace
-identical content). This replaced a per-render counter whose names
+identical content; on Windows, where one exporter's replace can be
+refused while another's lands, a refused replace counts as done once the
+file exists, and is otherwise retried briefly — the same treatment as the
+timeline assets below). This replaced a per-render counter whose names
 collided between the combined-page and per-session passes — each pass
 restarted at `image_0001` and assigned the same names to different
 images, so the last pass to run overwrote the other's files. Content
@@ -960,7 +963,13 @@ copy. A bare-string render (`generate_html()` without `output_dir`) gets
 empty paths, and its timeline reports the missing library rather than
 fetching one. File names carry the library version, so an upgrade adds
 files instead of overwriting them; writes are temp file + `os.replace`
-because the render fan-out's workers all ensure the folder at once. The
+because the render fan-out's workers all ensure the folder at once. On
+Windows one worker's replace can be refused (WinError 5) while another's
+is landing; a refused replace counts as done once the file is that
+build (same name, same size), and is otherwise retried briefly
+(`utils.retry_on_sharing_violation`) before the page renders without
+timeline sources — which a parallel render once did, differing from the
+serial one. The
 library used to come from unpkg, unpinned, the one network request a
 generated page made (issue #278).
 

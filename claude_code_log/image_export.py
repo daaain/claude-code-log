@@ -218,16 +218,47 @@ def _image_size_on_disk(path: Path) -> tuple[Optional[int], Optional[int]]:
         return None, None
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
+def _install(tmp_path: Path, path: Path) -> None:
+    """``os.replace(tmp_path, path)``, allowing for a concurrent writer.
+
+    An exported image's name is its content's digest, so once ``path``
+    exists another writer has put exactly these bytes there. On Windows,
+    that writer's replace can refuse ours (PermissionError, WinError 5)
+    while it lands: then the job is done, and our temp file is removed.
+    Until ``path`` exists the replace is retried briefly
+    (`utils.retry_on_sharing_violation`), and its last error propagates.
+    """
+    from .utils import retry_on_sharing_violation
+
+    def replace() -> None:
+        try:
+            os.replace(tmp_path, path)
+        except PermissionError:
+            try:
+                landed = path.exists()
+            except OSError:  # mid-swap, even a stat can be refused
+                landed = False
+            if not landed:
+                raise
+            tmp_path.unlink(missing_ok=True)
+
+    retry_on_sharing_violation(replace)
+
+
+def _temp_name(path: Path) -> Path:
     # Unique per process *and* thread: render workers and a watch loop's
-    # threads may export the same image at once. Racing writers replace
-    # identical bytes.
-    tmp_path = path.with_name(
+    # threads may export the same image at once.
+    return path.with_name(
         f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp"
     )
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    # Racing writers replace identical bytes (see `_install`).
+    tmp_path = _temp_name(path)
     try:
         tmp_path.write_bytes(data)
-        os.replace(tmp_path, path)
+        _install(tmp_path, path)
     except BaseException:
         try:
             tmp_path.unlink()
@@ -325,7 +356,7 @@ def export_image(
     already the right bytes) and safe under the render fan-out, where
     concurrent workers may export the same image: writers go through a
     unique temp file + atomic ``os.replace``, and racing writers replace
-    identical content.
+    identical content (on Windows, one may refuse another's: `_install`).
 
     Args:
         image: ImageContent with base64-encoded image data
@@ -373,9 +404,9 @@ def export_image(
             filepath = images_dir / filename
 
             if not filepath.exists():
-                tmp_path = images_dir / f".{filename}.{os.getpid()}.tmp"
+                tmp_path = _temp_name(filepath)
                 tmp_path.write_bytes(image_data)
-                os.replace(tmp_path, filepath)
+                _install(tmp_path, filepath)
                 tmp_path = None
 
             return f"images/{filename}"

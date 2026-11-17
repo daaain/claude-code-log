@@ -204,6 +204,17 @@ def run_in_both_themes(*renderers: str) -> Any:
 
 
 @pytest.fixture
+def windows_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sharing-violation retry budget Windows gets, at a test's pace.
+
+    ``retry_on_sharing_violation`` tries once off Windows; tests that
+    simulate a refused replace (PermissionError) need its Windows budget.
+    """
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_ATTEMPTS", 10)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
+
+
+@pytest.fixture
 def test_data_dir() -> Path:
     """Return path to test data directory."""
     return Path(__file__).parent / "test_data"
