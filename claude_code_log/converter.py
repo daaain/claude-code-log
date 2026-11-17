@@ -6047,6 +6047,7 @@ def render_provider_wholesale(
     expand_paths: bool = False,
     filter_path: Optional[str] = None,
     silent: bool = False,
+    show_temp_projects: bool = False,
 ) -> Path:
     """Render every session of one provider under ``sessions_root`` into a
     project hierarchy — per-session pages, a per-project combined page, and a
@@ -6417,6 +6418,8 @@ def render_provider_wholesale(
         index_kwargs["provider_label"] = provider_name.title()
         if expand_paths:
             index_kwargs["expand_paths_tree"] = True
+        if show_temp_projects:
+            index_kwargs["show_temp_projects"] = True
     index_content = renderer.generate_projects_index(
         project_summaries, from_date, to_date, **index_kwargs
     )
@@ -6949,6 +6952,7 @@ def process_projects_hierarchy(
     entry_store: "Optional[ParsedEntryStore]" = None,
     failed_projects: Optional[List[str]] = None,
     force: bool = False,
+    show_temp_projects: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -7022,6 +7026,7 @@ def process_projects_hierarchy(
                 entry_store=entry_store,
                 failed_projects=failed_projects,
                 force=force,
+                show_temp_projects=show_temp_projects,
             )
         if use_cache:
             # The pass's workers have all exited: the files they rewrote
@@ -7045,6 +7050,7 @@ def _write_recent_page(
     session_pages: bool = True,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    show_temp_projects: bool = False,
 ) -> None:
     """Write ``recent.html`` and its ``recent-data.js`` next to the index.
 
@@ -7056,9 +7062,10 @@ def _write_recent_page(
     there are none: the index names each session's file all the same,
     but nothing writes it. Under a date window the page lists the
     window's sessions, those of the index's cards, each with the window's
-    part of it, and names the window. A failure here must never fail the
-    conversion: the page is a convenience next to the index, not part of
-    it.
+    part of it, and names the window. Sessions run in a temp dir are left
+    out unless ``show_temp_projects``, as the index folds their projects.
+    A failure here must never fail the conversion: the page is a
+    convenience next to the index, not part of it.
     """
     from .recent import (
         RECENT_DATA,
@@ -7096,6 +7103,7 @@ def _write_recent_page(
             projects_path,
             href_for=lambda _project, sid: links.get(sid),
             window=window,
+            show_temp_projects=show_temp_projects,
         )
         atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
         atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(theme, label))
@@ -7126,6 +7134,7 @@ def _process_projects_hierarchy(
     entry_store: "Optional[ParsedEntryStore]" = None,
     failed_projects: Optional[List[str]] = None,
     force: bool = False,
+    show_temp_projects: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -7163,6 +7172,10 @@ def _process_projects_hierarchy(
             already exist at the destination; without it the pass raises
             ``WindowOutputExists`` before writing anything when one does.
             Nothing is removed either way.
+        show_temp_projects: List projects worked on only from temp dirs
+            with the rest on the index, and their sessions on the recent
+            page, instead of folding them into one index group and leaving
+            them off the recent page. Every project is still converted.
 
     With a date window the pass writes a view of it: the master index
     lists the projects with a session in the window (``window_session_ids``),
@@ -7861,9 +7874,15 @@ def _process_projects_hierarchy(
                     "total_cache_read_tokens": total_cache_read_tokens,
                     "latest_timestamp": latest_timestamp,
                     "earliest_timestamp": earliest_timestamp,
+                    # Without a cache, the cwds the loaded messages record:
+                    # the display name and the temp-project fold read them.
                     "working_directories": cache_manager.get_working_directories()
                     if cache_manager
-                    else [],
+                    else list(
+                        dict.fromkeys(
+                            cwd for m in messages if (cwd := getattr(m, "cwd", None))
+                        )
+                    ),
                     "is_archived": False,
                     "combined_suppressed": not write_combined,
                     "sessions": sessions_data,
@@ -8012,6 +8031,10 @@ def _process_projects_hierarchy(
     index_kwargs: dict[str, Any] = {}
     if expand_paths and output_format in ("md", "markdown", "html"):
         index_kwargs["expand_paths_tree"] = True
+    # Temp-dir projects fold into one group at the end of the HTML and
+    # Markdown index; JSON lists every project as data.
+    if show_temp_projects and output_format in ("md", "markdown", "html"):
+        index_kwargs["show_temp_projects"] = True
     index_content = renderer.generate_projects_index(
         project_summaries, from_date, to_date, **index_kwargs
     )
@@ -8040,6 +8063,7 @@ def _process_projects_hierarchy(
             session_pages=generate_individual_sessions,
             from_date=from_date,
             to_date=to_date,
+            show_temp_projects=show_temp_projects,
         )
 
     # Count total sessions from project summaries

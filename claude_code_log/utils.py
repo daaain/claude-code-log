@@ -7,7 +7,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Callable, Optional, Sequence, TypeVar
 
 from .models import (
@@ -355,6 +355,91 @@ def _is_temp_path(path_str: str) -> bool:
         "/var/folders/",  # macOS temp (alternate)
     ]
     return any(pattern in path_str for pattern in temp_patterns)
+
+
+# The system temp roots a session run there is throwaway in: test suites'
+# tmp_path, scratchpad agents, scripted `claude -p` calls. Fixed rather than
+# read from $TMPDIR / tempfile.gettempdir(): tools set TMPDIR to unusual
+# places (Claude Code's sandbox points it into its own tree), and a TMPDIR
+# that happened to contain the user's workspace would fold every project.
+_TEMP_ROOTS = (
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "/var/folders",
+    "/private/var/folders",
+)
+# Windows' per-user temp dir (%TEMP%), matched anywhere below a drive.
+_WINDOWS_TEMP_SEGMENT = "/appdata/local/temp"
+# A project folder named after a Windows cwd starts with its drive: ``C--``.
+_ENCODED_WINDOWS_DRIVE = re.compile(r"[a-z]--")
+
+SHOW_TEMP_PROJECTS_ENV_VAR = "CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS"
+
+
+def is_temp_dir(path_str: str) -> bool:
+    """Whether ``path_str`` is a system temp directory or lies under one.
+
+    Unlike :func:`_is_temp_path` (which only steers display-name choice,
+    and matches ``/tmp/`` anywhere), this is anchored: ``~/tmp/notes`` is
+    a real project, ``/tmp/pytest-of-me/…`` is not.
+    """
+    if not path_str:
+        return False
+    path = path_str.replace("\\", "/").rstrip("/")
+    if PureWindowsPath(path_str).drive:
+        lowered = path.lower()
+        return f"{_WINDOWS_TEMP_SEGMENT}/" in lowered or lowered.endswith(
+            _WINDOWS_TEMP_SEGMENT
+        )
+    return any(path == root or path.startswith(root + "/") for root in _TEMP_ROOTS)
+
+
+def _decoded_project_dir_is_temp(project_dir_name: str) -> bool:
+    """Whether a project folder name decodes to a temp directory.
+
+    Claude Code names the folder after the cwd with every ``/`` (and
+    ``.``, ``_``) turned into ``-``, so the decode is lossy, but the temp
+    roots themselves contain no dashes, so their prefixes survive it.
+    """
+    lowered = project_dir_name.lower()
+    # A Windows cwd (``C:\Users\…``) is encoded ``C--Users-…``: only such a
+    # name can be under %TEMP%. On Unix, ~/AppData/Local/Temp is a folder
+    # like any other.
+    if _ENCODED_WINDOWS_DRIVE.match(lowered) and (
+        lowered.endswith("-appdata-local-temp") or "-appdata-local-temp-" in lowered
+    ):
+        return True
+    return any(
+        project_dir_name == root.replace("/", "-")
+        or project_dir_name.startswith(root.replace("/", "-") + "-")
+        for root in _TEMP_ROOTS
+    )
+
+
+def is_temp_project(
+    project_dir_name: str, working_directories: Optional[Sequence[str]] = None
+) -> bool:
+    """Whether a project was only ever worked on from temp directories.
+
+    True when every recorded working directory is a temp dir; with none
+    recorded (a transcript holding no message yet), the project folder's
+    decoded name decides.
+    """
+    dirs = [wd for wd in (working_directories or []) if wd]
+    if dirs:
+        return all(is_temp_dir(wd) for wd in dirs)
+    return _decoded_project_dir_is_temp(project_dir_name)
+
+
+def is_temp_session(cwd: Optional[str], project_path: Optional[str]) -> bool:
+    """Whether a session ran in a temp dir: its cwd, else its project folder."""
+    if cwd:
+        return is_temp_dir(cwd)
+    return bool(project_path) and _decoded_project_dir_is_temp(
+        Path(str(project_path)).name
+    )
 
 
 def best_working_dir(

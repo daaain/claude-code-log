@@ -105,7 +105,7 @@ from .models import (
 )
 from .html.utils import render_markdown, render_user_markdown
 from .transcript_ids import session_path
-from .utils import get_project_display_name, relative_href
+from .utils import get_project_display_name, is_temp_session, relative_href
 
 RECENT_PAGE = "recent.html"
 RECENT_DATA = "recent-data.js"
@@ -715,10 +715,47 @@ def _no_href(_project_dir: Path, _session_id: str) -> None:
     return None
 
 
-def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Row]:
+def _temp_filter(conn: sqlite3.Connection, show_temp: bool) -> str:
+    """A ``WHERE`` term leaving out sessions run in a temp dir, or ``""``.
+
+    Registers :func:`~claude_code_log.utils.is_temp_session` on ``conn``
+    so the filter runs before ``LIMIT``: dropping rows afterwards would
+    let a burst of test-suite sessions crowd real ones off the page.
+    """
+    if show_temp:
+        return ""
+    conn.create_function("ccl_is_temp_session", 2, is_temp_session, deterministic=True)
+    return " AND NOT ccl_is_temp_session(s.cwd, p.project_path)"
+
+
+def _temp_session_keys(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """``(project path, session id)`` of every session run in a temp dir.
+
+    By its recorded cwd, the folder name only without one (the same
+    :func:`~claude_code_log.utils.is_temp_session` as :func:`_temp_filter`).
+    A date window's candidates are keyed, not queried, so they are matched
+    against this set before their cut; one pass over the sessions table
+    also keeps a large window out of an ``IN`` list.
+    """
+    rows = conn.execute(
+        """SELECT s.session_id, s.cwd, p.project_path
+           FROM sessions s JOIN projects p ON p.id = s.project_id
+           WHERE s.hidden = 0"""
+    )
+    return {
+        (str(Path(project_path)), session_id)
+        for session_id, cwd, project_path in rows
+        if is_temp_session(cwd, project_path)
+    }
+
+
+def _session_rows(
+    db_path: Path, cutoff_iso: str, limit: int, show_temp: bool = False
+) -> list[sqlite3.Row]:
     """The newest visible session rows across every project.
 
-    A ``mode=ro`` reader: it never writes the shared database, so it needs
+    Sessions run in a temp dir are left out unless ``show_temp``. A
+    ``mode=ro`` reader: it never writes the shared database, so it needs
     none of the write pragmas (see the connection census in
     ``test/test_cache_sqlite_integrity.py``).
     """
@@ -729,13 +766,14 @@ def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Ro
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        temp_filter = _temp_filter(conn, show_temp)
         # entry_count / entry_max_id fingerprint exactly the rows
         # load_session_entries reads (the RecentMemo key): the session
         # row's own counts skip attachments, which can end background
         # work, and any insert moves MAX(id). Index-only, via
         # idx_messages_project_session_ts.
         return conn.execute(
-            """SELECT s.session_id, s.summary, s.ai_title, s.first_timestamp,
+            f"""SELECT s.session_id, s.summary, s.ai_title, s.first_timestamp,
                       s.last_timestamp, s.message_count, s.first_user_message,
                       s.cwd, p.project_path,
                       (SELECT COUNT(*) FROM messages m
@@ -745,7 +783,7 @@ def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Ro
                         WHERE m.project_id = s.project_id
                           AND m.session_id = s.session_id) AS entry_max_id
                FROM sessions s JOIN projects p ON p.id = s.project_id
-               WHERE s.hidden = 0 AND s.last_timestamp >= ?
+               WHERE s.hidden = 0 AND s.last_timestamp >= ?{temp_filter}
                ORDER BY s.last_timestamp DESC
                LIMIT ?""",
             (cutoff_iso, limit),
@@ -773,23 +811,31 @@ class RecentWindow:
     keep: Callable[[list[TranscriptEntry]], list[TranscriptEntry]]
 
 
-def _window_session_rows(db_path: Path, window: RecentWindow) -> list[sqlite3.Row]:
+def _window_session_rows(
+    db_path: Path, window: RecentWindow, show_temp: bool = False
+) -> list[sqlite3.Row]:
     """The session rows of ``window``'s newest sessions, newest first.
 
     Newest by the window's own last message, at most :data:`MAX_SESSIONS`
     as on any run, and however old: the window, not the clock, decides.
-    A ``mode=ro`` reader, like :func:`_session_rows`.
+    Sessions run in a temp dir are left out unless ``show_temp``, before
+    the cut, so they don't take places (:func:`_temp_session_keys`). A
+    ``mode=ro`` reader, like :func:`_session_rows`.
     """
 
     def last(key: tuple[str, str]) -> str:
         return str(window.sessions[key].get("last_timestamp") or "")
 
-    keys = sorted(window.sessions, key=last, reverse=True)[:MAX_SESSIONS]
-    if not keys or not db_path.exists():
+    if not window.sessions or not db_path.exists():
         return []
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        temp: set[tuple[str, str]] = set() if show_temp else _temp_session_keys(conn)
+        candidates = [key for key in window.sessions if key not in temp]
+        keys = sorted(candidates, key=last, reverse=True)[:MAX_SESSIONS]
+        if not keys:
+            return []
         rows = conn.execute(
             f"""SELECT s.session_id, s.summary, s.ai_title, s.first_timestamp,
                       s.last_timestamp, s.message_count, s.first_user_message,
@@ -815,6 +861,7 @@ def build_recent_payload(
     db_path: Optional[Path] = None,
     memo: Optional[RecentMemo] = None,
     window: Optional[RecentWindow] = None,
+    show_temp_projects: bool = False,
 ) -> dict[str, Any]:
     """The page's data: the recently updated sessions across every project.
 
@@ -827,7 +874,9 @@ def build_recent_payload(
     last build aren't read again. With a ``window`` (a date-filtered run),
     the sessions are the window's instead, each with only what the window
     holds of it, and the payload names the window; no memo is used then,
-    since its summaries are of whole sessions.
+    since its summaries are of whole sessions. Sessions run in a temp dir
+    (test suites, scratchpad agents) are left out unless
+    ``show_temp_projects``.
     """
     now = now or datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)
@@ -836,9 +885,9 @@ def build_recent_payload(
     cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
     db_path = db_path or get_cache_db_path(projects_dir)
     if window is None:
-        rows = _session_rows(db_path, cutoff_iso, MAX_SESSIONS)
+        rows = _session_rows(db_path, cutoff_iso, MAX_SESSIONS, show_temp_projects)
     else:
-        rows = _window_session_rows(db_path, window)
+        rows = _window_session_rows(db_path, window, show_temp_projects)
         memo = None
 
     managers: dict[str, CacheManager] = {}
@@ -966,6 +1015,7 @@ def write_recent_data(
     now: Optional[datetime] = None,
     memo: Optional[RecentMemo] = None,
     session_pages: bool = True,
+    show_temp_projects: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Rewrite ``recent-data.js`` next to ``recent.html``, if that page exists.
 
@@ -974,6 +1024,7 @@ def write_recent_data(
     ``memo`` carries session summaries over from the previous call (see
     :class:`RecentMemo`). Without ``session_pages`` (``--combined only``)
     the rows link nowhere, since there is no session page to link to.
+    ``show_temp_projects`` keeps sessions run in a temp dir.
     """
     from .utils import atomic_write_text
 
@@ -984,6 +1035,7 @@ def write_recent_data(
         now=now,
         href_for=None if session_pages else _no_href,
         memo=memo,
+        show_temp_projects=show_temp_projects,
     )
     atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
     return payload

@@ -60,6 +60,7 @@ from .search import (
 )
 from .utils import (
     DEFAULT_THEME,
+    SHOW_TEMP_PROJECTS_ENV_VAR,
     THEME_CHOICES,
     THEME_ENV_VAR,
     normalize_theme,
@@ -84,6 +85,26 @@ def _theme_option(func: Any) -> Any:
         type=click.Choice(THEME_CHOICES, case_sensitive=False),
         default=None,
         help=THEME_HELP,
+    )(func)
+
+
+# `--show-temp-projects` is shared by `convert`, `serve` and `watch`, like
+# `--theme`: whichever runs the pass decides how the index and the recent
+# page treat projects worked on only from temp dirs.
+def _show_temp_projects_option(func: Any) -> Any:
+    return click.option(
+        "--show-temp-projects",
+        is_flag=True,
+        default=False,
+        envvar=SHOW_TEMP_PROJECTS_ENV_VAR,
+        help=(
+            "List projects worked on only from temporary directories (/tmp, "
+            "/var/folders, …: test suites, scratchpad agents, scripted runs) "
+            "with the rest. By default the index folds them into one "
+            "'Temporary directories' group at the end and the recent "
+            "sessions page leaves their sessions out. They are converted "
+            f"either way. Also ${SHOW_TEMP_PROJECTS_ENV_VAR}=1."
+        ),
     )(func)
 
 
@@ -298,6 +319,7 @@ def _run_provider_wholesale(
     expand_paths: bool,
     filter_path: "Optional[str]",
     theme: str = DEFAULT_THEME,
+    show_temp_projects: bool = False,
 ) -> None:
     """Render a whole provider sessions tree into a project hierarchy.
 
@@ -341,6 +363,7 @@ def _run_provider_wholesale(
         expand_paths=expand_paths,
         filter_path=filter_path,
         silent=False,
+        show_temp_projects=show_temp_projects,
     )
     if open_browser:
         click.launch(str(index_path))
@@ -1214,6 +1237,7 @@ def main() -> None:
     ),
 )
 @_theme_option
+@_show_temp_projects_option
 @click.option(
     "--debug",
     is_flag=True,
@@ -1252,6 +1276,7 @@ def convert(
     no_timestamps: bool,
     no_recaps: bool,
     theme: Optional[str],
+    show_temp_projects: bool,
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -1608,6 +1633,7 @@ def convert(
                     expand_paths,
                     filter_path,
                     theme=resolved_theme,
+                    show_temp_projects=show_temp_projects,
                 )
                 return
 
@@ -1976,6 +2002,7 @@ def convert(
                 jobs=jobs,
                 failed_projects=failed_projects,
                 force=force,
+                show_temp_projects=show_temp_projects,
             )
 
             # Count processed projects
@@ -2043,6 +2070,7 @@ def convert(
                         expand_paths,
                         filter_path,
                         theme=resolved_theme,
+                        show_temp_projects=show_temp_projects,
                     )
                     return
                 _render_provider_input_file(
@@ -2299,6 +2327,7 @@ def convert(
     ),
 )
 @_theme_option
+@_show_temp_projects_option
 @click.option(
     "--jobs",
     "-j",
@@ -2321,6 +2350,7 @@ def serve(
     no_index: bool,
     watch_sources: bool,
     theme: Optional[str],
+    show_temp_projects: bool,
     jobs: Optional[int],
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
@@ -2365,7 +2395,11 @@ def serve(
         # are current. --no-convert skips it for a fast start.
         click.echo(f"Refreshing {projects_path}...")
         process_projects_hierarchy(
-            projects_path, silent=True, theme=resolved_theme, jobs=jobs
+            projects_path,
+            silent=True,
+            theme=resolved_theme,
+            jobs=jobs,
+            show_temp_projects=show_temp_projects,
         )
 
     db_path = get_cache_db_path(projects_path)
@@ -2426,6 +2460,7 @@ def serve(
                 entry_store=serve_store,
                 theme=resolved_theme,
                 jobs=jobs,
+                show_temp_projects=show_temp_projects,
             )
 
         def report(exc: BaseException) -> None:
@@ -2645,6 +2680,7 @@ def _build_search_index(
     ),
 )
 @_theme_option
+@_show_temp_projects_option
 @click.option("--debug", is_flag=True, default=False, help="Show full tracebacks.")
 def watch(
     input_path: Optional[Path],
@@ -2657,6 +2693,7 @@ def watch(
     quiet_period: float,
     max_latency: float,
     theme: Optional[str],
+    show_temp_projects: bool,
     debug: bool,
 ) -> None:
     """Re-convert transcripts as they change, until interrupted.
@@ -2730,6 +2767,7 @@ def watch(
                 projects_path,
                 memo=recent_memo,
                 session_pages=individual,
+                show_temp_projects=show_temp_projects,
             )
         except Exception as exc:
             click.echo(f"  recent sessions not refreshed: {exc!r}", err=True)
@@ -2745,6 +2783,7 @@ def watch(
                 write_combined=write_combined,
                 generate_individual_sessions=individual,
                 theme=resolved_theme,
+                show_temp_projects=show_temp_projects,
             )
         else:
             convert_jsonl_to(

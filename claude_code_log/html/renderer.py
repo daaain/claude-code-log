@@ -104,6 +104,7 @@ from ..renderer import (
     TemplateMessage,
     generate_template_messages,
     prepare_projects_index,
+    split_temp_projects,
     title_for_projects_index,
 )
 from ..lanes import CrossLinks, annotate_lanes, teammate_links
@@ -2070,6 +2071,7 @@ class HtmlRenderer(Renderer):
         to_date: Optional[str] = None,
         expand_paths_tree: bool = False,
         provider_label: Optional[str] = None,
+        show_temp_projects: bool = False,
     ) -> str:
         """Generate an HTML projects index page.
 
@@ -2081,11 +2083,16 @@ class HtmlRenderer(Renderer):
                 mirrors the projected directory tree, instead of a flat
                 grid of cards.
             provider_label: Provider name for the title (None → Claude).
+            show_temp_projects: List temp-dir projects with the rest
+                instead of folding them into one group at the end.
         """
         title = title_for_projects_index(
             project_summaries, from_date, to_date, provider_label
         )
-        template_projects, template_summary = prepare_projects_index(project_summaries)
+        template_projects, template_summary = prepare_projects_index(
+            project_summaries, show_temp_projects=show_temp_projects
+        )
+        template_projects, temp_projects = split_temp_projects(template_projects)
 
         project_tree: Optional[dict[str, Any]] = None
         if expand_paths_tree:
@@ -2097,6 +2104,7 @@ class HtmlRenderer(Renderer):
             template.render(
                 title=title,
                 projects=template_projects,
+                temp_projects=temp_projects,
                 project_tree=project_tree,
                 summary=template_summary,
                 library_version=get_library_version(),

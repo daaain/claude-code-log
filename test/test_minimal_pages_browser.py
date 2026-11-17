@@ -44,7 +44,11 @@ def archive(tmp_path_factory: pytest.TempPathFactory) -> Path:
         project = projects / name
         project.mkdir(parents=True)
         shutil.copy(TEST_DATA / source, project / "session.jsonl")
-    process_projects_hierarchy(projects, silent=True, theme="minimal")
+    # The test data's sessions ran in /tmp: list them as ordinary rows
+    # rather than in the folded "Temporary directories" group.
+    process_projects_hierarchy(
+        projects, silent=True, theme="minimal", show_temp_projects=True
+    )
     conn = sqlite3.connect(get_cache_db_path(projects))
     ensure_index(conn)
     conn.close()

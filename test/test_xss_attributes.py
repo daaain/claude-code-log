@@ -247,8 +247,12 @@ def test_recent_payload_links_are_relative(tmp_path: Path) -> None:
     process_projects_hierarchy(projects, silent=True)
     from datetime import datetime, timezone
 
+    # The hostile archive's sessions ran in /tmp/x, which the page leaves
+    # out by default: keep them, the links are what is under test.
     payload = build_recent_payload(
-        projects, now=datetime(2025, 1, 1, 0, 10, tzinfo=timezone.utc)
+        projects,
+        now=datetime(2025, 1, 1, 0, 10, tzinfo=timezone.utc),
+        show_temp_projects=True,
     )
     hrefs = [s["href"] for s in payload["sessions"]]
     assert hrefs, payload
