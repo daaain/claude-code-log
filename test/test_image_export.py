@@ -444,6 +444,47 @@ class TestExportCompressedImage:
         assert result is not None
         assert (result.width, result.height) == (100, 400)
 
+    @pytest.mark.parametrize("mode", ["RGB", "L"])
+    def test_colour_key_transparency_survives_reencoding(
+        self, tmp_path: Path, mode: str
+    ):
+        import base64
+        import io
+        import random
+
+        from PIL import Image
+
+        from claude_code_log.image_export import _encoder, export_compressed_image
+
+        encoder = _encoder()
+        assert encoder is not None
+        # Left half noise (so the re-encode beats the PNG), right half the
+        # key colour, which a PNG tRNS chunk marks transparent.
+        rng = random.Random("tRNS")
+        key = (0, 255, 0) if mode == "RGB" else 255
+        img = Image.new(mode, (300, 200))
+        img.putdata(
+            [
+                key
+                if i % 300 >= 150
+                else (
+                    (rng.randrange(255), 0, 0) if mode == "RGB" else rng.randrange(255)
+                )
+                for i in range(300 * 200)
+            ]
+        )
+        buf = io.BytesIO()
+        img.save(buf, "PNG", transparency=key)
+        data = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        result = export_compressed_image("image/png", data, tmp_path)
+        assert result is not None
+        assert result.src.endswith(encoder[1]), "expected a re-encode, not the source"
+        with Image.open(tmp_path / result.src) as out:
+            rgba = out.convert("RGBA")
+            assert rgba.getpixel((250, 100))[3] < 16  # keyed: transparent
+            assert rgba.getpixel((50, 100))[3] > 240  # noise: opaque
+
     def test_animated_gif_is_kept_as_is(self, tmp_path: Path):
         import base64
         import io

@@ -86,8 +86,9 @@ AVIF_SPEED = 8
 WEBP_QUALITY = 75
 WEBP_METHOD = 4
 #: Bump to rename every compressed image (e.g. after an encoder change
-#: that the settings above don't capture).
-_ENCODING_REVISION = 1
+#: that the settings above don't capture). 2: colour-keyed transparency
+#: kept as alpha.
+_ENCODING_REVISION = 2
 
 
 @dataclass(frozen=True)
@@ -175,9 +176,14 @@ def _compress(
             if encoder is None or getattr(im, "is_animated", False):
                 return raw, original_ext, size[0], size[1]
             img = ImageOps.exif_transpose(im)
-        if img.mode not in ("RGB", "RGBA", "L", "LA"):
-            has_alpha = "A" in img.getbands() or "transparency" in img.info
-            img = img.convert("RGBA" if has_alpha else "RGB")
+        if "transparency" in img.info:
+            # A colour key (PNG tRNS) on an RGB, L or P image. AVIF has no
+            # colour key, and Pillow's encoder keeps an RGB or L image's
+            # mode, so the keyed pixels would turn opaque: make the key a
+            # real alpha channel first.
+            img = img.convert("RGBA")
+        elif img.mode not in ("RGB", "RGBA", "L", "LA"):
+            img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
         img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
         fmt, ext = encoder
         buf = io.BytesIO()
