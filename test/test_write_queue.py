@@ -66,8 +66,14 @@ def _hold_then_write(db: str, hold_seconds: float) -> str:
 
 
 def _write_after_holder(db: str) -> str:
-    _started.wait(30)
     conn = sqlite3.connect(db, timeout=0.2)
+    # Read once so this connection has the WAL open. Otherwise the
+    # holder's close() sees itself as the last connection and checkpoints
+    # under an exclusive lock just as this writer gets its turn: on a slow
+    # CI disk that outlasts the 0.2 s timeout, and the test fails on the
+    # close rather than on the turn it is about.
+    conn.execute("SELECT 1 FROM t LIMIT 1").fetchall()
+    _started.wait(30)
     try:
         with write_transaction(conn):
             conn.execute("INSERT INTO t VALUES (1, x'00')")
