@@ -75,6 +75,7 @@ CREATE TABLE files (
     message_count INTEGER NOT NULL,
     subagents_fingerprint TEXT,
     content_version TEXT,
+    image_bytes INTEGER NOT NULL DEFAULT 0,
     content_bytes INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE messages (
@@ -201,6 +202,7 @@ class SpooledFile:
     message_count: int
     subagents_fingerprint: Optional[str]
     content_version: Optional[str]
+    image_bytes: int
     content_bytes: int
 
 
@@ -264,12 +266,17 @@ class RefreshSpool:
                 """INSERT INTO files
                    (file_name, file_path, mode, expected_existing, source_mtime,
                     source_size, cached_mtime, message_count,
-                    subagents_fingerprint, content_version)
+                    subagents_fingerprint, content_version, image_bytes)
                    VALUES (:file_name, :file_path, :mode, :expected_existing,
                            :source_mtime, :source_size, :cached_mtime,
                            :message_count, :subagents_fingerprint,
-                           :content_version)""",
-                {**record, "mode": mode, "expected_existing": expected_existing},
+                           :content_version, :image_bytes)""",
+                {
+                    "image_bytes": 0,
+                    **record,
+                    "mode": mode,
+                    "expected_existing": expected_existing,
+                },
             )
             file_id = cursor.lastrowid or 0
             size = 0
@@ -307,7 +314,8 @@ class RefreshSpool:
         rows = self._conn.execute(
             """SELECT id, file_name, file_path, mode, expected_existing,
                       source_mtime, source_size, cached_mtime, message_count,
-                      subagents_fingerprint, content_version, content_bytes
+                      subagents_fingerprint, content_version, image_bytes,
+                      content_bytes
                FROM files ORDER BY id"""
         ).fetchall()
         return [SpooledFile(*row) for row in rows]

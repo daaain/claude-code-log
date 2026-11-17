@@ -45,8 +45,9 @@ from .utils import (
     get_project_display_name,
     is_agent_session,
     parse_date_bounds,
-    project_transcript_bytes,
     relative_href,
+    resident_bytes,
+    resident_transcript_bytes,
     should_use_as_session_starter,
     create_session_preview,
     get_warmup_session_ids,
@@ -329,6 +330,9 @@ class _ByteParse:
     start_line: int
     resumed: bool
     held_count: int
+    # Characters of the held prefix's lines the parse did not keep
+    # (`image_store.take_images`); the parse adds its own lines'.
+    held_image_chars: int = 0
     # What the parse had produced when it reached the first line past the
     # prefix cut — i.e. the products of complete lines only. None until
     # that line is reached, which for a newline-terminated tail is the
@@ -336,6 +340,7 @@ class _ByteParse:
     # everything. See :meth:`mark_incomplete` and :meth:`commit`.
     complete_count: Optional[int] = None
     complete_agent_ids: Optional[set[str]] = None
+    complete_image_chars: Optional[int] = None
 
     @property
     def mark_line(self) -> int:
@@ -345,12 +350,13 @@ class _ByteParse:
         )
 
     def mark_incomplete(
-        self, messages: list[TranscriptEntry], agent_ids: set[str]
+        self, messages: list[TranscriptEntry], agent_ids: set[str], image_chars: int
     ) -> None:
         """Snapshot what complete lines produced, before the trailing fragment."""
         if self.complete_count is None:
             self.complete_count = len(messages)
             self.complete_agent_ids = set(agent_ids)
+            self.complete_image_chars = image_chars
 
     def lines(self) -> Generator[tuple[int, str], None, None]:
         """Yield ``(line_no, text)`` for the bytes past the held prefix."""
@@ -366,6 +372,7 @@ class _ByteParse:
         entry_store: "ParsedEntryStore",
         messages: list[TranscriptEntry],
         agent_ids: set[str],
+        image_chars: int,
     ) -> None:
         """Hold the parse for the next tick, up to the last *complete* line.
 
@@ -389,6 +396,7 @@ class _ByteParse:
         if self.complete_count is not None:
             messages = messages[: self.complete_count]
             agent_ids = self.complete_agent_ids or set()
+            image_chars = self.complete_image_chars or 0
         entry_store.put_prefix(
             self.path,
             consumed,
@@ -396,6 +404,7 @@ class _ByteParse:
             messages,
             agent_ids,
             line_count,
+            image_chars=image_chars,
         )
 
 
@@ -480,6 +489,7 @@ def _begin_byte_parse(
         start_line=held.line_count if held else 0,
         resumed=held is not None,
         held_count=len(held.entries) if held else 0,
+        held_image_chars=held.image_chars if held else 0,
     )
 
 
@@ -594,9 +604,14 @@ def load_transcript(
         else None
     )
 
+    # Characters of this file's own lines the parse does not keep: image
+    # base64 held by reference or dropped (`image_store.take_images`),
+    # recorded with the file for the memory checks.
+    image_chars = 0
     if byte_parse is not None:
         messages = byte_parse.entries
         agent_ids = byte_parse.agent_ids
+        image_chars = byte_parse.held_image_chars
         line_source = byte_parse.lines()
         # The first line whose bytes fall outside the prefix cut: reaching
         # it is what tells `commit` where the holdable entries stop.
@@ -618,7 +633,7 @@ def load_transcript(
             print(f"Processing {jsonl_path}...")
         for line_no, line in line_source:
             if line_no == mark_line and byte_parse is not None:
-                byte_parse.mark_incomplete(messages, agent_ids)
+                byte_parse.mark_incomplete(messages, agent_ids, image_chars)
             line = line.strip()
             if line:
                 try:
@@ -632,7 +647,7 @@ def load_transcript(
                     # Images become references, their bytes held once
                     # each until the cache stores them (`image_store`).
                     if BASE64_MARK in line or REF_MARK in line:
-                        take_images(entry_dict)
+                        image_chars += take_images(entry_dict)
 
                     # Ids become file names, a `claude --resume` argument
                     # and markup, so an invalid one is replaced before
@@ -751,7 +766,7 @@ def load_transcript(
     # `spawnedAgentId`) and splice agent blocks in, and a resumed parse
     # must start from the raw per-line products and re-run them.
     if byte_parse is not None and entry_store is not None:
-        byte_parse.commit(entry_store, messages, agent_ids)
+        byte_parse.commit(entry_store, messages, agent_ids, image_chars)
 
     # How many entries came straight off the file's own lines, before any
     # of the whole-file passes below can add or alter one. The append-only
@@ -876,9 +891,14 @@ def load_transcript(
             appended,
             subagents_fp=subagents_fp,
             source_stat=source_stat,
+            image_bytes=image_chars,
         ):
             cache_manager.save_cached_entries(
-                jsonl_path, messages, subagents_fp=subagents_fp, source_stat=source_stat
+                jsonl_path,
+                messages,
+                subagents_fp=subagents_fp,
+                source_stat=source_stat,
+                image_bytes=image_chars,
             )
 
     return messages
@@ -3258,6 +3278,16 @@ def _streaming_mode() -> str:
 _STREAMING_MAX_SPARSE_FRACTION = 1.0 / 3.0
 
 
+def _resident_project_bytes(
+    input_path: Path, cache_manager: "Optional[CacheManager]"
+) -> int:
+    """The project's transcript bytes less the images a parse doesn't hold
+    (`utils.resident_transcript_bytes`), as far as the cache has counted
+    them: what every memory check sizes a conversion from."""
+    image_bytes = cache_manager.image_bytes_by_file() if cache_manager else {}
+    return resident_transcript_bytes(input_path, image_bytes)
+
+
 def _should_stream(transcript_bytes: int) -> Optional[str]:
     """How this conversion should stream page-by-page, if at all.
 
@@ -3466,6 +3496,9 @@ def _stream_paginated_conversion(
         # full path would have done itself.
         if sparse_only and len(page_work) > len(pages) * _STREAMING_MAX_SPARSE_FRACTION:
             return None
+        # Each page's fragment-store valve sizes from its files less
+        # their images (`utils.resident_bytes`).
+        image_bytes = cache_manager.image_bytes_by_file()
 
         if not silent:
             print(
@@ -3506,7 +3539,7 @@ def _stream_paginated_conversion(
             # so its keys (this load's entry ordinals) never cross loads,
             # and its memory is bounded by the page. The valve compares
             # against the page's own source bytes.
-            page_bytes = sum(f.stat().st_size for f in trunk_files)
+            page_bytes = resident_bytes(trunk_files, image_bytes)
             fragment_store = _make_fragment_store("html", transcript_bytes=page_bytes)
             if fragment_store is not None:
                 fragment_store.set_entry_ordinals(page_entries)
@@ -3827,7 +3860,7 @@ def _try_streaming(
     )
     if not stream_paginated:
         return None
-    stream_decision = _should_stream(project_transcript_bytes(input_path))
+    stream_decision = _should_stream(_resident_project_bytes(input_path, cache_manager))
     if stream_decision is None:
         return None
 
@@ -4235,9 +4268,10 @@ def convert_jsonl_to(
     # work/render-format-once.md). Scoped to this call: it dies with the
     # conversion, so nothing about it needs invalidating. The byte count
     # feeds the store's memory valve (same source-size measure as
-    # build_render_pool's cap: top-level JSONL, agent files excluded).
+    # build_render_pool's cap: top-level JSONL, agent files excluded, less
+    # the images a parse doesn't hold).
     if input_path.is_dir():
-        source_bytes = project_transcript_bytes(input_path)
+        source_bytes = _resident_project_bytes(input_path, cache_manager)
     else:
         source_bytes = input_path.stat().st_size
     fragment_store = _make_fragment_store(format, transcript_bytes=source_bytes)
@@ -4597,6 +4631,11 @@ def _incremental_cache_refresh(
         old_file_map = cache_manager.get_session_file_map()
         old_rows = cache_manager.get_all_session_rows()
 
+        def image_bytes_after(path: Path) -> int:
+            # What the parse just recorded for the file (the scope's
+            # overlay reads the spool): the store charges for the rest.
+            return cache_manager.image_bytes_by_file().get(path.name, 0)
+
         for f in modified_files:
             # Stamp BEFORE the parse: a file that grows while we read it
             # must make the store decline (its stamp would then be older
@@ -4607,7 +4646,10 @@ def _incremental_cache_refresh(
             )
             if entry_store is not None:
                 entry_store.put(
-                    f, pending.finish(f, parsed) if pending else None, parsed
+                    f,
+                    pending.finish(f, parsed) if pending else None,
+                    parsed,
+                    image_chars=image_bytes_after(f),
                 )
         new_states = cache_manager.get_file_states(modified_names)
 
@@ -6912,7 +6954,10 @@ def _plan_project(
         needs_work=needs_work,
         archived_count=archived_count,
         stats=stats,
-        source_bytes=sum(f.stat().st_size for f in jsonl_files),
+        source_bytes=resident_bytes(
+            jsonl_files,
+            cache_manager.image_bytes_by_file() if cache_manager is not None else {},
+        ),
         cached_message_count=cached_message_count,
     )
 

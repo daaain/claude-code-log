@@ -146,9 +146,10 @@ _recent_bytes = 0
 _caches: List[Path] = []
 
 
-def take_images(entry: Dict[str, Any]) -> None:
+def take_images(entry: Dict[str, Any]) -> int:
     """Swap every image source in a parsed entry (a JSONL line's dict) for
-    a reference, in place, holding its bytes.
+    a reference, in place, holding its bytes; returns how many characters
+    of the line the entry will not hold (`non_resident_chars`).
 
     Called by every transcript parser before validation, so the models
     are built with references. Gate it on the line's text holding
@@ -159,6 +160,7 @@ def take_images(entry: Dict[str, Any]) -> None:
     which writes images inline: it is emptied (a placeholder), so a
     transcript can't point a page at an image of another session's.
     """
+    dropped = _read_copy_chars(entry)
     for source in list(image_sources(entry)):
         if source.get("type") == REF_TYPE:
             media_type = source.get("media_type")
@@ -174,9 +176,24 @@ def take_images(entry: Dict[str, Any]) -> None:
         blob = extract_blob(source)
         if blob is None:
             continue
+        dropped += len(source["data"])
         hold(blob.digest, blob.data)
         source.clear()
         source.update(ref_source(blob.digest, blob.media_type))
+    return dropped
+
+
+def _read_copy_chars(entry: Dict[str, Any]) -> int:
+    """The length of a Read result's second copy of its image
+    (``toolUseResult.file.base64``), which the entry model drops."""
+    result = entry.get("toolUseResult")
+    if not isinstance(result, dict):
+        return 0
+    file_info = cast(Dict[str, Any], result).get("file")
+    if not isinstance(file_info, dict):
+        return 0
+    copy = cast(Dict[str, Any], file_info).get("base64")
+    return len(copy) if isinstance(copy, str) else 0
 
 
 def hold(digest: str, data: bytes) -> None:

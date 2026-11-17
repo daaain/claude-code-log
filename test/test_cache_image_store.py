@@ -696,3 +696,110 @@ class TestForgedReferences:
         source = {"type": "ref", "digest": digest, "media_type": "image/png"}
         assert image_store.image_digest(source) is None
         assert image_bytes(source) is None
+
+
+# ---- what the memory checks size from ----------------------------------------
+
+
+def _read_result(uuid: str, sid: str, parent: Any, data: str) -> Dict[str, Any]:
+    """A Read of an image: the image block, and the copy in toolUseResult."""
+    return {
+        **_tool_result_user(uuid, sid, data),
+        "parentUuid": parent,
+        "toolUseResult": {
+            "type": "image",
+            "file": {"base64": data, "type": "image/png", "originalSize": 1},
+        },
+    }
+
+
+class TestResidentBytes:
+    """The memory checks size a conversion from its transcript bytes less
+    the image base64 a parse doesn't hold."""
+
+    def test_take_images_counts_what_the_entry_will_not_hold(self) -> None:
+        pasted, read = _png(50), _png(51)
+        entry = _user("u1", "s1", None, [_image(pasted), _image("iVBORw0KGgo=")])
+        assert image_store.take_images(entry) == len(pasted)
+        entry = _read_result("u2", "s1", None, read)
+        # The image block, and the Read copy the model drops.
+        assert image_store.take_images(entry) == 2 * len(read)
+
+    def test_the_cache_records_each_file_s_images(self, project: Path) -> None:
+        from claude_code_log.converter import _resident_project_bytes
+        from claude_code_log.utils import project_transcript_bytes
+
+        pasted, read = _png(52), _png(53)
+        path = project / "s1.jsonl"
+        _write(
+            path,
+            _user("u1", "s1", None, [_text("look"), _image(pasted)]),
+            _tool_use("a1", "s1", "u1"),
+            _read_result("u22", "s1", "a1", read),
+        )
+        manager = _manager(project)
+        ensure_fresh_cache(project, manager, silent=True)
+
+        expected = len(pasted) + 2 * len(read)
+        assert manager.image_bytes_by_file() == {"s1.jsonl": expected}
+        assert (
+            _resident_project_bytes(project, manager)
+            == project_transcript_bytes(project) - expected
+        )
+
+    def test_a_refresh_through_the_spool_records_the_whole_file(
+        self, project: Path
+    ) -> None:
+        path = project / "s1.jsonl"
+        first, late = _png(54), _png(55)
+        _write(path, _user("u1", "s1", None, [_text("a"), _image(first)]))
+        ensure_fresh_cache(project, _manager(project), silent=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(_user("u22", "s1", "u1", [_text("b"), _image(late)])) + "\n"
+            )
+        manager = _manager(project)
+        ensure_fresh_cache(project, manager, silent=True)
+        assert manager.image_bytes_by_file() == {"s1.jsonl": len(first) + len(late)}
+
+    def test_a_resumed_parse_counts_the_held_prefix_too(self, project: Path) -> None:
+        """A watch tick parses only what was appended, from a held prefix:
+        the file's count still covers all of it."""
+        from claude_code_log.entry_store import ParsedEntryStore
+
+        path = project / "s1.jsonl"
+        first, late = _png(56), _png(57)
+        _write(path, _user("u1", "s1", None, [_text("a"), _image(first)]))
+        store = ParsedEntryStore()
+        manager = _manager(project)
+        load_transcript(path, manager, silent=True, entry_store=store)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(_user("u22", "s1", "u1", [_text("b"), _image(late)])) + "\n"
+            )
+        load_transcript(path, manager, silent=True, entry_store=store)
+
+        assert store.prefix_hits == 1
+        assert manager.image_bytes_by_file() == {"s1.jsonl": len(first) + len(late)}
+        # And the store charges for the text alone.
+        assert store.held_bytes == path.stat().st_size - len(first) - len(late)
+
+    def test_the_entry_store_charges_a_file_less_its_images(self) -> None:
+        from claude_code_log.entry_store import ParsedEntryStore
+
+        store = ParsedEntryStore()
+        stamp = (10_000, 0, None)
+        store.put(Path("/x.jsonl"), stamp, [object()], image_chars=7_000)  # type: ignore[list-item]
+        assert store.held_bytes == 3_000
+        store.put(Path("/x.jsonl"), stamp, [object()])  # type: ignore[list-item]
+        assert store.held_bytes == 10_000
+
+    def test_a_file_without_a_count_is_taken_whole(self, tmp_path: Path) -> None:
+        from claude_code_log.utils import resident_bytes
+
+        a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+        a.write_text("x" * 100)
+        b.write_text("y" * 50)
+        assert resident_bytes([a, b], {"a.jsonl": 60}) == 90
+        # A stale count larger than the file never goes negative.
+        assert resident_bytes([a], {"a.jsonl": 500}) == 0

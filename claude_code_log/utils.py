@@ -8,7 +8,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
-from typing import Callable, Optional, Sequence, TypeVar
+from typing import Callable, Iterable, Mapping, Optional, Sequence, TypeVar
 
 from .models import (
     ContentItem,
@@ -1108,6 +1108,30 @@ def project_transcript_bytes(directory: Path) -> int:
     projects carry top-level agent files, one of them inflating by 30%.
     """
     return sum(f.stat().st_size for f in trunk_jsonl_files(directory))
+
+
+def resident_bytes(files: Iterable[Path], image_bytes: Mapping[str, int]) -> int:
+    """Bytes of ``files`` a parse keeps in memory: each file's size less
+    its images (``image_bytes``, by file name, from
+    ``CacheManager.image_bytes_by_file``).
+
+    A parse holds an image as a reference and drops a Read result's
+    second copy (`image_store.take_images`), so the base64 in a
+    transcript never reaches the memory the checks budget for. On
+    image-heavy projects that is most of the file. A file the cache has
+    no count for is taken whole, which only overestimates.
+    """
+    total = 0
+    for f in files:
+        size = f.stat().st_size
+        total += max(0, size - image_bytes.get(f.name, 0))
+    return total
+
+
+def resident_transcript_bytes(directory: Path, image_bytes: Mapping[str, int]) -> int:
+    """:func:`project_transcript_bytes` less the images a parse doesn't
+    hold (:func:`resident_bytes`): what the memory checks size from."""
+    return resident_bytes(trunk_jsonl_files(directory), image_bytes)
 
 
 def is_agent_session(session_id: str) -> bool:

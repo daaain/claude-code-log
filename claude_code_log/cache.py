@@ -1325,8 +1325,9 @@ _INSERT_MESSAGE = (
 _UPSERT_CACHED_FILE = """
     INSERT INTO cached_files
     (project_id, file_name, file_path, source_mtime, source_size,
-     cached_mtime, message_count, subagents_fingerprint, content_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     cached_mtime, message_count, subagents_fingerprint, content_version,
+     image_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id, file_name) DO UPDATE SET
         file_path = excluded.file_path,
         source_mtime = excluded.source_mtime,
@@ -1334,14 +1335,16 @@ _UPSERT_CACHED_FILE = """
         cached_mtime = excluded.cached_mtime,
         message_count = excluded.message_count,
         subagents_fingerprint = excluded.subagents_fingerprint,
-        content_version = excluded.content_version
+        content_version = excluded.content_version,
+        image_bytes = excluded.image_bytes
 """
 
 # The same columns on a file whose id is known (an append).
 _UPDATE_CACHED_FILE = """
     UPDATE cached_files
     SET file_path = ?, source_mtime = ?, source_size = ?, cached_mtime = ?,
-        message_count = ?, subagents_fingerprint = ?, content_version = ?
+        message_count = ?, subagents_fingerprint = ?, content_version = ?,
+        image_bytes = ?
     WHERE id = ?
 """
 
@@ -1437,7 +1440,8 @@ class _PendingRefresh:
         self.records = records
         self.deferred: List[Callable[[sqlite3.Connection], None]] = []
         self.appends: Dict[
-            str, Tuple[Path, List[TranscriptEntry], Optional[str], os.stat_result]
+            str,
+            Tuple[Path, List[TranscriptEntry], Optional[str], os.stat_result, int],
         ] = {}
 
 
@@ -2066,6 +2070,7 @@ class CacheManager:
             spooled.message_count,
             spooled.subagents_fingerprint,
             spooled.content_version,
+            spooled.image_bytes,
         )
         if spooled.mode == "append":
             row = conn.execute(
@@ -2088,12 +2093,12 @@ class CacheManager:
             # process rewrote the file's rows since the parse): rewrite
             # the file whole from the parse, under the lock, as the
             # direct path's refused append falls back to a full save.
-            jsonl_path, entries, subagents_fp, source_stat = pending.appends[
-                spooled.file_name
-            ]
+            jsonl_path, entries, subagents_fp, source_stat, image_bytes = (
+                pending.appends[spooled.file_name]
+            )
             rows = [self._serialize_entry(entry, 0) for entry in entries]
             return self._replace_file_rows(
-                conn, jsonl_path, rows, source_stat, subagents_fp
+                conn, jsonl_path, rows, source_stat, subagents_fp, image_bytes
             )
 
         conn.execute(_UPSERT_CACHED_FILE, record)
@@ -2584,8 +2589,13 @@ class CacheManager:
         entries: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
         source_stat: Optional[os.stat_result] = None,
+        image_bytes: int = 0,
     ) -> None:
         """Save parsed transcript entries to cache.
+
+        ``image_bytes`` is how much of the file's own text the parse did
+        not keep in memory (`image_store.take_images`), recorded for the
+        memory checks (`resident_transcript_bytes`).
 
         ``subagents_fp`` is the sidecar fingerprint AS OF THE PARSE —
         callers that scanned sidecars should pass the value captured
@@ -2621,7 +2631,9 @@ class CacheManager:
             # Spooled: the merge at the scope's end writes it, in one
             # transaction with everything else the refresh produced.
             self._refresh.spool.add(
-                self._file_record(jsonl_path, source_stat, len(entries), subagents_fp),
+                self._file_record(
+                    jsonl_path, source_stat, len(entries), subagents_fp, image_bytes
+                ),
                 serialized_entries,
                 mode="replace",
             )
@@ -2629,7 +2641,12 @@ class CacheManager:
 
         with self._get_connection() as conn, write_transaction(conn):
             file_id = self._replace_file_rows(
-                conn, jsonl_path, serialized_entries, source_stat, subagents_fp
+                conn,
+                jsonl_path,
+                serialized_entries,
+                source_stat,
+                subagents_fp,
+                image_bytes,
             )
             if self._cold is not None:
                 self._cold.written[jsonl_path.name] = self._file_record_identity(
@@ -2663,6 +2680,7 @@ class CacheManager:
         source_stat: os.stat_result,
         message_count: int,
         subagents_fp: Optional[str],
+        image_bytes: int = 0,
     ) -> Dict[str, Any]:
         """A file's ``cached_files`` columns as of a parse, by name."""
         return {
@@ -2674,6 +2692,7 @@ class CacheManager:
             "message_count": message_count,
             "subagents_fingerprint": subagents_fp,
             "content_version": content_schema_version(),
+            "image_bytes": image_bytes,
         }
 
     def _file_id_under_lock(self, conn: sqlite3.Connection, file_name: str) -> int:
@@ -2691,11 +2710,12 @@ class CacheManager:
         serialized_entries: List[Dict[str, Any]],
         source_stat: os.stat_result,
         subagents_fp: Optional[str],
+        image_bytes: int = 0,
     ) -> int:
         """Write a file's record and its whole row set, under the caller's
         write lock; returns the file id."""
         record = self._file_record(
-            jsonl_path, source_stat, len(serialized_entries), subagents_fp
+            jsonl_path, source_stat, len(serialized_entries), subagents_fp, image_bytes
         )
         conn.execute(
             _UPSERT_CACHED_FILE,
@@ -2709,6 +2729,7 @@ class CacheManager:
                 record["message_count"],
                 record["subagents_fingerprint"],
                 record["content_version"],
+                record["image_bytes"],
             ),
         )
         file_id = self._file_id_under_lock(conn, jsonl_path.name)
@@ -2726,6 +2747,7 @@ class CacheManager:
         appended: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
         source_stat: Optional[os.stat_result] = None,
+        image_bytes: int = 0,
     ) -> bool:
         """Insert only ``appended``, leaving the file's existing rows in place.
 
@@ -2772,7 +2794,7 @@ class CacheManager:
                 return False
             self._refresh.spool.add(
                 self._file_record(
-                    jsonl_path, source_stat, len(all_entries), subagents_fp
+                    jsonl_path, source_stat, len(all_entries), subagents_fp, image_bytes
                 ),
                 appended_rows,
                 mode="append",
@@ -2783,6 +2805,7 @@ class CacheManager:
                 all_entries,
                 subagents_fp,
                 source_stat,
+                image_bytes,
             )
             return True
 
@@ -2804,6 +2827,7 @@ class CacheManager:
                 expected_existing,
                 source_stat,
                 subagents_fp,
+                image_bytes,
             )
             if appended_ok and self._cold is not None:
                 self._cold.written[jsonl_path.name] = self._file_record_identity(
@@ -2820,6 +2844,7 @@ class CacheManager:
         expected_existing: int,
         source_stat: os.stat_result,
         subagents_fp: Optional[str],
+        image_bytes: int = 0,
     ) -> bool:
         """The checked append itself, run under the caller's write lock.
 
@@ -2841,7 +2866,7 @@ class CacheManager:
             return False
 
         record = self._file_record(
-            jsonl_path, source_stat, len(all_entries), subagents_fp
+            jsonl_path, source_stat, len(all_entries), subagents_fp, image_bytes
         )
         conn.execute(
             _UPDATE_CACHED_FILE,
@@ -2853,6 +2878,7 @@ class CacheManager:
                 record["message_count"],
                 record["subagents_fingerprint"],
                 record["content_version"],
+                record["image_bytes"],
                 file_id,
             ),
         )
@@ -3157,6 +3183,25 @@ class CacheManager:
                     (self._project_id,),
                 )
             }
+
+    def image_bytes_by_file(self) -> Dict[str, int]:
+        """Per cached file of the project, how much of its text its parse
+        did not keep in memory (images, `image_store.take_images`); files
+        recorded before migration 018, or with no image, are left out."""
+        if self._project_id is None:
+            return {}
+        try:
+            with self._get_connection() as conn:
+                return {
+                    row["file_name"]: int(row["image_bytes"])
+                    for row in conn.execute(
+                        "SELECT file_name, image_bytes FROM cached_files"
+                        " WHERE project_id = ? AND image_bytes > 0",
+                        (self._project_id,),
+                    )
+                }
+        except sqlite3.Error:
+            return {}
 
     def get_file_states(self, file_names: List[str]) -> Dict[str, CachedFileState]:
         """Identity-relevant cached state per file (see CachedFileState).
