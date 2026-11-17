@@ -928,8 +928,10 @@ images go through the same gate and, in HTML, the same export mode
 `claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
 
 Default is `referenced` for both: an HTML page or `.md` file then
-needs the `images/` directory beside it, and `embedded` gives the
-single self-contained file HTML used to default to.
+needs the `images/` directory beside it. `embedded` drops that
+requirement, but an HTML page is still not a single self-contained
+file: its timeline loads vis-timeline from the `assets/` directory
+beside it (below).
 
 Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
 from a BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
