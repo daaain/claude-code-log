@@ -5249,14 +5249,19 @@ def has_nothing_to_open(project_summary: dict[str, Any]) -> bool:
     its first prompt, say), or only a summary entry (older Claude Code
     wrote those to files of their own). A summary or ai-title entry counts
     toward ``message_count`` but carries no timestamp and renders nothing,
-    so a project whose entries have no timestamp at all shows nothing
-    either. Messages without a listable session (an agent-only session)
+    so a project whose summary records no timestamp at all (an empty
+    ``latest_timestamp``, as every converter path sets it) shows nothing
+    either. A summary that doesn't report timestamps is no evidence of
+    that. Messages without a listable session (an agent-only session)
     still open, on the combined page.
     """
     if project_summary.get("sessions"):
         return False
-    return not project_summary.get("message_count") or not project_summary.get(
-        "latest_timestamp"
+    if not project_summary.get("message_count"):
+        return True
+    return (
+        "latest_timestamp" in project_summary
+        and not project_summary["latest_timestamp"]
     )
 
 
