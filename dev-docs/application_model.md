@@ -2149,9 +2149,10 @@ odd places) is test-suite, scratchpad-agent or scripted-run debris. The
 query leaves it out with `ccl_is_temp_session`, a Python function
 registered on the read-only connection (`recent._temp_filter`), so the
 filter runs *before* `LIMIT`: dropping rows afterwards would let a burst
-of them crowd real sessions off the page. A date window's candidates are
-filtered by project folder before their `MAX_SESSIONS` cut, then by cwd
-in the same query. `--show-temp-projects`
+of them crowd real sessions off the page. A date window's candidates
+are keyed rather than queried, so they are matched against
+`_temp_session_keys` (one pass over the sessions table, the same
+classification) before their `MAX_SESSIONS` cut. `--show-temp-projects`
 (`CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS`) turns the filter off; it reaches
 the page through `process_projects_hierarchy` → `_write_recent_page`, and
 `watch`'s per-tick `write_recent_data`. The index's side is in

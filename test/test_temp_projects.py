@@ -81,6 +81,10 @@ def test_without_working_dirs_the_folder_name_decides() -> None:
     assert is_temp_project("-tmp-x", None)
     assert is_temp_project("-tmp", None)
     assert is_temp_project("C--Users-u-AppData-Local-Temp-x", [])
+    assert is_temp_project("C--Users-u-AppData-Local-Temp", [])
+    # Bounded: a sibling of Temp is a real folder.
+    assert not is_temp_project("C--Users-u-AppData-Local-Templates", [])
+    assert not is_temp_project("C--Users-u-AppData-Local-Templates-x", [])
     assert not is_temp_project("-Users-u-tmp-notes", [])
     assert not is_temp_project("-tmpfiles-x", [])
     assert not is_temp_project("-Users-u-code-repo", [])
@@ -93,6 +97,9 @@ def test_a_session_is_temp_by_its_cwd_else_its_project_folder() -> None:
     # Only the folder's own name counts, not where the archive lives.
     assert not is_temp_session(None, "/tmp/pytest-of-u/projects/-Users-u-x")
     assert not is_temp_session(None, None)
+    assert not is_temp_session(
+        None, "C:/a/.claude/projects/C--Users-u-AppData-Local-Templates"
+    )
 
 
 # -- the index ----------------------------------------------------------------
@@ -248,8 +255,10 @@ def test_markdown_index_unchanged_without_temp_projects() -> None:
 # -- the CLI ------------------------------------------------------------------
 
 
-def _write_project(projects: Path, cwd: str, session_id: str) -> None:
-    project = projects / cwd.replace("/", "-")
+def _write_project(
+    projects: Path, cwd: str, session_id: str, folder: str | None = None
+) -> None:
+    project = projects / (folder or cwd.replace("/", "-"))
     project.mkdir(parents=True)
     lines = [
         {
@@ -326,3 +335,15 @@ def test_serve_and_watch_take_the_flag(command: str) -> None:
     result = CliRunner().invoke(main, [command, "--help"])
     assert result.exit_code == 0
     assert "--show-temp-projects" in result.output
+
+
+def test_without_a_cache_the_messages_cwds_decide(tmp_path: Path) -> None:
+    """``--no-cache`` has no cached working dirs: the loaded messages' cwds
+    stand in, so a temp-only project under a non-temp folder name is still
+    folded, as the cached path folds it."""
+    projects = tmp_path / "projects"
+    _write_project(projects, "/Users/u/code/alpha", "aaaa1111")
+    _write_project(projects, "/tmp/run", "tttt2222", folder="-home-u-work")
+    before, group = _split_at_group(_convert(projects, "--no-cache"))
+    assert "-home-u-work/combined_transcripts.html" in group
+    assert "-home-u-work" not in before

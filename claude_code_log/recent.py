@@ -728,6 +728,27 @@ def _temp_filter(conn: sqlite3.Connection, show_temp: bool) -> str:
     return " AND NOT ccl_is_temp_session(s.cwd, p.project_path)"
 
 
+def _temp_session_keys(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """``(project path, session id)`` of every session run in a temp dir.
+
+    By its recorded cwd, the folder name only without one (the same
+    :func:`~claude_code_log.utils.is_temp_session` as :func:`_temp_filter`).
+    A date window's candidates are keyed, not queried, so they are matched
+    against this set before their cut; one pass over the sessions table
+    also keeps a large window out of an ``IN`` list.
+    """
+    rows = conn.execute(
+        """SELECT s.session_id, s.cwd, p.project_path
+           FROM sessions s JOIN projects p ON p.id = s.project_id
+           WHERE s.hidden = 0"""
+    )
+    return {
+        (str(Path(project_path)), session_id)
+        for session_id, cwd, project_path in rows
+        if is_temp_session(cwd, project_path)
+    }
+
+
 def _session_rows(
     db_path: Path, cutoff_iso: str, limit: int, show_temp: bool = False
 ) -> list[sqlite3.Row]:
@@ -797,30 +818,30 @@ def _window_session_rows(
 
     Newest by the window's own last message, at most :data:`MAX_SESSIONS`
     as on any run, and however old: the window, not the clock, decides.
-    Sessions run in a temp dir are left out unless ``show_temp``: by
-    project folder before the cut, so they don't take places, and by cwd
-    in the query. A ``mode=ro`` reader, like :func:`_session_rows`.
+    Sessions run in a temp dir are left out unless ``show_temp``, before
+    the cut, so they don't take places (:func:`_temp_session_keys`). A
+    ``mode=ro`` reader, like :func:`_session_rows`.
     """
 
     def last(key: tuple[str, str]) -> str:
         return str(window.sessions[key].get("last_timestamp") or "")
 
-    candidates = [
-        key for key in window.sessions if show_temp or not is_temp_session(None, key[0])
-    ]
-    keys = sorted(candidates, key=last, reverse=True)[:MAX_SESSIONS]
-    if not keys or not db_path.exists():
+    if not window.sessions or not db_path.exists():
         return []
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        temp_filter = _temp_filter(conn, show_temp)
+        temp: set[tuple[str, str]] = set() if show_temp else _temp_session_keys(conn)
+        candidates = [key for key in window.sessions if key not in temp]
+        keys = sorted(candidates, key=last, reverse=True)[:MAX_SESSIONS]
+        if not keys:
+            return []
         rows = conn.execute(
             f"""SELECT s.session_id, s.summary, s.ai_title, s.first_timestamp,
                       s.last_timestamp, s.message_count, s.first_user_message,
                       s.cwd, p.project_path
                FROM sessions s JOIN projects p ON p.id = s.project_id
-               WHERE s.hidden = 0{temp_filter}
+               WHERE s.hidden = 0
                  AND s.session_id IN ({", ".join("?" * len(keys))})""",
             [sid for _path, sid in keys],
         ).fetchall()

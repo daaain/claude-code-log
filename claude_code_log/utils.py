@@ -401,7 +401,8 @@ def _decoded_project_dir_is_temp(project_dir_name: str) -> bool:
     ``.``, ``_``) turned into ``-``, so the decode is lossy, but the temp
     roots themselves contain no dashes, so their prefixes survive it.
     """
-    if "-appdata-local-temp" in project_dir_name.lower():
+    lowered = project_dir_name.lower()
+    if lowered.endswith("-appdata-local-temp") or "-appdata-local-temp-" in lowered:
         return True
     return any(
         project_dir_name == root.replace("/", "-")

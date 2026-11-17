@@ -7874,9 +7874,15 @@ def _process_projects_hierarchy(
                     "total_cache_read_tokens": total_cache_read_tokens,
                     "latest_timestamp": latest_timestamp,
                     "earliest_timestamp": earliest_timestamp,
+                    # Without a cache, the cwds the loaded messages record:
+                    # the display name and the temp-project fold read them.
                     "working_directories": cache_manager.get_working_directories()
                     if cache_manager
-                    else [],
+                    else list(
+                        dict.fromkeys(
+                            cwd for m in messages if (cwd := getattr(m, "cwd", None))
+                        )
+                    ),
                     "is_archived": False,
                     "combined_suppressed": not write_combined,
                     "sessions": sessions_data,

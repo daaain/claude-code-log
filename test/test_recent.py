@@ -1392,3 +1392,36 @@ def test_a_date_window_leaves_temp_sessions_out_too(temp_burst: Path) -> None:
     )
     payload = _data_payload(temp_burst / RECENT_DATA)
     assert len(payload["sessions"]) == 4
+
+
+def test_a_date_window_classifies_by_cwd_before_its_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window's candidates are keyed by project folder, but the recorded
+    cwd decides, before the cut: temp-cwd sessions under a real-looking
+    folder can't take the places, and a real cwd under a temp-looking
+    folder stays."""
+    projects = tmp_path / "projects"
+    real = _Session("aaaa1111-real", cwd="/home/u/code/foldyard")
+    real.prompt(60, "Pin the cache mode.")
+    real.reply(59, "Pinned.")
+    _project(projects, "-home-u-code-foldyard", real)
+    moved = _Session("bbbb2222-moved", cwd="/home/u/code/moved")
+    moved.prompt(50, "Carry on.")
+    moved.reply(49, "Done.")
+    _project(projects, "-tmp-moved", moved)
+    burst_dir = projects / "-home-u-code-burst"
+    burst_dir.mkdir(parents=True)
+    for n in range(3):
+        burst = _Session(f"tttt000{n}-temp", cwd=f"/tmp/pytest-{n}/repo")
+        burst.prompt(10 + n, "Return an empty list of findings.")
+        burst.reply(9 + n, "[]")
+        burst.write(burst_dir / f"{burst.session_id}.jsonl")
+    monkeypatch.setattr(recent_module, "MAX_SESSIONS", 2)
+    day = NOW.strftime("%Y-%m-%d")
+    process_projects_hierarchy(projects, silent=True, from_date=day, to_date=day)
+    payload = _data_payload(projects / RECENT_DATA)
+    assert [s["id"] for s in payload["sessions"]] == [
+        "bbbb2222-moved",
+        "aaaa1111-real",
+    ]
