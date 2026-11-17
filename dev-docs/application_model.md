@@ -36,7 +36,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | CSS class taxonomy | `html/templates/components/*.css` | [css-classes.md](css-classes.md) |
 | JSON export (#36) | [`json/`](../claude_code_log/json/) | inlined below (§ 2.5) |
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
-| Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
+| Image export | [`image_export.py`](../claude_code_log/image_export.py), [`image_store.py`](../claude_code_log/image_store.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
 | Markdown engine (wenmode) | [`markdown_plugins.py`](../claude_code_log/markdown_plugins.py), `html/utils.py`, `markdown/renderer.py` | inlined below (§ 2.17) |
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
@@ -322,16 +322,20 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
 - Per-image (migration 017): each distinct image an entry carries
   (a pasted image, a tool result's: mostly Read screenshots) is stored
   once, as raw bytes, in `image_blobs`, keyed by a BLAKE2b-128 digest
-  ([`cache_images.py`](../claude_code_log/cache_images.py)). The row's
-  JSON holds `{"type": "ref", "digest": …, "media_type": …}` in place of
-  the base64 source, and `messages.image_refs` lists the digests as a
-  JSON array; reading the row (`_entries_for_file`,
-  `load_session_entries`, `export_session_to_jsonl`) fetches the batch's
-  blobs in one query and puts the base64 back, so every consumer sees the
-  entry as parsed. A source swaps only when it is exact: no other key,
+  ([`cache_images.py`](../claude_code_log/cache_images.py)). Entries
+  hold each image as a reference from the parse on (§ 2.7), so the
+  row's JSON holds `{"type": "ref", "digest": …, "media_type": …}` and
+  `messages.image_refs` lists the digests as a JSON array. Reading a row
+  leaves the reference as it is: `_entries_for_file` only checks, in one
+  query, that the cache still holds every blob the batch references, and
+  `export_session_to_jsonl`, whose lines leave the cache, puts the
+  base64 back. A source swaps only when it is exact: no other key,
   base64 that re-encodes to the same text, and at least 2 KB of it; any
   other stays inline. Blobs are written in the transaction of the rows
-  that reference them; a refresh spools them with its rows
+  that reference them, from the bytes the process holds (a reference
+  whose bytes it no longer holds names a blob a cache already has), and
+  those bytes are released from memory once it commits. A refresh
+  spools them with its rows
   (`refresh_spool.py` has its own `image_blobs`) and its merge copies each
   file's blobs before its rows (`cache_images.MERGE_BLOBS`, through the
   rows' own `image_refs` and `json_each`, which `check_json1` makes sure
@@ -345,8 +349,7 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   render's snapshot read (`load_snapshot_entries`), which may not parse
   again, and an archived session, with no transcript to parse, show a
   placeholder for that image and keep the rest. Identical bytes under two
-  media types share a blob; each source reads back with the media type
-  of its own reference.
+  media types share a blob; each reference keeps its own media type.
   On the archive measured in #416 this took the cache from 4.13 GB to
   3.46 GB (3,881 distinct images, 1.03 GB raw, referenced from 5,980
   rows); `_CONTENT_SCHEMA_SALT` 3 re-parses older caches once.
@@ -933,15 +936,48 @@ format-agnostic: HTML and Markdown both call into it. Three modes
 - `referenced` — write the image to disk next to the output and
   embed a `src=` reference. The default for both formats.
 
+**Images are held by reference.** A transcript carries each image as
+base64 inside its entry, and an entry is held whole: in the master list,
+in every slice fed to a render worker, in the parsed-entry store across
+watch ticks. So the parser swaps each image's source for a reference
+before the models are built
+([`image_store.py`](../claude_code_log/image_store.py), `take_images`,
+on any line whose text holds `"base64"`): `ImageContent.source` is an
+`ImageRef` (`type: "ref"`, `digest`, `media_type`), and a tool result's
+image dict carries the same three keys. The swap is the cache's (§ 2.3):
+only an exact source of 2 KB or more, so a small or odd one stays an
+inline `ImageSource`, and every reader takes both, through
+`image_bytes` / `image_base64` / `image_digest`, never a field. The
+bytes are held in the process, once per distinct image, until a cache
+write that stores them commits (`image_store.release`, from
+`write_transaction` or the end of `atomic_refresh`); after that, and in
+any process that opened the cache (each `CacheManager` registers its
+database, a render worker's read-only one included), they are read back
+from `image_blobs`, one image at a time on a connection of its own, with
+the last 32 MB read kept for the next pass over the same page. A run
+with no cache (a single transcript, `--no-cache`) keeps them held until
+`convert_jsonl_to` returns. A render pool hands its workers the parent's
+caches and, should any be left, the images it still holds. JSON export
+(`JsonRenderer`) writes each image out whole, as the transcript had it.
+A transcript's own `ref` source is forged (Claude Code writes images
+inline), so the parser empties it, and an `ImageRef` digest must be 32
+hex characters: it becomes part of a file name. On the two most
+image-heavy projects of a real archive (43% of their transcript bytes is
+images), this took 19–29% off the time of every run but the first (which AVIF
+encoding dominates) and 39–59% off peak memory, with byte-identical pages
+([work/cache-image-store.md](../work/cache-image-store.md)).
+
 Referenced files land in `images/` beside the page, named
-`image_<digest><ext>`. Markdown writes the source bytes, its digest
-taken over them. HTML re-encodes through `export_compressed_image`
+`image_<digest><ext>`, from the source image's digest, so an image
+already exported is found from its reference alone: a warm render reads
+no image bytes at all. Markdown writes the source bytes under the first
+16 hex digits of that digest. HTML re-encodes through `export_compressed_image`
 (Pillow): AVIF at quality 50, speed 8, longest side capped at 2000px,
 full 4:4:4 chroma for non-JPEG sources (mostly screenshots, where
 subsampling smears coloured text), no EXIF in the output, and a PNG
 colour key (tRNS) turned into a real alpha channel, which AVIF needs to
 keep those pixels transparent. Its
-digest covers the source bytes *and* the encoder settings
+digest covers the source's digest *and* the encoder settings
 (`_encoding_tag`), so a file is found again — by any pass, run or
 worker — without decoding the source, and a settings change renames
 every file instead of leaving old encodings behind a current name. The
@@ -961,9 +997,11 @@ session's page held each Read-tool screenshot as inline base64 — a
 real 350MB session page is 30MB plus 73MB of AVIF files.
 
 `embedded` and `referenced` both refuse an image unless
-`is_safe_image_source` passes: the media type must be PNG, JPEG, GIF
-or WebP (never the scriptable `image/svg+xml`) and the data strictly
-valid base64, otherwise the image degrades to the placeholder. The
+`is_safe_source` passes: the media type must be PNG, JPEG, GIF
+or WebP (never the scriptable `image/svg+xml`) and inline data strictly
+valid base64 (a reference's bytes passed that check when it was made),
+otherwise the image degrades to the placeholder, as does a reference
+whose bytes no cache holds any longer. The
 transcript's `media_type` and `data` are untrusted (an image can come
 back from a tool, an MCP server or a web page), and a crafted
 `media_type` used to break out of the `<img src>` attribute (issue
@@ -980,7 +1018,7 @@ file: its timeline loads vis-timeline from the `assets/` directory
 beside it (below).
 
 Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
-from a BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
+from the BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
 exports, the encoder settings, as above) — so a given image maps to
 exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already

@@ -9,7 +9,13 @@ from claude_code_log.image_export import (
     export_compressed_image,
     export_image,
 )
+from claude_code_log.image_store import digest_of
 from claude_code_log.models import ImageContent, ImageSource
+
+
+def _source(media_type: str, data: str) -> dict[str, str]:
+    """An inline image source, as a tool result carries one."""
+    return {"type": "base64", "media_type": media_type, "data": data}
 
 
 @pytest.fixture
@@ -351,7 +357,7 @@ class TestReferencedModeAcrossRenderPasses:
         # Two distinct images → two files, every reference resolvable, and
         # every file holds the image its name was derived from (the old bug
         # left files whose content belonged to a different name). Names
-        # hash the source bytes under the encoder settings.
+        # hash the source's digest under the encoder settings.
         assert len(referenced) == 2
         sources = [base64.b64decode(png_a), base64.b64decode(png_b)]
         for rel in referenced:
@@ -361,7 +367,7 @@ class TestReferencedModeAcrossRenderPasses:
             assert content in sources
             hasher = hashlib.blake2b(_encoding_tag(), digest_size=8)
             hasher.update(b"\0")
-            hasher.update(content)
+            hasher.update(digest_of(content).encode("ascii"))
             assert exported.name == f"image_{hasher.hexdigest()}.png"
 
 
@@ -399,7 +405,7 @@ class TestExportCompressedImage:
         encoder = _encoder()
         assert encoder is not None, "the Pillow wheel ships AVIF and WebP"
         data = _b64_image("PNG", (2400, 600))
-        result = export_compressed_image("image/png", data, tmp_path)
+        result = export_compressed_image(_source("image/png", data), tmp_path)
         assert result is not None
         assert result.src.endswith(encoder[1])
         assert (result.width, result.height) == (MAX_IMAGE_DIMENSION, 500)
@@ -412,7 +418,9 @@ class TestExportCompressedImage:
         import claude_code_log.image_export as image_export
 
         data = _b64_image("PNG", (300, 200))
-        first = image_export.export_compressed_image("image/png", data, tmp_path)
+        first = image_export.export_compressed_image(
+            _source("image/png", data), tmp_path
+        )
         assert first is not None
         inode = (tmp_path / first.src).stat().st_ino
         # A fresh process (empty memo) finds the file on disk, with its size,
@@ -423,7 +431,9 @@ class TestExportCompressedImage:
             raise AssertionError("re-encoded an exported image")
 
         monkeypatch.setattr(image_export, "_compress", no_encode)
-        second = image_export.export_compressed_image("image/png", data, tmp_path)
+        second = image_export.export_compressed_image(
+            _source("image/png", data), tmp_path
+        )
         assert second == first
         assert (tmp_path / first.src).stat().st_ino == inode
         assert len(list((tmp_path / "images").iterdir())) == 1
@@ -436,7 +446,7 @@ class TestExportCompressedImage:
         from claude_code_log.image_export import export_compressed_image
 
         result = export_compressed_image(
-            "image/png", sample_image.source.data, tmp_path
+            _source("image/png", sample_image.source.data), tmp_path
         )
         assert result is not None
         assert result.src.endswith(".png")
@@ -453,7 +463,7 @@ class TestExportCompressedImage:
         exif = Image.Exif()
         exif[0x0112] = 6  # rotate 90° CW on display
         data = _b64_image("JPEG", (400, 100), exif=exif.tobytes())
-        result = export_compressed_image("image/jpeg", data, tmp_path)
+        result = export_compressed_image(_source("image/jpeg", data), tmp_path)
         assert result is not None
         assert (result.width, result.height) == (100, 400)
 
@@ -490,7 +500,7 @@ class TestExportCompressedImage:
         img.save(buf, "PNG", transparency=key)
         data = base64.b64encode(buf.getvalue()).decode("ascii")
 
-        result = export_compressed_image("image/png", data, tmp_path)
+        result = export_compressed_image(_source("image/png", data), tmp_path)
         assert result is not None
         assert result.src.endswith(encoder[1]), "expected a re-encode, not the source"
         with Image.open(tmp_path / result.src) as out:
@@ -510,7 +520,7 @@ class TestExportCompressedImage:
         buf = io.BytesIO()
         frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:])
         data = base64.b64encode(buf.getvalue()).decode("ascii")
-        result = export_compressed_image("image/gif", data, tmp_path)
+        result = export_compressed_image(_source("image/gif", data), tmp_path)
         assert result is not None
         assert result.src.endswith(".gif")
         assert (result.width, result.height) == (64, 64)
@@ -521,7 +531,7 @@ class TestExportCompressedImage:
         from claude_code_log.image_export import export_compressed_image
 
         data = base64.b64encode(b"not really a png").decode("ascii")
-        result = export_compressed_image("image/png", data, tmp_path)
+        result = export_compressed_image(_source("image/png", data), tmp_path)
         assert result is not None
         assert result.src.endswith(".png")
         assert (result.width, result.height) == (None, None)
@@ -533,8 +543,11 @@ class TestExportCompressedImage:
         from claude_code_log.image_export import export_compressed_image
 
         svg = base64.b64encode(b"<svg onload='alert(1)'/>").decode("ascii")
-        assert export_compressed_image("image/svg+xml", svg, tmp_path) is None
-        assert export_compressed_image("image/png", "@@not base64@@", tmp_path) is None
+        assert export_compressed_image(_source("image/svg+xml", svg), tmp_path) is None
+        assert (
+            export_compressed_image(_source("image/png", "@@not base64@@"), tmp_path)
+            is None
+        )
         assert not (tmp_path / "images").exists()
 
 
@@ -565,7 +578,7 @@ class TestOnlyTheDeclaredDecoder:
 
         monkeypatch.setattr(Image, "open", spy)
         result = image_export.export_compressed_image(
-            "image/png", base64.b64encode(raw).decode("ascii"), tmp_path
+            _source("image/png", base64.b64encode(raw).decode("ascii")), tmp_path
         )
 
         assert opened == []
@@ -576,7 +589,7 @@ class TestOnlyTheDeclaredDecoder:
         from claude_code_log.image_export import export_compressed_image
 
         result = export_compressed_image(
-            "image/png", _b64_image("PNG", (300, 200)), tmp_path
+            _source("image/png", _b64_image("PNG", (300, 200))), tmp_path
         )
         assert result is not None and result.width == 300
 
@@ -707,7 +720,7 @@ class TestInlineDataImagesInText:
 def _export(writer: str, data: str, output_dir: Path) -> "str | None":
     """Export *data* (a PNG) with one of the two referenced-mode writers."""
     if writer == "compressed":
-        exported = export_compressed_image("image/png", data, output_dir)
+        exported = export_compressed_image(_source("image/png", data), output_dir)
         return None if exported is None else exported.src
     return export_image(_image("image/png", data), "referenced", output_dir)
 
@@ -885,7 +898,9 @@ class TestPruneUnreferencedImages:
         from claude_code_log import image_export
 
         data = _b64_image("PNG", (40, 30))
-        first = image_export.export_compressed_image("image/png", data, tmp_path)
+        first = image_export.export_compressed_image(
+            _source("image/png", data), tmp_path
+        )
         assert first is not None
         path = tmp_path / first.src
         then = time.time() - 7200
@@ -893,11 +908,15 @@ class TestPruneUnreferencedImages:
 
         os.utime(path, (then, then))
         image_export._exported.clear()  # a later process
-        assert image_export.export_compressed_image("image/png", data, tmp_path)
+        assert image_export.export_compressed_image(
+            _source("image/png", data), tmp_path
+        )
         assert path.stat().st_mtime > then + 3600
         # And from this process's memo, an hour on (a long watch).
         os.utime(path, (then, then))
-        assert image_export.export_compressed_image("image/png", data, tmp_path)
+        assert image_export.export_compressed_image(
+            _source("image/png", data), tmp_path
+        )
         assert path.stat().st_mtime > then + 3600
 
 

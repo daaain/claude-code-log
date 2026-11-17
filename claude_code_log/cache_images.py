@@ -1,114 +1,88 @@
 """Cached images, stored once outside the entry blobs.
 
-The cache stores an entry as ``zlib(json(entry.model_dump()))``. An image
-in it (``{"type": "image", "source": {"type": "base64", ...}}``, pasted or
-returned by a tool) would sit there base64-encoded, zlib-wrapped for no
-gain, and once per file whose rows carry it: a sub-agent's rows are also
-spliced into its trunk's. So the serialiser swaps each image's source for
-a reference to the ``image_blobs`` table, which holds the decoded bytes
-once per distinct image, and the reader swaps it back. Every consumer
-downstream sees the entries exactly as parsed.
+The cache stores an entry as ``zlib(json(entry.model_dump()))``. An
+image in it would sit there base64-encoded, zlib-wrapped for no gain,
+and once per file whose rows carry it: a sub-agent's rows are also
+spliced into its trunk's. Parsed entries already hold each image as a
+reference (`image_store`), so a row carries the reference, the
+``image_blobs`` table holds the decoded bytes once per distinct image,
+and the row's ``image_refs`` column lists the digests it references,
+for the merge and the sweep to read with ``json_each``.
 
-The swap is lossless or not made: a source with any other key, or whose
-base64 does not re-encode to the same text, stays inline, as does a small
-image, whose row is cheaper than a reference.
+An entry built with an inline base64 source (by a test, or by code that
+makes its own) has it swapped here, under the same rules as at parse
+time; one that can't be swapped exactly stays inline.
 """
 
 from __future__ import annotations
 
 import base64
-import binascii
-import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import cast
 
-REF_TYPE = "ref"
-# Base64 shorter than this stays inline: the blob row and the reference
-# cost more than the bytes they would move.
-MIN_EXTRACTED_CHARS = 2048
-# The cheap gate before walking an entry: its JSON names a base64 source.
-_BASE64_MARK = '"base64"'
-_SOURCE_KEYS = frozenset({"type", "media_type", "data"})
+from .image_store import (
+    BASE64_MARK,
+    REF_TYPE,
+    ImageBlob,
+    extract_blob,
+    held_bytes,
+    image_sources,
+    ref_source,
+)
+
+# In a compact JSON text, the sign that it may hold a reference.
+_REF_MARK = f'"type":"{REF_TYPE}"'
 # How many digests one blob lookup binds (well under SQLite's variable limit).
 _LOOKUP_CHUNK = 500
-
-
-@dataclass(frozen=True)
-class ImageBlob:
-    """One image's bytes, keyed by their digest."""
-
-    digest: str
-    media_type: str
-    data: bytes
 
 
 class MissingImageBlob(LookupError):
     """A cached row references an image the cache no longer holds."""
 
 
-def _image_sources(node: Any) -> Iterable[Dict[str, Any]]:
-    """Every ``image`` item's ``source`` dict under ``node``."""
-    stack: List[Any] = [node]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, dict):
-            mapping = cast(Dict[str, Any], item)
-            source = mapping.get("source")
-            if mapping.get("type") == "image" and isinstance(source, dict):
-                yield cast(Dict[str, Any], source)
-            stack.extend(mapping.values())
-        elif isinstance(item, list):
-            stack.extend(cast(List[Any], item))
-
-
-def _extract(source: Dict[str, Any]) -> Optional[ImageBlob]:
-    """The blob for an inline base64 source, if it can be swapped losslessly."""
-    if source.keys() != _SOURCE_KEYS or source.get("type") != "base64":
-        return None
-    media_type = source.get("media_type")
-    data = source.get("data")
-    if not isinstance(media_type, str) or not isinstance(data, str):
-        return None
-    if len(data) < MIN_EXTRACTED_CHARS:
-        return None
-    try:
-        raw = base64.b64decode(data, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    if base64.b64encode(raw).decode("ascii") != data:
-        return None
-    digest = hashlib.blake2b(raw, digest_size=16).hexdigest()
-    return ImageBlob(digest, media_type, raw)
-
-
 def dump_entry(dumped: Dict[str, Any]) -> Tuple[str, List[str], List[ImageBlob]]:
-    """An entry's cached JSON, the digests it references, and their blobs.
+    """An entry's cached JSON, the digests it references, and the blobs to
+    store with it.
 
-    ``dumped`` is ``entry.model_dump()`` and is changed in place: each image
-    source that can be swapped becomes ``{"type": "ref", "digest": ...,
-    "media_type": ...}``. Most entries hold no image, and their JSON is
-    only searched for one, never walked.
+    ``dumped`` is ``entry.model_dump()`` and is changed in place: an
+    inline source that can be swapped becomes a reference. The blobs are
+    those whose bytes this process still holds (`image_store.held_bytes`)
+    or has just swapped out. A reference to bytes no longer held names an
+    image a cache already stores, since that is where they went. Most
+    entries hold no image, and their JSON is only searched for one, never
+    walked.
     """
     text = json.dumps(dumped, separators=(",", ":"))
-    if _BASE64_MARK not in text:
+    if BASE64_MARK not in text and _REF_MARK not in text:
         return text, [], []
     refs: List[str] = []
     blobs: Dict[str, ImageBlob] = {}
-    for source in list(_image_sources(dumped)):
-        blob = _extract(source)
+    swapped = False
+    for source in list(image_sources(dumped)):
+        if source.get("type") == REF_TYPE:
+            digest = source.get("digest")
+            if not isinstance(digest, str):
+                continue
+            refs.append(digest)
+            if digest not in blobs:
+                data = held_bytes(digest)
+                if data is not None:
+                    media_type = str(source.get("media_type", ""))
+                    blobs[digest] = ImageBlob(digest, media_type, data)
+            continue
+        blob = extract_blob(source)
         if blob is None:
             continue
         source.clear()
-        source.update(
-            {"type": REF_TYPE, "digest": blob.digest, "media_type": blob.media_type}
-        )
+        source.update(ref_source(blob.digest, blob.media_type))
         refs.append(blob.digest)
         blobs.setdefault(blob.digest, blob)
-    if not refs:
-        return text, [], []
-    return json.dumps(dumped, separators=(",", ":")), refs, list(blobs.values())
+        swapped = True
+    if swapped:
+        text = json.dumps(dumped, separators=(",", ":"))
+    return text, refs, list(blobs.values())
 
 
 def restore_images(
@@ -117,21 +91,19 @@ def restore_images(
     *,
     missing_ok: bool = False,
 ) -> None:
-    """Put each referenced image's base64 back into ``content``, in place.
+    """Put each referenced image's base64 back into ``content``, in place,
+    for a copy that leaves the cache (a session exported as JSONL).
 
     ``blobs`` maps a digest to its media type and bytes; each source keeps
-    the media type of its own reference. A reference with
-    no blob raises `MissingImageBlob`, or with ``missing_ok`` becomes an
-    empty source, which renders as a placeholder (for a session whose
-    transcript is gone, so cannot be parsed again).
+    the media type of its own reference (identical bytes cited under two
+    media types share one blob). A reference with no blob raises
+    `MissingImageBlob`, or with ``missing_ok`` becomes an empty source.
     """
-    for source in list(_image_sources(content)):
+    for source in list(image_sources(content)):
         if source.get("type") != REF_TYPE:
             continue
         digest = source.get("digest")
         found = blobs.get(digest) if isinstance(digest, str) else None
-        # The reference's own media type: identical bytes cited under two
-        # media types share one blob, which keeps only the first.
         media_type = str(source.get("media_type", ""))
         if found is None:
             if not missing_ok:
@@ -156,15 +128,19 @@ def row_refs(image_refs: Optional[str]) -> List[str]:
     return [d for d in cast(List[Any], decoded) if isinstance(d, str)]
 
 
+def _chunks(digests: Iterable[str]) -> Iterable[Sequence[str]]:
+    wanted: Sequence[str] = sorted(set(digests))
+    for start in range(0, len(wanted), _LOOKUP_CHUNK):
+        yield wanted[start : start + _LOOKUP_CHUNK]
+
+
 def load_blobs(
     conn: sqlite3.Connection, digests: Iterable[str]
 ) -> Dict[str, Tuple[str, bytes]]:
     """The blobs for ``digests`` (unqualified ``image_blobs``, so a refresh's
     overlay view is read when there is one)."""
-    wanted: Sequence[str] = sorted(set(digests))
     found: Dict[str, Tuple[str, bytes]] = {}
-    for start in range(0, len(wanted), _LOOKUP_CHUNK):
-        chunk = wanted[start : start + _LOOKUP_CHUNK]
+    for chunk in _chunks(digests):
         marks = ",".join("?" * len(chunk))
         for digest, media_type, data in conn.execute(
             f"SELECT digest, media_type, data FROM image_blobs WHERE digest IN ({marks})",
@@ -172,6 +148,23 @@ def load_blobs(
         ):
             found[digest] = (media_type, bytes(data))
     return found
+
+
+def missing_blobs(conn: sqlite3.Connection, digests: Iterable[str]) -> Set[str]:
+    """Which of ``digests`` the cache holds no blob for (read through the
+    overlay as `load_blobs` is), without reading any bytes."""
+    missing: Set[str] = set()
+    for chunk in _chunks(digests):
+        marks = ",".join("?" * len(chunk))
+        present = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT digest FROM image_blobs WHERE digest IN ({marks})",
+                tuple(chunk),
+            )
+        }
+        missing.update(d for d in chunk if d not in present)
+    return missing
 
 
 # Insert a blob, or mark an existing one in use again: a blob the sweep
@@ -182,18 +175,28 @@ UPSERT_BLOB = (
 )
 
 
-def write_blobs(conn: sqlite3.Connection, rows: Iterable[Mapping[str, Any]]) -> None:
-    """Store the blobs ``rows`` carry (``_image_blobs``), before the rows
-    themselves, in the caller's transaction."""
+def row_blobs(rows: Iterable[Mapping[str, Any]]) -> Dict[str, ImageBlob]:
+    """The blobs serialised rows carry (``_image_blobs``), once each."""
     blobs: Dict[str, ImageBlob] = {}
     for row in rows:
         for blob in row.get("_image_blobs") or ():
             blobs.setdefault(blob.digest, blob)
+    return blobs
+
+
+def write_blobs(
+    conn: sqlite3.Connection, rows: Iterable[Mapping[str, Any]]
+) -> Set[str]:
+    """Store the blobs ``rows`` carry, before the rows themselves, in the
+    caller's transaction; returns their digests, for the caller to
+    `image_store.release` once that commits."""
+    blobs = row_blobs(rows)
     if blobs:
         conn.executemany(
             UPSERT_BLOB,
             [(b.digest, b.media_type, b.data) for b in blobs.values()],
         )
+    return set(blobs)
 
 
 # A spooled file's blobs, into the cache, before its rows: exactly those

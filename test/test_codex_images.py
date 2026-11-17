@@ -6,6 +6,7 @@ import base64
 from pathlib import Path
 from unittest.mock import patch
 
+from claude_code_log.image_store import image_base64
 from claude_code_log.models import ImageContent, TextContent, UserTranscriptEntry
 from claude_code_log.providers.codex import (
     CodexProvider,
@@ -71,7 +72,14 @@ def test_readable_image_paths_become_ordered_base64_content(tmp_path: Path) -> N
         TextContent,
     ]
     images = [item for item in entry.message.content if isinstance(item, ImageContent)]
-    assert [(image.source.media_type, image.source.data) for image in images] == [
+    # Held by reference, as a parsed transcript's images are.
+    assert [(image.source.type, image.source.media_type) for image in images] == [
+        ("ref", "image/png"),
+        ("ref", "image/webp"),
+    ]
+    assert [
+        (image.source.media_type, image_base64(image.source)) for image in images
+    ] == [
         ("image/png", base64.b64encode(first.read_bytes()).decode("ascii")),
         ("image/webp", base64.b64encode(second.read_bytes()).decode("ascii")),
     ]

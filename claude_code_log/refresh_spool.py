@@ -28,7 +28,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 SPOOL_INFIX = ".spool-"
 
@@ -218,6 +218,9 @@ class RefreshSpool:
         # file). Autocommit, so a file's rows are visible to the cache
         # connection that attaches it as soon as they are written.
         self._conn = sqlite3.connect(self.path, isolation_level=None)
+        # The images spooled so far, for `image_store.release` once the
+        # merge has committed them to the cache.
+        self.image_digests: Set[str] = set()
         try:
             self._conn.execute("PRAGMA journal_mode = MEMORY")
             self._conn.execute("PRAGMA synchronous = OFF")
@@ -296,6 +299,7 @@ class RefreshSpool:
         except BaseException:
             self._conn.execute("ROLLBACK")
             raise
+        self.image_digests.update(blobs)
         return file_id
 
     def files(self) -> List[SpooledFile]:

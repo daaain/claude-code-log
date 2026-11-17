@@ -35,7 +35,8 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..image_export import is_safe_image_source
+from ..image_export import is_safe_source
+from ..image_store import image_base64, image_media_type
 from ..json_depth import exceeds_depth
 from ..utils import (
     ARTIFACT_FAVICON_TEXT_MAX,
@@ -1577,10 +1578,11 @@ def _structured_items_html(items: "list[dict[str, Any]]") -> str:
     return f"<div class='tool-result-json'>{_json_dump_value_html(pretty)}</div>"
 
 
-#: ``(media_type, base64 data) -> <img> HTML`` (or None to drop the
-#: image): how a renderer with an image export mode emits tool-result
-#: images. Without one they are embedded as data: URLs.
-ToolResultImageFormatter = Callable[[str, str], Optional[str]]
+#: ``source dict -> <img> HTML`` (or None to drop the image): how a
+#: renderer with an image export mode emits tool-result images. The
+#: source is inline base64 or a reference (`image_store`). Without a
+#: formatter they are embedded as data: URLs.
+ToolResultImageFormatter = Callable[[dict[str, Any]], Optional[str]]
 
 
 def format_tool_result_content_raw(
@@ -1618,19 +1620,18 @@ def format_tool_result_content_raw(
                     content_parts.append(text_value)
             elif item_type == "image":
                 # Handle image content within tool results
-                source = cast(dict[str, Any], item.get("source", {}))
-                if source:
-                    media_type: str = str(source.get("media_type", "image/png"))
-                    data: str = str(source.get("data", ""))
+                source = item.get("source")
+                if isinstance(source, dict) and source:
+                    source = cast(dict[str, Any], source)
                     # Same gate as user/assistant images: allowlisted
                     # (non-SVG) type and strictly-valid base64 — applied
                     # here or by the renderer's image formatter.
-                    if data and image_formatter is not None:
-                        tag = image_formatter(media_type, data)
+                    if image_formatter is not None:
+                        tag = image_formatter(source)
                         if tag is not None:
                             image_html_parts.append(tag)
-                    elif data and is_safe_image_source(media_type, data):
-                        data_url = f"data:{media_type};base64,{data}"
+                    elif is_safe_source(source) and (data := image_base64(source)):
+                        data_url = f"data:{image_media_type(source)};base64,{data}"
                         image_html_parts.append(
                             f'<img src="{escape_html(data_url)}" alt="Tool result image" '
                             f'class="tool-result-image" />'

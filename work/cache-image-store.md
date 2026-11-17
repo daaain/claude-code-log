@@ -2,8 +2,11 @@
 
 **Status:** phase 1 built (issue #418): migration 017,
 `cache_images.py`, `_CONTENT_SCHEMA_SALT` 3, documented as built in
-dev-docs/application_model.md § 2.3. Phase 2 (lazy images) is still a
-proposal. The first, cheap step shipped with the AVIF image export
+dev-docs/application_model.md § 2.3. Phase 2 (lazy images) built too,
+converting at parse time: `image_store.py`, documented in
+dev-docs/application_model.md § 2.7 and dev-docs/plugins.md § 4.1; how
+it differs from the plan is under "Phase 2 as built" below. The first,
+cheap step shipped with the AVIF image export
 (#416): Read results drop `toolUseResult.file.base64` at parse time
 (`UserTranscriptEntry` validator, `_CONTENT_SCHEMA_SALT` 2).
 
@@ -269,6 +272,74 @@ change.
 - A cold parse has no cache rows yet: the parse-time pool has to hold
   each image's bytes until the refresh writes its blob, and entries
   parsed outside a conversion (tests, the TUI, plugins) need a pool too.
+
+### Phase 2 as built
+
+- **The swap runs on the raw JSONL dict**, before validation, not in a
+  model validator (`image_store.take_images`, gated on the line's text
+  holding `"base64"`, like the cache's own gate). It covers a tool
+  result's image dicts and `toolUseResult` the same way as
+  `message.content`, with the rules of phase 1's swap (exact, ≥ 2 KB),
+  and a `ref` source in a transcript, which Claude Code never writes, is
+  emptied there rather than trusted.
+- **Two models, not an optional field**: `ImageContent.source` is
+  `ImageSource` (inline, as before) or `ImageRef` (`type: "ref"`,
+  `digest`, `media_type`), a union on `type`. So a cached row and an
+  entry in memory are the same JSON, phase 1's rows load unchanged (no
+  salt bump), and type checkers find every `source.data` reader. The
+  digest must be 32 hex characters: it ends up in file names.
+- **The pool is per process, not per conversion**, with an explicit
+  release: bytes are held from the parse until a cache write that stores
+  them commits (`write_transaction` hands the digests to
+  `image_store.release`; `atomic_refresh` releases the spool's after its
+  merge), and `convert_jsonl_to` lets go of any still held when it
+  returns (a run without a cache). A rolled-back write keeps them.
+- **Bytes come back from the cache on demand**, one image per read-only
+  connection, opened and closed at once (a lingering handle would stop
+  the cache being deleted on Windows), with the last 32 MB read kept for
+  the session-file pass. Every `CacheManager` registers its database, so
+  a render worker's read-only one makes the parent's images readable
+  there; the pool also hands workers any image the parent still holds.
+  Nothing exports images before fanning out.
+- **Exported names hash the source digest**, so names changed without an
+  `_ENCODING_REVISION` bump; Markdown's plain exports take the digest's
+  first 16 hex digits. The once-per-version sweep removes the old files.
+- **`--format json` writes images out whole** (`JsonRenderer` inlines
+  them), so its output is unchanged.
+- **A `ref` source in a transcript is forged** and emptied at parse time;
+  `ImageRef.digest` must be 32 hex characters (it reaches file names).
+
+**Measured as built**, the same two projects and machine as the
+experiment, against the branch before phase 2 (dbf3cae), with real
+image bytes in both. "First run" encodes every image; "cold" re-parses
+with the images already exported; the tick appends one message to the
+largest session.
+
+| danieldemmel-me-next (1.29 GB) | before | phase 2 |
+|---|---|---|
+| First run | 52.8 s, 4.73 GB | 50.8 s, 2.66 GB |
+| Cold, images on disk | 26.6 s, 4.20 GB | 21.4 s, 2.37 GB |
+| Warm, render every page | 10.0 s, 4.08 GB | 7.7 s, 2.24 GB |
+| Warm, serial | 16.1 s, 1.38 GB | 12.6 s, 0.81 GB |
+| Watch tick (+1 message) | 12.6 s, 1.51 GB | 9.0 s, 0.62 GB |
+
+| feedback-loop-talk (1.06 GB) | before | phase 2 |
+|---|---|---|
+| First run | 41.7 s, 2.88 GB | 40.3 s, 1.50 GB |
+| Cold, images on disk | 19.5 s, 3.36 GB | 15.7 s, 1.55 GB |
+| Warm, render every page | 9.3 s, 2.81 GB | 6.8 s, 1.35 GB |
+| Warm, serial | 8.6 s, 1.19 GB | 6.3 s, 0.72 GB |
+| Watch tick (+1 message) | 14.9 s, 1.22 GB | 11.2 s, 0.69 GB |
+
+So 19–29% off the time of every run but the first (which AVIF encoding
+dominates) and 39–59% off peak memory, at the experiment's upper bound:
+the base64 parsed once costs nothing visible. Pages are byte-identical
+(all 49, 2,174 images) once each exported image's name is replaced by a
+hash of its content.
+
+**Left for later:** the fragment-store and fan-out memory valves still
+size themselves from transcript bytes, images included, so on an
+image-heavy project they now decline more often than memory requires.
 
 ### Garbage collection
 

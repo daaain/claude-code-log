@@ -20,9 +20,9 @@ from typing import (
     Dict,
     Generator,
     List,
-    Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     get_args,
 )
@@ -30,11 +30,12 @@ from typing import (
 from packaging import version
 from pydantic import BaseModel
 
+from . import image_store
 from .cache_images import (
     MERGE_BLOBS,
-    MissingImageBlob,
     dump_entry,
     load_blobs,
+    missing_blobs,
     restore_images,
     row_refs,
     write_blobs,
@@ -856,6 +857,26 @@ _migrated_db_paths: set[str] = set()
 # Connections currently inside a `write_transaction`, by id (sqlite3
 # connections take no attributes). Thread-bound like the connections.
 _open_write_transactions = threading.local()
+# Per connection id: the images its open transaction stores, released
+# from memory (`image_store.release`) once it commits.
+_images_on_commit = threading.local()
+
+
+def _release_images_on_commit(conn: sqlite3.Connection, digests: Set[str]) -> None:
+    """Let go of these held images once ``conn``'s transaction commits:
+    from then on they are read back from the cache."""
+    if not digests:
+        return
+    pending: Dict[int, Set[str]] = getattr(_images_on_commit, "by_conn", None) or {}
+    _images_on_commit.by_conn = pending
+    pending.setdefault(id(conn), set()).update(digests)
+
+
+def _images_committed(conn: sqlite3.Connection, committed: bool) -> None:
+    pending: Dict[int, Set[str]] = getattr(_images_on_commit, "by_conn", None) or {}
+    digests = pending.pop(id(conn), None)
+    if digests and committed:
+        image_store.release(digests)
 
 
 @contextmanager
@@ -885,12 +906,18 @@ def write_transaction(conn: sqlite3.Connection) -> Generator[None, None, None]:
         yield
         return
     if conn.in_transaction:
-        yield
+        try:
+            yield
+        except BaseException:
+            _images_committed(conn, False)
+            raise
         conn.commit()
+        _images_committed(conn, True)
         return
     with write_turn():
         conn.execute("BEGIN IMMEDIATE")
         open_ids.add(id(conn))
+        committed = False
         try:
             yield
         except BaseException:
@@ -899,8 +926,10 @@ def write_transaction(conn: sqlite3.Connection) -> Generator[None, None, None]:
             raise
         else:
             conn.commit()
+            committed = True
         finally:
             open_ids.discard(id(conn))
+            _images_committed(conn, committed)
 
 
 def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
@@ -1471,6 +1500,10 @@ class CacheManager:
         self._refresh: Optional[_PendingRefresh] = None
         self._cold: Optional[_ColdBuild] = None
 
+        # Images not held in memory are read back from here (render
+        # workers' read-only instances included).
+        image_store.register_cache(self.db_path)
+
         self._project_id: Optional[int] = None
         if read_only:
             # Migrations and the project-row upsert both write; a reader
@@ -1658,6 +1691,8 @@ class CacheManager:
                         self._refresh = None
                         self._drop_overlay(conn)
                     self._merge_refresh(conn, pending)
+                    # Committed: the spooled images are the cache's now.
+                    image_store.release(pending.spool.image_digests)
                 finally:
                     self._detach_spool(conn, pending.spool)
             finally:
@@ -2355,31 +2390,29 @@ class CacheManager:
 
         return base
 
-    def _deserialize_entry(
-        self,
-        row: sqlite3.Row,
-        blobs: Optional[Mapping[str, Tuple[str, bytes]]] = None,
-        *,
-        missing_ok: bool = False,
-    ) -> TranscriptEntry:
-        """Convert SQLite row back to TranscriptEntry, its images restored
-        from ``blobs`` (`_row_blobs`)."""
+    def _deserialize_entry(self, row: sqlite3.Row) -> TranscriptEntry:
+        """Convert SQLite row back to TranscriptEntry. Its images stay
+        references, read from the cache where one is written out
+        (`image_store`)."""
         content_dict = json.loads(zlib.decompress(row["content"]).decode("utf-8"))
-        if blobs is not None and _row_has_images(row):
-            restore_images(content_dict, blobs, missing_ok=missing_ok)
         return create_transcript_entry(content_dict)
 
     @staticmethod
-    def _row_blobs(
-        conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]
-    ) -> Dict[str, Tuple[str, bytes]]:
-        """The image blobs ``rows`` reference, in one lookup on ``conn``."""
-        digests = [
+    def _row_digests(rows: Sequence[sqlite3.Row]) -> List[str]:
+        """The image digests ``rows`` reference."""
+        return [
             digest
             for row in rows
             if _row_has_images(row)
             for digest in row_refs(row["image_refs"])
         ]
+
+    @classmethod
+    def _row_blobs(
+        cls, conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+    ) -> Dict[str, Tuple[str, bytes]]:
+        """The image blobs ``rows`` reference, in one lookup on ``conn``."""
+        digests = cls._row_digests(rows)
         return load_blobs(conn, digests) if digests else {}
 
     def _get_file_id(self, jsonl_path: Path) -> Optional[int]:
@@ -2528,23 +2561,22 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
-            blobs = self._row_blobs(conn, rows)
+            digests = self._row_digests(rows)
+            missing: Set[str] = set()
+            if digests and not missing_images_ok:
+                missing = missing_blobs(conn, digests)
 
-        try:
-            return [
-                self._deserialize_entry(row, blobs, missing_ok=missing_images_ok)
-                for row in rows
-            ]
-        except MissingImageBlob as exc:
+        if missing:
             # The sweep deletes only blobs no row has referenced for an
             # hour, so this takes a reader that held these rows that long.
             # The file reads as not cached, and is parsed again.
             logger.warning(
                 "cached image %s of file id %s is gone; reading the file again",
-                exc,
+                sorted(missing)[0],
                 file_id,
             )
             return None
+        return [self._deserialize_entry(row) for row in rows]
 
     def save_cached_entries(
         self,
@@ -2683,7 +2715,7 @@ class CacheManager:
         conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
         for serialized in serialized_entries:
             serialized["file_id"] = file_id
-        write_blobs(conn, serialized_entries)
+        _release_images_on_commit(conn, write_blobs(conn, serialized_entries))
         conn.executemany(_INSERT_MESSAGE, serialized_entries)
         return file_id
 
@@ -2824,7 +2856,7 @@ class CacheManager:
                 file_id,
             ),
         )
-        write_blobs(conn, appended_rows)
+        _release_images_on_commit(conn, write_blobs(conn, appended_rows))
         conn.executemany(
             _INSERT_MESSAGE, [{**row, "file_id": file_id} for row in appended_rows]
         )
@@ -4167,11 +4199,10 @@ class CacheManager:
                    ORDER BY timestamp NULLS LAST""",
                 (self._project_id, session_id),
             ).fetchall()
-            blobs = self._row_blobs(conn, rows)
 
         # An archived session may have no transcript left to parse again:
         # an image gone from the cache renders as a placeholder.
-        return [self._deserialize_entry(row, blobs, missing_ok=True) for row in rows]
+        return [self._deserialize_entry(row) for row in rows]
 
     # ========== Page Cache Methods (Pagination) ==========
 

@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, ClassVar, Union, Optional, Literal, cast
+from typing import Annotated, Any, ClassVar, Union, Optional, Literal, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -136,11 +136,29 @@ class TextContent(BaseModel):
 
 
 class ImageSource(BaseModel):
-    """Base64-encoded image source data."""
+    """Base64-encoded image source data, held inline.
+
+    What a transcript carries. Parsing swaps most images for an
+    `ImageRef` (`image_store`); a small one, or one whose source would
+    not round-trip exactly, stays inline.
+    """
 
     type: Literal["base64"]
     media_type: str
     data: str
+
+
+class ImageRef(BaseModel):
+    """An image held by reference: its bytes are found by ``digest``.
+
+    Read them through ``image_store.image_bytes`` (or ``image_base64``),
+    which take either kind of source, never from a field.
+    """
+
+    type: Literal["ref"]
+    # Hex only: it becomes part of an exported image's file name.
+    digest: str = Field(pattern=r"^[0-9a-f]{32}$")
+    media_type: str
 
 
 class ImageContent(BaseModel):
@@ -151,7 +169,7 @@ class ImageContent(BaseModel):
     """
 
     type: Literal["image"]
-    source: ImageSource
+    source: Annotated[Union[ImageSource, ImageRef], Field(discriminator="type")]
 
 
 class UsageInfo(BaseModel):

@@ -178,6 +178,18 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     return None
 
 
+@pytest.fixture(autouse=True)
+def _fresh_image_store() -> Any:
+    """Each test starts as a fresh process does: no image bytes held from
+    an earlier test's parse, and no earlier test's cache to read them from
+    (`image_store`)."""
+    from claude_code_log import image_store
+
+    image_store.reset()
+    yield
+    image_store.reset()
+
+
 # ========== Cache Test Fixtures ==========
 # These fixtures use explicit db_path for true test isolation,
 # enabling parallel test execution without database conflicts.

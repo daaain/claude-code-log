@@ -40,7 +40,6 @@ from ..models import (
     HookAttachmentMessage,
     HookSummaryMessage,
     ImageContent,
-    ImageSource,
     SessionHeaderMessage,
     SlashCommandMessage,
     SystemMessage,
@@ -1204,8 +1203,9 @@ class MarkdownRenderer(Renderer):
     def _tool_result_image(self, item: dict[str, Any]) -> Optional[str]:
         """A tool result's ``image`` item as an image, like any other.
 
-        A Read of an image returns one. ``None`` when the item is not a
-        base64 image, so the caller keeps it as structured content.
+        A Read of an image returns one. ``None`` when the item is not an
+        image (inline or a reference), so the caller keeps it as
+        structured content.
         """
         if item.get("type") != "image":
             return None
@@ -1213,9 +1213,7 @@ class MarkdownRenderer(Renderer):
         if not isinstance(source, dict):
             return None
         try:
-            image = ImageContent(
-                type="image", source=ImageSource.model_validate(source)
-            )
+            image = ImageContent.model_validate({"type": "image", "source": source})
         except ValueError:  # pydantic's ValidationError is a ValueError
             return None
         return self._format_image(image)

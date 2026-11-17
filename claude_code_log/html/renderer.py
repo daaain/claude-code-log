@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple, cast
 
 if TYPE_CHECKING:
     from ..dag import SessionTree
@@ -534,20 +534,18 @@ class HtmlRenderer(Renderer):
 
     def _format_image(self, image: ImageContent) -> str:
         """Format image based on export mode."""
-        tag = self._image_tag(
-            image.source.media_type, image.source.data, "image", "uploaded-image"
-        )
+        tag = self._image_tag(image.source, "image", "uploaded-image")
         return "[Image]" if tag is None else tag
 
-    def _format_tool_result_image(self, media_type: str, data: str) -> Optional[str]:
+    def _format_tool_result_image(self, source: Mapping[str, Any]) -> Optional[str]:
         """Tool-result images follow the export mode like any other image.
 
-        An image the mode can't emit is dropped, as an unsafe one always
-        was — except in placeholder mode, which marks where it was.
+        ``source`` is the image item's ``source`` dict, inline or a
+        reference (`image_store`). An image the mode can't emit is
+        dropped, as an unsafe one always was — except in placeholder
+        mode, which marks where it was.
         """
-        tag = self._image_tag(
-            media_type, data, "Tool result image", "tool-result-image"
-        )
+        tag = self._image_tag(source, "Tool result image", "tool-result-image")
         if tag is None and self.image_export_mode == "placeholder":
             return "[Image]"
         return tag
@@ -572,7 +570,12 @@ class HtmlRenderer(Renderer):
 
         def swap(match: "re.Match[str]") -> str:
             exported = export_compressed_image(
-                match.group(1), match.group(2), output_dir
+                {
+                    "type": "base64",
+                    "media_type": match.group(1),
+                    "data": match.group(2),
+                },
+                output_dir,
             )
             if exported is None:
                 return match.group(0)
@@ -588,9 +591,7 @@ class HtmlRenderer(Renderer):
 
         return _INLINE_DATA_IMAGE_RE.sub(swap, html)
 
-    def _image_tag(
-        self, media_type: str, data: str, alt: str, css_class: str
-    ) -> Optional[str]:
+    def _image_tag(self, source: Any, alt: str, css_class: str) -> Optional[str]:
         """The ``<img>`` for one image under the export mode, or None.
 
         Referenced mode writes a compressed, content-addressed file beside
@@ -599,10 +600,9 @@ class HtmlRenderer(Renderer):
         write into (a page rendered in memory) it embeds instead.
         """
         from ..image_export import export_compressed_image, export_image
-        from ..models import ImageSource
 
         if self.image_export_mode == "referenced" and self._output_dir is not None:
-            exported = export_compressed_image(media_type, data, self._output_dir)
+            exported = export_compressed_image(source, self._output_dir)
             if exported is None:
                 return None
             size = (
@@ -619,14 +619,11 @@ class HtmlRenderer(Renderer):
             if self.image_export_mode == "referenced"
             else self.image_export_mode
         )
-        src = export_image(
-            ImageContent(
-                type="image",
-                source=ImageSource(type="base64", media_type=media_type, data=data),
-            ),
-            mode,
-            output_dir=self._output_dir,
-        )
+        try:
+            image = ImageContent.model_validate({"type": "image", "source": source})
+        except ValueError:  # pydantic's ValidationError is a ValueError
+            return None
+        src = export_image(image, mode, output_dir=self._output_dir)
         if src is None:
             return None
         # Escape the src: export_image allowlists the media type and

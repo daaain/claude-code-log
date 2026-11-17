@@ -75,6 +75,7 @@ from .cache import (
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
+from .image_store import BASE64_MARK, REF_MARK, releases_what_it_parses, take_images
 from .transcript_ids import (
     is_plain_id,
     sanitize_entry_ids,
@@ -627,6 +628,11 @@ def load_transcript(
                             f"Line {line_no} of {jsonl_path} is not a JSON object: {line}"
                         )
                         continue
+
+                    # Images become references, their bytes held once
+                    # each until the cache stores them (`image_store`).
+                    if BASE64_MARK in line or REF_MARK in line:
+                        take_images(entry_dict)
 
                     # Ids become file names, a `claude --resume` argument
                     # and markup, so an invalid one is replaced before
@@ -3859,6 +3865,7 @@ def _try_streaming(
     return streamed_path
 
 
+@releases_what_it_parses
 def convert_jsonl_to(
     format: str,
     input_path: Path,
