@@ -171,6 +171,38 @@ def isolated_cache_manager(
     yield CacheManager(isolated_cache_dir, "1.0.0-test", db_path=isolated_db_path)
 
 
+def run_in_both_themes(*renderers: str) -> Any:
+    """An autouse fixture that runs every test in its module once per theme.
+
+    Assign it in a module (``theme = run_in_both_themes("convert_jsonl_to")``):
+    each name in *renderers* is rebound, for that module only, to the real
+    function with ``theme=`` given explicitly, as ``--theme`` passes it, so a
+    worker process the render spawns receives it as well. A call that passes
+    ``theme=`` itself still wins. The fixture's value is the theme, for tests
+    that want it.
+
+    For tests that compare two routes to the same output (memoized against
+    plain, streamed against whole, parallel against serial): that claim
+    holds in each theme, and the minimal theme takes paths of its own.
+    """
+    import functools
+
+    from claude_code_log.utils import THEMES
+
+    @pytest.fixture(autouse=True, params=THEMES)
+    def theme(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+        for name in renderers:
+            renderer = getattr(request.module, name)
+            monkeypatch.setattr(
+                request.module,
+                name,
+                functools.partial(renderer, theme=request.param),
+            )
+        return request.param
+
+    return theme
+
+
 @pytest.fixture
 def test_data_dir() -> Path:
     """Return path to test data directory."""

@@ -22,6 +22,10 @@ import pytest
 
 from claude_code_log import converter
 from claude_code_log.converter import process_projects_hierarchy
+from test.conftest import run_in_both_themes
+
+# Each test runs in both themes: the claim these tests check holds in each.
+theme = run_in_both_themes("process_projects_hierarchy")
 
 TEST_DATA_DIR = Path(__file__).parent / "test_data"
 

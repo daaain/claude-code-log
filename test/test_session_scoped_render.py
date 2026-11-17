@@ -34,6 +34,10 @@ import pytest
 from claude_code_log import converter
 from claude_code_log.cache import CacheManager, SessionSidecar, get_library_version
 from claude_code_log.converter import convert_jsonl_to
+from test.conftest import run_in_both_themes
+
+# Each test runs in both themes: the claim these tests check holds in each.
+theme = run_in_both_themes("convert_jsonl_to")
 
 FIXTURE_ROOT = Path(__file__).parent / "test_data" / "real_projects"
 
