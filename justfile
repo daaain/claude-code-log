@@ -12,9 +12,9 @@ cli *ARGS:
 test:
     uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" -q
 
-# Run benchmark tests serially for stable measurements (outputs to GITHUB_STEP_SUMMARY in CI). DEBUG_TIMING enables coverage of renderer_timings.py
+# Run benchmark tests serially for stable measurements (outputs to GITHUB_STEP_SUMMARY in CI). test_performance switches the timing instrumentation on itself, which covers renderer_timings.py
 test-benchmark:
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -q
+    uv run pytest -n0 -m benchmark -q
 
 # Update snapshot tests. Encodes the whole procedure from CONTRIBUTING
 # ("Snapshot Testing"), because doing only part of it has twice produced a
@@ -54,7 +54,7 @@ test-all:
     echo "🔄 Running integration tests..."
     uv run pytest -m integration -q
     echo "📊 Running benchmark tests..."
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -q
+    uv run pytest -n0 -m benchmark -q
     echo "✅ All tests completed!"
 
 # Run tests with coverage (all categories)
@@ -71,7 +71,7 @@ test-cov:
     echo "🔄 Running integration tests with coverage append..."
     uv run pytest -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
     echo "📊 Running benchmark tests with coverage append..."
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
+    uv run pytest -n0 -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
     echo "✅ All tests with coverage completed!"
 
 format:

@@ -95,8 +95,6 @@ jobs:
 
       - name: Run benchmark tests with coverage append (primary only)
         if: matrix.is-primary
-        env:
-          CLAUDE_CODE_LOG_DEBUG_TIMING: "1"
         run: uv run pytest -m benchmark ${{ env.COV_APPEND }} -v
 
       - name: Upload coverage data (primary only)
