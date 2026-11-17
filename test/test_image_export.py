@@ -405,18 +405,26 @@ class TestExportCompressedImage:
         written = tmp_path / result.src
         assert written.stat().st_size < len(data) * 3 // 4
 
-    def test_second_export_reuses_the_file(self, tmp_path: Path):
+    def test_second_export_reuses_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         import claude_code_log.image_export as image_export
 
         data = _b64_image("PNG", (300, 200))
         first = image_export.export_compressed_image("image/png", data, tmp_path)
         assert first is not None
-        mtime = (tmp_path / first.src).stat().st_mtime_ns
-        # A fresh process (empty memo) finds the file on disk, with its size.
+        inode = (tmp_path / first.src).stat().st_ino
+        # A fresh process (empty memo) finds the file on disk, with its size,
+        # without encoding the source again.
         image_export._exported.clear()
+
+        def no_encode(*_args: object) -> None:
+            raise AssertionError("re-encoded an exported image")
+
+        monkeypatch.setattr(image_export, "_compress", no_encode)
         second = image_export.export_compressed_image("image/png", data, tmp_path)
         assert second == first
-        assert (tmp_path / first.src).stat().st_mtime_ns == mtime
+        assert (tmp_path / first.src).stat().st_ino == inode
         assert len(list((tmp_path / "images").iterdir())) == 1
 
     def test_tiny_image_keeps_its_original_bytes(
@@ -734,3 +742,184 @@ class TestConcurrentWriters:
         assert _export(writer, self._data(), tmp_path) is None
         assert len(calls) == 10  # the retry budget, then a placeholder
         assert list((tmp_path / "images").iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Removing images no page shows
+# ---------------------------------------------------------------------------
+
+
+class TestPruneUnreferencedImages:
+    @staticmethod
+    def _image(output_dir: Path, digest: str, ext: str = ".avif", age: float = 7200):
+        import os
+        import time
+
+        images = output_dir / "images"
+        images.mkdir(exist_ok=True)
+        path = images / f"image_{digest}{ext}"
+        path.write_bytes(b"x")
+        then = time.time() - age
+        os.utime(path, (then, then))
+        return path
+
+    def test_keeps_what_a_page_shows_and_removes_the_rest(self, tmp_path: Path):
+        from claude_code_log.image_export import prune_unreferenced_images
+
+        shown = self._image(tmp_path, "a" * 16)
+        in_markdown = self._image(tmp_path, "b" * 16, ".png")
+        orphan = self._image(tmp_path, "c" * 16)
+        (tmp_path / "session-1.html").write_text(
+            f'<img src="images/{shown.name}" />', encoding="utf-8"
+        )
+        (tmp_path / "session-1.md").write_text(
+            f"![image](images/{in_markdown.name})", encoding="utf-8"
+        )
+
+        assert prune_unreferenced_images(tmp_path) == 1
+        assert shown.exists() and in_markdown.exists()
+        assert not orphan.exists()
+
+    def test_keeps_a_recent_image_and_other_files(self, tmp_path: Path):
+        from claude_code_log.image_export import prune_unreferenced_images
+
+        recent = self._image(tmp_path, "d" * 16, age=10)
+        other = tmp_path / "images" / "notes.txt"
+        other.write_text("mine", encoding="utf-8")
+        temp = tmp_path / "images" / f".image_{'e' * 16}.avif.tmp-1"
+        temp.write_bytes(b"x")
+
+        assert prune_unreferenced_images(tmp_path) == 0
+        assert recent.exists() and other.exists() and temp.exists()
+        assert prune_unreferenced_images(tmp_path, grace_seconds=0) == 1
+        assert not recent.exists() and other.exists()
+
+    def test_finds_a_reference_across_a_read_chunk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import claude_code_log.image_export as image_export
+
+        shown = self._image(tmp_path, "f" * 16)
+        monkeypatch.setattr(image_export, "_SCAN_CHUNK", 7)
+        (tmp_path / "page.html").write_text(
+            "padding " * 3 + f'<img src="images/{shown.name}" />', encoding="utf-8"
+        )
+
+        assert image_export.prune_unreferenced_images(tmp_path) == 0
+        assert shown.exists()
+
+    def test_sweeps_once_per_version(self, tmp_path: Path):
+        from claude_code_log.image_export import SWEEP_MARKER, sweep_images_once
+
+        self._image(tmp_path, "1" * 16)
+        assert sweep_images_once(tmp_path, "1.9.0") == 1
+        assert (tmp_path / "images" / SWEEP_MARKER).read_text().strip() == "1.9.0"
+        self._image(tmp_path, "2" * 16)
+        assert sweep_images_once(tmp_path, "1.9.0") == 0
+        assert sweep_images_once(tmp_path, "1.9.1") == 1
+
+    def test_reusing_an_image_marks_it_used(self, tmp_path: Path):
+        import time
+
+        from claude_code_log import image_export
+
+        data = _b64_image("PNG", (40, 30))
+        first = image_export.export_compressed_image("image/png", data, tmp_path)
+        assert first is not None
+        path = tmp_path / first.src
+        then = time.time() - 7200
+        import os
+
+        os.utime(path, (then, then))
+        image_export._exported.clear()  # a later process
+        assert image_export.export_compressed_image("image/png", data, tmp_path)
+        assert path.stat().st_mtime > then + 3600
+
+
+def test_the_first_conversion_after_an_upgrade_removes_old_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A version change re-renders the pages; the conversion that does
+    removes the images they no longer show, and later ones don't look."""
+    import json
+    import os
+    import time
+
+    from click.testing import CliRunner
+
+    import claude_code_log.converter as converter
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    project = tmp_path / "project"
+    project.mkdir()
+    entry = {
+        "type": "user",
+        "timestamp": "2025-07-01T10:00:00Z",
+        "parentUuid": None,
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/tmp",
+        "sessionId": "s1",
+        "version": "2.1.0",
+        "uuid": "u1",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _b64_image("PNG", (64, 48)),
+                    },
+                },
+            ],
+        },
+    }
+    (project / "s1.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    old = project / "images" / ("image_" + "0" * 16 + ".avif")
+    old.parent.mkdir()
+    old.write_bytes(b"from an older encoder")
+    then = time.time() - 7200
+    os.utime(old, (then, then))
+
+    monkeypatch.setattr(converter, "get_library_version", lambda: "9.9.0")
+    result = CliRunner().invoke(main, [str(project)])
+    assert result.exit_code == 0, result.output
+
+    assert not old.exists()
+    shown = [p for p in (project / "images").iterdir() if p.name.startswith("image_")]
+    assert len(shown) == 1
+    assert shown[0].name in (project / "session-s1.html").read_text(encoding="utf-8")
+
+
+def test_clear_output_removes_the_images_only_its_pages_showed(tmp_path: Path):
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "s1.jsonl").write_text("", encoding="utf-8")
+    images = project / "images"
+    images.mkdir()
+    html_only = images / ("image_" + "a" * 16 + ".avif")
+    in_markdown = images / ("image_" + "b" * 16 + ".png")
+    for path in (html_only, in_markdown):
+        path.write_bytes(b"x")
+    (project / "combined_transcripts.html").write_text(
+        f'<img src="images/{html_only.name}">', encoding="utf-8"
+    )
+    (project / "combined_transcripts.md").write_text(
+        f"![image](images/{in_markdown.name})", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(main, [str(project), "--clear-output"])
+    assert result.exit_code == 0, result.output
+
+    assert not (project / "combined_transcripts.html").exists()
+    assert not html_only.exists()
+    assert in_markdown.exists()
+    assert "Removed 1 images" in result.output

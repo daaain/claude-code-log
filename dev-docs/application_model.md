@@ -955,6 +955,23 @@ images, so the last pass to run overwrote the other's files. Content
 addressing is also what lets referenced-mode renders use the fragment
 store (§ 2.9) and the render fan-out (§ 2.10).
 
+**Images no page shows are removed**, by
+`image_export.prune_unreferenced_images`: it reads every HTML and
+Markdown page in the directory for `images/image_<digest>.<ext>`
+references and deletes the exported images none of them makes. Files
+not named like an exported image, and any modified in the last hour, are
+left alone; an exporter that reuses a file touches it, so an image a
+concurrent run is about to reference survives. Reading the pages costs
+about what writing them did, so a conversion sweeps only once per
+library version per output directory (`sweep_images_once`, which leaves
+the version in `images/.swept`): the run after an upgrade, which
+re-renders the pages and may orphan a previous encoder's files.
+`converter.sweep_project_images` runs it after each project converts
+(inline, in a pool worker, or from the CLI for one project), never for
+a date window or a single transcript. `--clear-output` prunes with no
+grace period after deleting a format's pages, so pages of the other
+format keep their images.
+
 **The timeline library is a sidecar too.** vis-timeline ships in the
 package (`html/assets/vendor/`, pinned with checksums in its
 `PROVENANCE.md`), and `HtmlRenderer.generate` copies it into an

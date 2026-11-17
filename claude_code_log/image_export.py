@@ -9,7 +9,9 @@ import binascii
 import hashlib
 import io
 import os
+import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -276,6 +278,15 @@ _exported_lock = threading.Lock()
 _EXPORTED_MAX = 65536
 
 
+def _touch(path: Path) -> None:
+    """Mark an existing image as just used, for ``prune_unreferenced_images``:
+    a page being rendered right now may reference it before it is written."""
+    try:
+        os.utime(path)
+    except OSError:
+        pass
+
+
 def export_compressed_image(
     media_type: str, data: str, output_dir: Path
 ) -> Optional[ExportedImage]:
@@ -314,6 +325,7 @@ def export_compressed_image(
     for name in candidates:
         path = images_dir / name
         if path.exists():
+            _touch(path)
             width, height = _image_size_on_disk(path)
             result = ExportedImage(f"images/{name}", width, height)
             break
@@ -403,7 +415,9 @@ def export_image(
             filename = f"image_{digest}{ext}"
             filepath = images_dir / filename
 
-            if not filepath.exists():
+            if filepath.exists():
+                _touch(filepath)
+            else:
                 tmp_path = _temp_name(filepath)
                 tmp_path.write_bytes(image_data)
                 _install(tmp_path, filepath)
@@ -439,3 +453,100 @@ def _get_extension(media_type: str) -> str:
         "image/webp": ".webp",
     }
     return ext_map.get(media_type, ".png")
+
+
+# ---------------------------------------------------------------------------
+# Removing images no page references
+# ---------------------------------------------------------------------------
+
+# An exported image's name, and a page's reference to one. Both writers
+# (``export_compressed_image``, ``export_image``) name files this way.
+_IMAGE_NAME_RE = re.compile(r"image_[0-9a-f]{16}\.[a-z0-9]{2,5}")
+_IMAGE_REF_RE = re.compile(rb"images/(image_[0-9a-f]{16}\.[a-z0-9]{2,5})")
+# The pages that can reference ``images/``: HTML and Markdown.
+_PAGE_SUFFIXES = frozenset({".html", ".md", ".markdown"})
+_SCAN_CHUNK = 16 * 1024 * 1024
+#: An image modified this recently is kept even when no page references
+#: it: another run may be rendering a page that does (exporters touch an
+#: existing image when they reuse it).
+PRUNE_GRACE_SECONDS = 3600.0
+#: Records, in ``images/``, the library version that last swept it.
+SWEEP_MARKER = ".swept"
+
+
+def _references_in(page: Path) -> set[bytes]:
+    """The image file names a page references, read in chunks so a large
+    page is never held whole."""
+    found: set[bytes] = set()
+    tail = b""
+    with page.open("rb") as handle:
+        while chunk := handle.read(_SCAN_CHUNK):
+            data = tail + chunk
+            found.update(_IMAGE_REF_RE.findall(data))
+            # A reference cut by the chunk boundary is found next time.
+            tail = data[-64:]
+    return found
+
+
+def prune_unreferenced_images(
+    output_dir: Path, *, grace_seconds: float = PRUNE_GRACE_SECONDS
+) -> int:
+    """Delete the exported images in ``output_dir/images`` that no page in
+    ``output_dir`` references, and return how many went.
+
+    Every HTML and Markdown page in the directory counts, whichever run or
+    format wrote it, so an image is only removed once nothing beside it
+    shows it: one from a previous encoder revision, or of a session whose
+    pages are gone. Only files named like an exported image are touched,
+    never one modified within ``grace_seconds``, and nothing is removed if
+    a page can't be read.
+    """
+    images_dir = output_dir / "images"
+    if not images_dir.is_dir():
+        return 0
+    referenced: set[bytes] = set()
+    try:
+        for page in output_dir.iterdir():
+            if page.suffix.lower() in _PAGE_SUFFIXES and page.is_file():
+                referenced |= _references_in(page)
+        candidates = list(images_dir.iterdir())
+    except OSError:
+        return 0
+    cutoff = time.time() - grace_seconds
+    removed = 0
+    for path in candidates:
+        name = path.name
+        if not _IMAGE_NAME_RE.fullmatch(name) or name.encode() in referenced:
+            continue
+        try:
+            if path.stat().st_mtime > cutoff:
+                continue
+            path.unlink()
+        except OSError:
+            continue
+        removed += 1
+    return removed
+
+
+def sweep_images_once(output_dir: Path, version: str) -> int:
+    """``prune_unreferenced_images`` once per library ``version`` per
+    directory: the first conversion after an upgrade, when re-rendered
+    pages may have left a previous encoder's files behind.
+
+    A marker in ``images/`` records the version that swept it. Reading
+    every page costs about what writing them did, so a conversion that
+    rewrote a few pages doesn't pay it each time.
+    """
+    marker = output_dir / "images" / SWEEP_MARKER
+    try:
+        if marker.read_text(encoding="utf-8").strip() == version:
+            return 0
+    except OSError:
+        pass
+    removed = prune_unreferenced_images(output_dir)
+    try:
+        if marker.parent.is_dir():
+            marker.write_text(version + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return removed

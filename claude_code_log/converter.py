@@ -6904,6 +6904,45 @@ def _init_project_worker(turns: Optional[WriteTurns]) -> None:
     defer_index_maintenance()
 
 
+def sweep_project_images(
+    input_path: Path,
+    output_root: Optional[Path],
+    format: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> int:
+    """After a project's conversion, remove the images no page shows.
+
+    Once per library version per output directory
+    (``image_export.sweep_images_once``): the conversion after an upgrade,
+    whose re-rendered pages may no longer reference a previous encoder's
+    files. A date window writes a partial view, so it never sweeps; nor
+    does a single transcript, whose page shares its directory with others.
+    Never raises: a sweep is housekeeping, not part of the conversion.
+    """
+    from .image_export import sweep_images_once
+
+    if format not in ("html", "md", "markdown") or from_date or to_date:
+        return 0
+    try:
+        if not input_path.is_dir():
+            return 0
+        return sweep_images_once(output_root or input_path, get_library_version())
+    except Exception:  # noqa: BLE001 - housekeeping must not fail a run
+        return 0
+
+
+def _sweep_after(worker_args: Dict[str, Any]) -> None:
+    """``sweep_project_images`` for a ``_conversion_kwargs`` argument set."""
+    sweep_project_images(
+        worker_args["input_path"],
+        worker_args.get("output_root"),
+        worker_args["format"],
+        worker_args.get("from_date"),
+        worker_args.get("to_date"),
+    )
+
+
 def _convert_project_worker(
     worker_args: Dict[str, Any],
 ) -> "tuple[str, float, Optional[str], bool]":
@@ -6929,6 +6968,8 @@ def _convert_project_worker(
     except Exception as exc:
         error = traceback.format_exc()
         busy = is_busy_database_error(exc)
+    else:
+        _sweep_after(worker_args)
     return (str(worker_args["input_path"]), time.monotonic() - start, error, busy)
 
 
@@ -7561,16 +7602,17 @@ def _process_projects_hierarchy(
             # worker would cost more than the re-parse it saves, and the
             # worker's copy would die with the task. Deliberately absent
             # from `_conversion_kwargs` for that reason.
-            convert_jsonl_to(
-                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs),
-                entry_store=entry_store,
+            conversion = _conversion_kwargs(
+                plan, silent=silent, render_jobs=render_jobs
             )
+            convert_jsonl_to(**conversion, entry_store=entry_store)
         except Exception as exc:
             if not final_attempt and is_busy_database_error(exc):
                 _defer_locked_out(plan)
                 return
             _print_project_failed(plan, traceback.format_exc())
             return
+        _sweep_after(conversion)
         _print_project_done(plan, time.monotonic() - project_start_time)
 
     if resolved_jobs <= 1:
