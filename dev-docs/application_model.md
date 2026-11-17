@@ -923,8 +923,9 @@ transcript's `media_type` and `data` are untrusted (an image can come
 back from a tool, an MCP server or a web page), and a crafted
 `media_type` used to break out of the `<img src>` attribute (issue
 #277); the HTML sinks also `escape_html` the final `src`. Tool-result
-images go through the same gate and, in HTML, the same export mode
-(`HtmlRenderer._format_tool_result_image`), and plugins get it from
+images go through the same gate and the same export mode
+(`HtmlRenderer._format_tool_result_image`,
+`MarkdownRenderer._tool_result_image`), and plugins get it from
 `claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
 
 Default is `referenced` for both: an HTML page or `.md` file then

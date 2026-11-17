@@ -162,3 +162,39 @@ def test_the_cache_holds_the_image_once_and_the_page_still_shows_it(
 
     html = page.read_text(encoding="utf-8")
     assert 'class="tool-result-image"' in html
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("referenced", "![image](images/image_"),
+        ("embedded", f"![image](data:image/png;base64,{_PNG})"),
+        ("placeholder", "[Image]"),
+    ],
+)
+def test_markdown_writes_the_read_image_as_an_image(
+    tmp_path: Path, mode: str, expected: str
+):
+    """The tool_result's image goes out like any other image in Markdown,
+    not as a JSON block holding its base64."""
+    from claude_code_log.converter import convert_jsonl_to
+
+    transcript = tmp_path / f"{_SID}.jsonl"
+    transcript.write_text(
+        "".join(
+            json.dumps(e) + "\n" for e in (_read_call_entry(), _read_result_entry())
+        ),
+        encoding="utf-8",
+    )
+
+    page = Path(
+        convert_jsonl_to("md", transcript, silent=True, image_export_mode=mode)
+    )
+
+    markdown = page.read_text(encoding="utf-8")
+    assert expected in markdown
+    assert '"media_type"' not in markdown
+    if mode != "embedded":
+        assert _PNG not in markdown
+    if mode == "referenced":
+        assert len(list((tmp_path / "images").iterdir())) == 1
