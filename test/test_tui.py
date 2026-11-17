@@ -108,6 +108,19 @@ def temp_project_dir():
         yield project_path
 
 
+@pytest.fixture
+def isolated_cache_manager(temp_project_dir):
+    """Create a cache manager with isolated database path."""
+    from claude_code_log.cache import CacheManager
+    from claude_code_log import get_library_version
+    
+    # Create a unique database path inside the temp project directory
+    db_path = temp_project_dir / "claude-code-log-cache.db"
+    
+    # Create cache manager with explicit db_path
+    return CacheManager(temp_project_dir, get_library_version(), db_path=db_path)
+
+
 @pytest.mark.tui
 class TestSessionBrowser:
     """Test cases for the SessionBrowser TUI application."""
