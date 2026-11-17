@@ -216,6 +216,60 @@ runs; only the second helps a cold run. Phase 2 touches the public
 `ImageSource` model and the plugin contract, so it needs its own review;
 phase 1 stands without it.
 
+### Phase 2: decisions and measurements (2026-11-17)
+
+**Decided:** convert at parse time, so every entry downstream carries a
+reference, cold runs included; and change the plugin contract outright,
+documented, with no compatibility layer. Nothing in this repo or the
+README's community extensions reads image bytes through the plugin API
+(the test plugin `clmail` and the built-in Codex one never touch images;
+archive-session drives the CLI).
+
+**Measured** on the archive's two most image-heavy projects (43% of
+their JSONL bytes is image base64), 8 cores, 16 GB, peak RSS summed over
+the process tree. "refs" is the same project with every image's base64
+replaced by a 1×1 PNG: an upper bound for phase 2, since it also skips
+parsing the base64, which convert-at-parse still pays once.
+
+| danieldemmel-me-next (1.29 GB) | bytes | refs |
+|---|---|---|
+| Cold, images already exported | 26.0 s, 3.85 GB | 17.1 s, 2.24 GB |
+| Warm, render every page | 11.0 s, 3.80 GB | 7.6 s, 2.40 GB |
+| Warm, serial (`RENDER_JOBS=1`) | 17.3 s, 1.52 GB | 12.0 s, 0.82 GB |
+| Watch tick (+1 message) | 10.0 s, 0.94 GB | 7.5 s, 0.65 GB |
+
+| feedback-loop-talk (1.06 GB) | bytes | refs |
+|---|---|---|
+| Warm, render every page | 9.6 s, 2.71 GB | 6.3 s, 1.34 GB |
+| Warm, serial | 8.7 s, 1.17 GB | 6.0 s, 0.70 GB |
+| Watch tick (+1 message) | 15.4 s, 1.13 GB | 9.6 s, 0.59 GB |
+
+So about a third off the time and 40–50% off peak memory on every path,
+and most of the fan-out's memory is images: the parallel render holds
+2.5x the serial one's. A cold run that encodes the images (56 s for the
+first project) is dominated by AVIF encoding, which phase 2 does not
+change.
+
+**Gotchas found on the way:**
+
+- Bytes are read in more places than `source.data`: tool-result images
+  are plain dicts in `ToolResultContent.content` (`source["data"]`), the
+  Codex provider builds `ImageSource`s, `--format json` dumps entries
+  with `model_dump` and must write the bytes back, and the fragment
+  store's `content_digest` hashes every image on every pass (a reference
+  makes that cheap, and changes no key).
+- Exported file names must come from the reference's digest, not the
+  bytes, or a warm render still needs the bytes: one rename of every
+  exported image (`_ENCODING_REVISION` bump; the sweep removes the old
+  files).
+- Render workers are fed, not self-loading. A worker that meets an image
+  not yet on disk needs the bytes: either a read-only cache connection
+  in the worker, or the parent exporting every image before fanning out
+  (simpler, and exports are content-addressed, so it never repeats).
+- A cold parse has no cache rows yet: the parse-time pool has to hold
+  each image's bytes until the refresh writes its blob, and entries
+  parsed outside a conversion (tests, the TUI, plugins) need a pool too.
+
 ### Garbage collection
 
 Blobs outlive their rows when a file is rewritten, deleted, or
