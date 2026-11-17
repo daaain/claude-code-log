@@ -49,16 +49,18 @@ CREATE TABLE image_blobs (
     media_type TEXT NOT NULL,
     data BLOB NOT NULL            -- raw bytes, not base64, not zlib
 );
-CREATE TABLE message_images (
-    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    digest TEXT NOT NULL
-);
-CREATE INDEX message_images_digest ON message_images(digest);
-CREATE INDEX message_images_message ON message_images(message_id);
+ALTER TABLE messages ADD COLUMN image_refs TEXT;  -- space-separated digests
+CREATE INDEX idx_messages_image_refs ON messages(image_refs)
+    WHERE image_refs IS NOT NULL;
 ```
 
-`message_images` is what makes garbage collection cheap (below); it is
-not needed to read an entry back.
+`image_refs` lists the blobs a row's entry references. It is not needed
+to read an entry back (the blob holds the references too). It is what
+garbage collection reads (below), and it is a column on the row, not a
+junction table keyed by `messages.id`, on purpose: rows are copied
+between databases (spool → cache) and their ids change on the way. A
+column in `refresh_spool.MESSAGE_COLUMNS` travels with every row copy
+the cache already makes, with no id to remap.
 
 ### Write path
 
@@ -72,19 +74,22 @@ not needed to read an entry back.
 2. `INSERT OR IGNORE INTO image_blobs`;
 3. replaces `source` with `{"type": "ref", "digest": …, "media_type": …}`
    in the dumped dict before it is JSON-encoded;
-4. records `(message_id, digest)` in `message_images` once the row id is
-   known.
+4. sets the row's `image_refs` to the digests it replaced.
 
 All in the transaction that writes the rows, so a committed row never
 references a missing blob.
 
 **The refresh spool** (`refresh_spool.py`) is its own SQLite file with
-its own `messages` table. It gets the same two tables, and the merge
-(`CacheManager.atomic_refresh`) copies `image_blobs` with `INSERT OR
-IGNORE … SELECT` before it moves the rows. Both merge shapes need it:
-the single transaction (≤ `CLAUDE_CODE_LOG_ATOMIC_MERGE_MB`) and the
-per-file commits under the zero-total mark. A per-file commit must carry
-the blobs its rows reference in the same transaction.
+its own `messages` table, built from `MESSAGE_COLUMNS`. Adding
+`image_refs` there gives the spool the column, and the merge
+(`CacheManager.atomic_refresh`), which copies rows by
+`MESSAGE_COLUMN_NAMES`, carries it with each row whatever id the row
+lands at. The spool also gets its own `image_blobs`, and the merge
+copies the blobs a batch of rows references (`INSERT OR IGNORE …
+SELECT … WHERE digest IN (…)`) **before** the rows, in the same
+transaction. That holds for both merge shapes: the single transaction
+(≤ `CLAUDE_CODE_LOG_ATOMIC_MERGE_MB`) and each per-file commit under the
+zero-total mark, which carries exactly its own rows' blobs.
 
 **The entry store's append-resume** (§ 2.16) appends only the new rows of
 a grown file. Appending goes through the same serialiser, so it inserts
@@ -102,7 +107,8 @@ are fed the same entries.
 Fetch per batch, not per row: loads already read many rows at once
 (`load_cached_entries` and friends), so collect the digests a batch
 references and fetch them with one `SELECT … WHERE digest IN (…)`
-(chunked under SQLite's variable limit), or a join on `message_images`.
+(chunked under SQLite's variable limit), driven by the rows'
+`image_refs`.
 
 This phase saves disk and cache I/O. It saves no RAM: entries in memory
 hold the base64 as they do today.
@@ -123,29 +129,50 @@ Keep the reference in the model (`ImageSource.data` optional plus a
   (§ 2.10); fed references, a worker that must write a new file needs
   read access to the blob table (a read-only connection; WAL allows it).
 
-This is what takes image bytes out of the parse/render footprint — the
-fragment-store and fan-out memory valves are sized from transcript bytes,
-so it would also let more projects take the fast paths. It touches the
-public `ImageSource` model and the plugin contract, so it needs its own
-review; phase 1 stands without it.
+This takes image bytes out of the render footprint **for entries loaded
+from the cache**, which is most runs: incremental runs, the
+session-scoped path (§ 2.12) and watch ticks render cached entries.
+
+A **cold parse** is different. Entries parsed from JSONL hold base64
+`data`; the write path converts only the serialised copy. Two options,
+to decide in phase 2:
+
+- **Leave cold parses alone.** The saving is then warm-only, and the
+  first run over an archive (or a re-parse after a salt bump) keeps
+  today's footprint. Simplest.
+- **Convert at parse time.** A validator on `ImageSource` swaps `data`
+  for a digest and parks the bytes in a per-conversion pool keyed by
+  digest, which the cache write then stores from. Each distinct image is
+  then held once in memory, however many spliced entries carry it, and
+  worker slices carry references. It needs the pool reachable wherever
+  bytes are resolved (workers included), and a rule for entries parsed
+  outside a conversion (tests, the TUI, plugins).
+
+The fragment-store and fan-out memory valves are sized from transcript
+bytes, so either version lets more projects take the fast paths on warm
+runs; only the second helps a cold run. Phase 2 touches the public
+`ImageSource` model and the plugin contract, so it needs its own review;
+phase 1 stands without it.
 
 ### Garbage collection
 
 Blobs outlive their rows when a file is rewritten, deleted, or
-re-parsed (a salt bump, a refresh that replaces a file's rows).
-`message_images` cascades with `messages` (cache connections already set
-`PRAGMA foreign_keys = ON`; the spool's need it too), and a sweep at the
-end of a pass, under the pass lock, removes the rest:
+re-parsed (a salt bump, a refresh that replaces a file's rows). A sweep
+at the end of a pass, under the pass lock, collects the live digests
+from the rows that have any (the partial index keeps that to image-
+bearing rows), splitting `image_refs` into a temp table, and deletes
+the rest:
 
 ```sql
 DELETE FROM image_blobs
-WHERE digest NOT IN (SELECT digest FROM message_images);
+WHERE digest NOT IN (SELECT digest FROM temp.live_digests);
 ```
 
-Indexed, this is cheap, and running it once per pass (not per refresh)
-keeps it out of the hot path. Space freed is reused by SQLite; the
-existing WAL truncation at the end of a pass is unchanged. `VACUUM` stays
-manual.
+Running it once per pass, not per refresh, keeps it out of the hot path,
+and running it under the pass lock means no refresh can be between
+writing a blob and committing the row that references it. Space freed
+is reused by SQLite; the existing WAL truncation at the end of a pass is
+unchanged. `VACUUM` stays manual.
 
 ### Cache invalidation
 
@@ -198,7 +225,9 @@ other columns and page overhead (~0.6GB), and ~0.45GB of its indexes
 - **Phase 2:** another 1–2 days, mostly the accessor refactor and
   worker access, plus a plugin-API note.
 - **Risk** concentrates in the atomic-refresh merge: a row committed
-  without its blob would render a placeholder until the next re-parse.
-  Write the blobs first in every transaction, and make the deserialiser
-  fall back to re-parsing the file (as it does for an undecodable blob)
-  when a reference is missing.
+  without its blob. Write the blobs first in every transaction, carry
+  them with exactly the rows that reference them, and give the read
+  path a fallback it does not have today: `_deserialize_entry` is called
+  without error handling, so a missing reference must be caught there
+  and turned into "file not cached" (re-parse from the JSONL), never a
+  raised error or a silently image-less entry.
