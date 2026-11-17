@@ -4,7 +4,7 @@ This guide covers development setup, testing, architecture, and release processe
 
 ## Prerequisites
 
-- Python 3.10+, linked against SQLite 3.35+ (the cache's minimum, `MIN_SQLITE_VERSION` in `claude_code_log/migrations/runner.py`)
+- Python 3.11+, linked against SQLite 3.35+ (the cache's minimum, `MIN_SQLITE_VERSION` in `claude_code_log/migrations/runner.py`)
 - [uv](https://docs.astral.sh/uv/) package manager
 
 ## Getting Started
@@ -62,7 +62,7 @@ work/                   # Plans, TODOs, in-flight design docs
 
 The project uses:
 
-- Python 3.10+ with uv package management
+- Python 3.11+ with uv package management
 - Click for CLI interface
 - Textual for Terminal User Interface
 - Pydantic for data modeling and validation

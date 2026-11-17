@@ -299,7 +299,7 @@ Markdown export provides a lightweight, portable alternative to HTML:
 
 ## Installation
 
-Requires Python 3.10 or later, linked against **SQLite 3.35 or later** for the
+Requires Python 3.11 or later, linked against **SQLite 3.35 or later** for the
 cache (`python3 -c "import sqlite3; print(sqlite3.sqlite_version)"` prints the
 version yours uses). The Pythons `uv` installs bundle a recent SQLite; a
 distribution's system Python links the system's own, which can be older. With

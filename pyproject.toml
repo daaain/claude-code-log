@@ -3,7 +3,7 @@ name = "claude-code-log"
 version = "1.8.0"
 description = "Convert Claude Code transcript JSONL files to HTML"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -17,7 +17,7 @@ authors = [
 
 dependencies = [
     "click>=8.3.0",
-    "dateparser>=1.2.2",
+    "dateparser>=1.4.3",
     "pydantic>=2.12.0",
     "jinja2>=3.1.6",
     "markdown-it-py[linkify]>=4.0.0",
@@ -30,7 +30,7 @@ dependencies = [
     "pygments>=2.19.2",
     "quickjs-ng>=0.15.1.1,<0.16",
     "pyyaml>=6.0.3",
-    "pillow>=11.3.0",
+    "pillow>=13.0.0",
 ]
 
 [project.urls]
@@ -113,7 +113,7 @@ venvPath = "."
 venv = ".venv"
 reportMissingImports = true
 reportMissingTypeStubs = true
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 pythonPlatform = "All"
 typeCheckingMode = "strict"
 reportUnknownMemberType = true
@@ -126,7 +126,7 @@ reportFunctionMemberAccess = true
 reportIncompatibleMethodOverride = true
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 
 [tool.coverage.run]
 source = ["claude_code_log"]
