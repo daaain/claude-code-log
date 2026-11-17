@@ -125,7 +125,9 @@ that wait; `CLAUDE_CODE_LOG_PASS_LOCK=0` turns the lock off.
 Switching `--theme` rewrites every page in the new theme on the first
 tick — including a combined page that `--combined no` would otherwise
 leave alone, so its session pages never link back into a page of the
-other theme. Later ticks are cheap again.
+other theme. Upgrading claude-code-log does the same: the first tick
+rewrites a combined page an older version wrote. Later ticks are cheap
+again.
 
 ## Cost
 

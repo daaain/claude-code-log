@@ -127,10 +127,12 @@ reports `file_version_mismatch` on every path — single-file, paginated,
 streaming (§ 2.13), session-scoped (§ 2.12), render pool (§ 2.10), the
 all-projects plan, `watch`/`serve`. Cache rows (`html_cache`,
 `html_pages`) are shared between themes and need no theme column. One
-promotion keeps archives single-themed: a `--combined no` run whose
-combined output carries the other theme rewrites it once
-(`converter.combined_theme_mismatch`), because its session pages link
-back to it. The project index and the archive search page are rewritten
+promotion keeps archives single-themed and current: a `--combined no`
+run whose combined output carries the other theme, or another library
+version's stamp, rewrites it once (`converter.combined_output_outdated`),
+because its session pages link back to it. Without it, an upgrade would
+leave the combined pages in the old rendering for as long as only
+`watch` or `serve --watch` ran. The project index and the archive search page are rewritten
 on every run and decide nothing from their stamp; they are rendered in
 the run's theme on every path that writes them (the all-projects run and
 so `serve`, its `--watch` ticks and `watch --all-projects`, and the

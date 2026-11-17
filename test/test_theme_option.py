@@ -330,6 +330,32 @@ class TestThemeSwitchRegenerates:
         _convert(project, "classic", write_combined=False)
         assert _html(project) == classic_files
 
+    @pytest.mark.parametrize("fmt", ["html", "md"])
+    def test_combined_no_rewrites_a_combined_output_from_another_version(
+        self, tmp_path: Path, fmt: str
+    ) -> None:
+        """After an upgrade, a `--combined no` run (a watch tick) rewrites
+        the combined output once instead of leaving the old rendering behind
+        its session pages' back-link, then goes back to skipping it."""
+        project = _small_project(tmp_path)
+        convert_jsonl_to(fmt, project, silent=True)
+        combined = project / f"combined_transcripts.{fmt}"
+        text = combined.read_text(encoding="utf-8")
+        stamp = f"claude-code-log v{get_library_version()}"
+        assert stamp in text
+        combined.write_text(
+            text.replace(stamp, "claude-code-log v0.0.1", 1), encoding="utf-8"
+        )
+
+        report = RegenerationReport()
+        convert_jsonl_to(fmt, project, silent=True, write_combined=False, report=report)
+        assert report.combined_regenerated, "combined left from the old version"
+        assert stamp in combined.read_text(encoding="utf-8")
+
+        steady = RegenerationReport()
+        convert_jsonl_to(fmt, project, silent=True, write_combined=False, report=steady)
+        assert not steady.combined_regenerated
+
     def test_combined_no_without_combined_output_stays_combined_free(
         self, tmp_path: Path
     ) -> None:

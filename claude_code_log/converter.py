@@ -2225,25 +2225,36 @@ def combined_link_available(
     return (output_dir / f"combined_transcripts{variant_suffix}.{ext}").exists()
 
 
-def combined_theme_mismatch(output_dir: Path, variant_suffix: str, theme: str) -> bool:
-    """Is an existing combined HTML output stamped with another theme?
+def combined_output_outdated(
+    output_dir: Path, variant_suffix: str, ext: str, theme: str
+) -> bool:
+    """Is an existing combined output stamped by another version or theme?
 
-    Themes overwrite the same files, so a run must not leave behind an
-    output of the other theme that its own pages link to. A ``--combined
-    no`` run (every ``watch`` tick by default) never rewrites the combined
-    output, yet its session pages carry a back-link to it
-    (``combined_link_available``); left alone, a theme switch would strand
-    a combined page in the old theme next to session pages in the new one.
-    Callers use this to promote such a run to writing the combined output
-    once — after that it carries the new theme and the run goes back to
-    skipping it. ``False`` when there is no combined file (or no stamp:
-    not ours). Paginated projects name page 1 like the single file, and
-    the paginated pass then re-checks every page's stamp itself.
+    A ``--combined no`` run (every ``watch`` tick and ``serve --watch`` by
+    default) never rewrites the combined output, yet its session pages
+    carry a back-link to it (``combined_link_available``). Left alone, a
+    theme switch would strand a combined page in the old theme next to
+    session pages in the new one, and an upgrade would leave it in the old
+    rendering (inline base64 images before 1.9, say) for as long as only
+    watches run. Callers use this to promote such a run to writing the
+    combined output once; after that it carries the current stamp and the
+    run goes back to skipping it. ``False`` when there is no combined file,
+    no stamp (not ours) or a format without one (JSON). Paginated projects
+    name page 1 like the single file, and the paginated pass then
+    re-checks every page's stamp itself.
     """
-    from .html.renderer import check_html_theme
+    from .html.renderer import check_html_version, html_generator_stamp
 
-    found = check_html_theme(output_dir / f"combined_transcripts{variant_suffix}.html")
-    return found is not None and found != theme
+    if ext not in ("html", "md"):
+        return False
+    # Markdown carries the same generator comment, without a theme.
+    found = check_html_version(
+        output_dir / f"combined_transcripts{variant_suffix}.{ext}"
+    )
+    if found is None:
+        return False
+    current = html_generator_stamp(theme) if ext == "html" else get_library_version()
+    return found != current
 
 
 def _variant_label_from_suffix(suffix: str) -> str:
@@ -3937,7 +3948,7 @@ def convert_jsonl_to(
             stamp, so switching theme regenerates every output this run
             writes. Under ``write_combined=False`` an
             existing combined output in another theme is rewritten too (see
-            ``combined_theme_mismatch``), so no archive is left mixed.
+            ``combined_output_outdated``), so no archive is left mixed.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -4016,18 +4027,17 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
-        # Never leave a combined output of another theme behind for this
-        # run's session pages to link back to: rewrite it once.
+        # Never leave a combined output of another version or theme behind
+        # for this run's session pages to link back to: rewrite it once.
         if (
-            format == "html"
-            and not write_combined
+            not write_combined
             and generate_individual_sessions
-            and combined_theme_mismatch(effective_output_dir, suffix, theme)
+            and combined_output_outdated(effective_output_dir, suffix, ext, theme)
         ):
             if not silent:
                 print(
-                    f"Combined output in {effective_output_dir.name} has another "
-                    f"theme; regenerating it in the {theme} theme"
+                    f"Combined output in {effective_output_dir.name} was "
+                    "rendered by another version or theme; regenerating it"
                 )
             write_combined = True
 
@@ -6850,16 +6860,16 @@ def _plan_project(
             or not output_path.exists()
         )
     else:
-        # A combined output left in another theme is rewritten even here
-        # (convert_jsonl_to promotes the run; see combined_theme_mismatch).
+        # A combined output left by another version or theme is rewritten
+        # even here (convert_jsonl_to promotes the run; see
+        # combined_output_outdated).
         needs_work = (
             bool(modified_files)
             or bool(stale_sessions)
             or unrefreshed
             or (
-                combined_ext == "html"
-                and generate_individual_sessions
-                and combined_theme_mismatch(dest_dir, variant, theme)
+                generate_individual_sessions
+                and combined_output_outdated(dest_dir, variant, combined_ext, theme)
             )
         )
 
