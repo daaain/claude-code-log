@@ -117,6 +117,7 @@ def _summary(
     messages: int = 3,
     sessions: bool = True,
     modified: float = 0.0,
+    latest: str = "2026-01-02T10:00:00Z",
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -125,6 +126,7 @@ def _summary(
         "jsonl_count": 1,
         "message_count": messages,
         "last_modified": modified,
+        "latest_timestamp": latest,
         "working_directories": working_dirs,
         "sessions": [
             {
@@ -165,6 +167,11 @@ def test_projects_with_nothing_to_open_are_left_out() -> None:
     assert not has_nothing_to_open(_summary("-x", [], messages=4, sessions=False))
     # No message counted but a session listed: the session page opens.
     assert not has_nothing_to_open(_summary("-x", [], messages=0))
+    # Only a summary entry: counted as a message, but it carries no
+    # timestamp and the combined page shows nothing for it.
+    assert has_nothing_to_open(
+        _summary("-x", [], messages=1, sessions=False, latest="")
+    )
 
     projects, summary = prepare_projects_index(_archive())
     assert [p.name for p in projects] == [
@@ -333,6 +340,21 @@ def test_cli_env_var_shows_them(projects: Path) -> None:
     assert "Temporary directories" not in _convert(
         projects, env={SHOW_TEMP_PROJECTS_ENV_VAR: "1"}
     )
+
+
+@pytest.mark.parametrize("cache", [[], ["--no-cache"]], ids=["cached", "no-cache"])
+def test_a_summary_only_project_is_left_out(projects: Path, cache: list[str]) -> None:
+    """A transcript holding only a summary entry (older Claude Code wrote
+    them to files of their own): no session, and an empty combined page."""
+    summary_only = projects / "-Users-u-code-gone"
+    summary_only.mkdir()
+    (summary_only / "ssss3333.jsonl").write_text(
+        json.dumps({"type": "summary", "summary": "Old", "leafUuid": "x-1"}) + "\n",
+        encoding="utf-8",
+    )
+    index = _convert(projects, "--show-temp-projects", *cache)
+    assert "-Users-u-code-alpha/combined_transcripts.html" in index
+    assert "-Users-u-code-gone" not in index
 
 
 @pytest.mark.parametrize("command", ["serve", "watch"])

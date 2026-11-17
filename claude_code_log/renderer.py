@@ -5244,12 +5244,19 @@ def _disambiguate_display_names(projects: list["TemplateProject"]) -> None:
 def has_nothing_to_open(project_summary: dict[str, Any]) -> bool:
     """Whether an index row for this project would lead nowhere.
 
-    No message and no listable session: a transcript holding only metadata
-    (a session started and killed before its first prompt, say). Its
-    combined page would be empty and it has no session to link to.
+    No listable session, and nothing for the combined page to show: a
+    transcript holding only metadata (a session started and killed before
+    its first prompt, say), or only a summary entry (older Claude Code
+    wrote those to files of their own). A summary or ai-title entry counts
+    toward ``message_count`` but carries no timestamp and renders nothing,
+    so a project whose entries have no timestamp at all shows nothing
+    either. Messages without a listable session (an agent-only session)
+    still open, on the combined page.
     """
-    return not project_summary.get("message_count") and not project_summary.get(
-        "sessions"
+    if project_summary.get("sessions"):
+        return False
+    return not project_summary.get("message_count") or not project_summary.get(
+        "latest_timestamp"
     )
 
 
