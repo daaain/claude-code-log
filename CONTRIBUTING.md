@@ -587,6 +587,12 @@ for every change:
   toggle × fold depth × branch mode with the timeline open, search and
   live updates included; extend it when adding a message type.
 
+The tests that check one route to the output against another (memoized
+against plain, streamed, session-scoped or incremental against a full
+render, parallel against serial) run in both themes: the module assigns
+`theme = run_in_both_themes("convert_jsonl_to")` from `test/conftest.py`.
+Give a new performance path's equivalence tests the same line.
+
 To compare how long a page takes to load and lay out in each theme, run
 `uv run python scripts/bench_page_load.py` (the minimal theme lays the
 transcript out once, as the DAG grid — dev-docs/minimal-theme.md § 5).

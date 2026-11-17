@@ -27,6 +27,10 @@ from claude_code_log.cache import CacheManager, get_library_version
 from claude_code_log.converter import convert_jsonl_to
 
 from test.test_streaming_render import _entry, _make_session, _write_jsonl
+from test.conftest import run_in_both_themes
+
+# Each test runs in both themes: the claim these tests check holds in each.
+theme = run_in_both_themes("convert_jsonl_to")
 
 PAGE_SIZE = 6
 
