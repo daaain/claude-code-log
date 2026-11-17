@@ -7,11 +7,17 @@ by both HTML and Markdown renderers.
 import base64
 import binascii
 import hashlib
+import io
 import os
+import threading
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from PIL import Image
+
     from .models import ImageContent
 
 
@@ -56,6 +62,239 @@ def is_safe_image_source(media_type: str, data: str) -> bool:
     except (binascii.Error, ValueError):
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Compressed referenced images (the HTML default)
+# ---------------------------------------------------------------------------
+#
+# Inline base64 made image-heavy sessions' pages hundreds of MB: every
+# screenshot the Read tool opened was embedded at full size, a third
+# larger than its bytes, once in the combined page and again in its
+# session file. HTML's referenced mode instead writes each image once,
+# re-encoded as AVIF and capped in size, under a name derived from the
+# *source* bytes and the encoder settings — so an image already exported
+# by an earlier pass, run or worker is found without decoding it again,
+# and changing a setting below renames every file rather than leaving
+# files encoded under the old one behind a name that says otherwise.
+
+#: Longest side, in pixels, an exported image is scaled down to.
+MAX_IMAGE_DIMENSION = 2000
+AVIF_QUALITY = 50
+AVIF_SPEED = 8
+#: Used only where Pillow was built without AVIF support.
+WEBP_QUALITY = 75
+WEBP_METHOD = 4
+#: Bump to rename every compressed image (e.g. after an encoder change
+#: that the settings above don't capture).
+_ENCODING_REVISION = 1
+
+
+@dataclass(frozen=True)
+class ExportedImage:
+    """Where a compressed export landed, and its pixel size if known.
+
+    ``src`` is relative to the page's output directory. ``width`` and
+    ``height`` are the displayed (EXIF-oriented, scaled) size, given to
+    the ``<img>`` so the page reserves the box before the lazily-loaded
+    image arrives; ``None`` when Pillow could not read the image.
+    """
+
+    src: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+_encoder_cache: list[Optional[tuple[str, str]]] = []
+
+
+def _encoder() -> Optional[tuple[str, str]]:
+    """``(Pillow format, extension)`` to encode with, or None for none.
+
+    AVIF where this Pillow build has it (the PyPI wheels do from 11.3),
+    WebP otherwise, and None (images are written as they came) if
+    neither is available.
+    """
+    if not _encoder_cache:
+        choice: Optional[tuple[str, str]] = None
+        try:
+            from PIL import features
+
+            if features.check("avif"):
+                choice = ("AVIF", ".avif")
+            elif features.check("webp"):
+                choice = ("WEBP", ".webp")
+        except Exception:
+            choice = None
+        _encoder_cache.append(choice)
+    return _encoder_cache[0]
+
+
+def _encoding_tag() -> bytes:
+    encoder = _encoder()
+    fmt = encoder[0] if encoder else "none"
+    if fmt == "AVIF":
+        settings = f"q{AVIF_QUALITY}-s{AVIF_SPEED}"
+    elif fmt == "WEBP":
+        settings = f"q{WEBP_QUALITY}-m{WEBP_METHOD}"
+    else:
+        settings = ""
+    return (f"{fmt}-{settings}-max{MAX_IMAGE_DIMENSION}-r{_ENCODING_REVISION}").encode()
+
+
+def _oriented_size(im: "Image.Image") -> tuple[int, int]:
+    """The size a browser displays *im* at, honouring EXIF orientation."""
+    width, height = im.size
+    try:
+        orientation = im.getexif().get(0x0112, 1)
+    except Exception:
+        orientation = 1
+    if orientation in (5, 6, 7, 8):
+        return height, width
+    return width, height
+
+
+def _compress(
+    raw: bytes, media_type: str
+) -> tuple[bytes, str, Optional[int], Optional[int]]:
+    """Re-encode *raw*: ``(bytes, extension, width, height)``.
+
+    Falls back to the original bytes and extension whenever re-encoding
+    would not help — an animated image, an encoding no smaller than the
+    source, no encoder — or Pillow cannot read the image at all (then
+    without dimensions).
+    """
+    original_ext = _get_extension(media_type)
+    try:
+        from PIL import Image, ImageOps
+
+        im = Image.open(io.BytesIO(raw))
+        with im:
+            size = _oriented_size(im)
+            encoder = _encoder()
+            if encoder is None or getattr(im, "is_animated", False):
+                return raw, original_ext, size[0], size[1]
+            img = ImageOps.exif_transpose(im)
+        if img.mode not in ("RGB", "RGBA", "L", "LA"):
+            has_alpha = "A" in img.getbands() or "transparency" in img.info
+            img = img.convert("RGBA" if has_alpha else "RGB")
+        img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+        fmt, ext = encoder
+        buf = io.BytesIO()
+        if fmt == "AVIF":
+            options: dict[str, object] = {"quality": AVIF_QUALITY, "speed": AVIF_SPEED}
+            if media_type != "image/jpeg" and img.mode in ("RGB", "RGBA"):
+                # Lossless sources are mostly screenshots: full chroma
+                # keeps coloured text sharp, for ~1% more bytes.
+                options["subsampling"] = "4:4:4"
+        else:
+            options = {"quality": WEBP_QUALITY, "method": WEBP_METHOD}
+        img.save(buf, fmt, **options)
+        if buf.tell() >= len(raw):
+            return raw, original_ext, size[0], size[1]
+        return buf.getvalue(), ext, img.width, img.height
+    except Exception:
+        # Pillow raises a variety of errors on undecodable or hostile
+        # input (DecompressionBombError among them); the image still
+        # gets exported, as it came.
+        return raw, original_ext, None, None
+
+
+def _image_size_on_disk(path: Path) -> tuple[Optional[int], Optional[int]]:
+    """The displayed size of an already-exported file, from its header."""
+    try:
+        from PIL import Image
+
+        im = Image.open(path)
+        with im:
+            return _oriented_size(im)
+    except Exception:
+        return None, None
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    # Unique per process *and* thread: render workers and a watch loop's
+    # threads may export the same image at once. Racing writers replace
+    # identical bytes.
+    tmp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp"
+    )
+    try:
+        tmp_path.write_bytes(data)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+# (images dir, digest) -> result, so the second render pass over a
+# message (combined page, then session file) costs one stat, not a
+# header parse. Bounded so a long ``serve --watch`` can't grow it without
+# limit.
+_exported: dict[tuple[Path, str], ExportedImage] = {}
+_exported_lock = threading.Lock()
+_EXPORTED_MAX = 65536
+
+
+def export_compressed_image(
+    media_type: str, data: str, output_dir: Path
+) -> Optional[ExportedImage]:
+    """Write a base64 image as a compressed, content-addressed file.
+
+    The file goes to ``<output_dir>/images/image_<digest><ext>``, where
+    the digest covers the decoded source bytes and the encoder settings
+    and ``<ext>`` is the encoder's (``.avif``) or, when re-encoding was
+    declined, the source's own. Returns None — render a placeholder —
+    for an unsafe or malformed source or when the file can't be written.
+    """
+    if not is_safe_image_source(media_type, data):
+        return None
+    try:
+        raw = base64.b64decode(data)
+    except (binascii.Error, ValueError):
+        return None
+    hasher = hashlib.blake2b(_encoding_tag(), digest_size=8)
+    hasher.update(b"\0")
+    hasher.update(raw)
+    digest = hasher.hexdigest()
+    images_dir = output_dir / "images"
+    key = (images_dir, digest)
+
+    with _exported_lock:
+        known = _exported.get(key)
+    if known is not None and (output_dir / known.src).exists():
+        return known
+
+    stem = f"image_{digest}"
+    encoder = _encoder()
+    candidates = ([stem + encoder[1]] if encoder else []) + [
+        stem + _get_extension(media_type)
+    ]
+    result: Optional[ExportedImage] = None
+    for name in candidates:
+        path = images_dir / name
+        if path.exists():
+            width, height = _image_size_on_disk(path)
+            result = ExportedImage(f"images/{name}", width, height)
+            break
+    if result is None:
+        payload, ext, width, height = _compress(raw, media_type)
+        name = stem + ext
+        try:
+            images_dir.mkdir(exist_ok=True)
+            _atomic_write(images_dir / name, payload)
+        except OSError:
+            return None
+        result = ExportedImage(f"images/{name}", width, height)
+
+    with _exported_lock:
+        if len(_exported) >= _EXPORTED_MAX:
+            _exported.clear()
+        _exported[key] = result
+    return result
 
 
 def export_image(

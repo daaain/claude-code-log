@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from claude_code_log.image_export import export_image
+from claude_code_log.image_export import _encoding_tag, export_image
 from claude_code_log.models import ImageContent, ImageSource
 
 
@@ -335,6 +335,7 @@ class TestReferencedModeAcrossRenderPasses:
         combined_files = [f for f in html_files if f.name.startswith("combined")]
         assert combined_files and len(session_files) == 2
 
+        # A 1x1 PNG is smaller than any re-encoding, so it is kept as-is.
         src_re = re.compile(r"images/image_[0-9a-f]{16}\.png")
         referenced: set[str] = set()
         for html_file in html_files:
@@ -343,11 +344,195 @@ class TestReferencedModeAcrossRenderPasses:
             referenced |= srcs
 
         # Two distinct images → two files, every reference resolvable, and
-        # every file's bytes still match the digest in its own name (the
-        # old bug left files whose content belonged to a different name).
+        # every file holds the image its name was derived from (the old bug
+        # left files whose content belonged to a different name). Names
+        # hash the source bytes under the encoder settings.
         assert len(referenced) == 2
+        sources = [base64.b64decode(png_a), base64.b64decode(png_b)]
         for rel in referenced:
             exported = project / rel
             assert exported.exists(), f"{rel} referenced but missing"
-            digest = hashlib.blake2b(exported.read_bytes(), digest_size=8).hexdigest()
-            assert exported.name == f"image_{digest}.png"
+            content = exported.read_bytes()
+            assert content in sources
+            hasher = hashlib.blake2b(_encoding_tag(), digest_size=8)
+            hasher.update(b"\0")
+            hasher.update(content)
+            assert exported.name == f"image_{hasher.hexdigest()}.png"
+
+
+def _b64_image(fmt: str, size: tuple[int, int], **save: object) -> str:
+    """A noisy (incompressible-ish) image of *size*, base64-encoded."""
+    import base64
+    import io
+    import random
+
+    from PIL import Image
+
+    rng = random.Random(f"{size}")
+    img = Image.new("RGB", size)
+    img.putdata(
+        [
+            (rng.randrange(256), (x * 7) % 256, (x * 3) % 256)
+            for x in range(size[0] * size[1])
+        ]
+    )
+    buf = io.BytesIO()
+    img.save(buf, fmt, **save)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+class TestExportCompressedImage:
+    """HTML's referenced mode: compressed, capped, content-addressed files."""
+
+    def test_large_image_is_capped_and_reencoded(self, tmp_path: Path):
+        from claude_code_log.image_export import (
+            MAX_IMAGE_DIMENSION,
+            _encoder,
+            export_compressed_image,
+        )
+
+        encoder = _encoder()
+        assert encoder is not None, "the Pillow wheel ships AVIF and WebP"
+        data = _b64_image("PNG", (2400, 600))
+        result = export_compressed_image("image/png", data, tmp_path)
+        assert result is not None
+        assert result.src.endswith(encoder[1])
+        assert (result.width, result.height) == (MAX_IMAGE_DIMENSION, 500)
+        written = tmp_path / result.src
+        assert written.stat().st_size < len(data) * 3 // 4
+
+    def test_second_export_reuses_the_file(self, tmp_path: Path):
+        import claude_code_log.image_export as image_export
+
+        data = _b64_image("PNG", (300, 200))
+        first = image_export.export_compressed_image("image/png", data, tmp_path)
+        assert first is not None
+        mtime = (tmp_path / first.src).stat().st_mtime_ns
+        # A fresh process (empty memo) finds the file on disk, with its size.
+        image_export._exported.clear()
+        second = image_export.export_compressed_image("image/png", data, tmp_path)
+        assert second == first
+        assert (tmp_path / first.src).stat().st_mtime_ns == mtime
+        assert len(list((tmp_path / "images").iterdir())) == 1
+
+    def test_tiny_image_keeps_its_original_bytes(
+        self, sample_image: ImageContent, tmp_path: Path
+    ):
+        import base64
+
+        from claude_code_log.image_export import export_compressed_image
+
+        result = export_compressed_image(
+            "image/png", sample_image.source.data, tmp_path
+        )
+        assert result is not None
+        assert result.src.endswith(".png")
+        assert (result.width, result.height) == (1, 1)
+        assert (tmp_path / result.src).read_bytes() == base64.b64decode(
+            sample_image.source.data
+        )
+
+    def test_exif_rotated_jpeg_reports_displayed_size(self, tmp_path: Path):
+        from PIL import Image
+
+        from claude_code_log.image_export import export_compressed_image
+
+        exif = Image.Exif()
+        exif[0x0112] = 6  # rotate 90° CW on display
+        data = _b64_image("JPEG", (400, 100), exif=exif.tobytes())
+        result = export_compressed_image("image/jpeg", data, tmp_path)
+        assert result is not None
+        assert (result.width, result.height) == (100, 400)
+
+    def test_animated_gif_is_kept_as_is(self, tmp_path: Path):
+        import base64
+        import io
+
+        from PIL import Image
+
+        from claude_code_log.image_export import export_compressed_image
+
+        frames = [Image.new("RGB", (64, 64), c) for c in ("red", "blue")]
+        buf = io.BytesIO()
+        frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:])
+        data = base64.b64encode(buf.getvalue()).decode("ascii")
+        result = export_compressed_image("image/gif", data, tmp_path)
+        assert result is not None
+        assert result.src.endswith(".gif")
+        assert (result.width, result.height) == (64, 64)
+
+    def test_undecodable_image_is_written_without_size(self, tmp_path: Path):
+        import base64
+
+        from claude_code_log.image_export import export_compressed_image
+
+        data = base64.b64encode(b"not really a png").decode("ascii")
+        result = export_compressed_image("image/png", data, tmp_path)
+        assert result is not None
+        assert result.src.endswith(".png")
+        assert (result.width, result.height) == (None, None)
+        assert (tmp_path / result.src).read_bytes() == b"not really a png"
+
+    def test_unsafe_sources_are_refused(self, tmp_path: Path):
+        import base64
+
+        from claude_code_log.image_export import export_compressed_image
+
+        svg = base64.b64encode(b"<svg onload='alert(1)'/>").decode("ascii")
+        assert export_compressed_image("image/svg+xml", svg, tmp_path) is None
+        assert export_compressed_image("image/png", "@@not base64@@", tmp_path) is None
+        assert not (tmp_path / "images").exists()
+
+
+class TestHtmlRendererImageModes:
+    """The HTML renderer's images, user and tool-result alike, follow the mode."""
+
+    @staticmethod
+    def _tool_result_html(renderer: object) -> str:
+        from claude_code_log.models import ToolResultContent
+
+        result = ToolResultContent(
+            type="tool_result",
+            tool_use_id="t1",
+            content=[
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _b64_image("PNG", (320, 240)),
+                    },
+                }
+            ],
+        )
+        return renderer.format_ToolResultContent(result, None)  # type: ignore[attr-defined]
+
+    def test_referenced_tool_result_image_is_a_lazy_sized_file(self, tmp_path: Path):
+        import re
+
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        renderer = HtmlRenderer()  # referenced is the default
+        renderer._output_dir = tmp_path
+        html = self._tool_result_html(renderer)
+        match = re.search(r'<img src="(images/image_[0-9a-f]{16}\.\w+)"', html)
+        assert match, html
+        assert (tmp_path / match.group(1)).exists()
+        assert 'width="320" height="240"' in html
+        assert 'loading="lazy"' in html
+        assert 'class="tool-result-image"' in html
+        assert "data:image" not in html
+
+    def test_referenced_without_output_dir_embeds(self):
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        html = self._tool_result_html(HtmlRenderer())
+        assert 'src="data:image/png;base64,' in html
+
+    def test_placeholder_marks_tool_result_images(self, tmp_path: Path):
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        renderer = HtmlRenderer(image_export_mode="placeholder")
+        renderer._output_dir = tmp_path
+        html = self._tool_result_html(renderer)
+        assert "[Image]" in html and "<img" not in html

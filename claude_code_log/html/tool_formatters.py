@@ -16,7 +16,7 @@ HTML for display in transcripts.
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, Optional, cast
 
 from .utils import (
@@ -1577,7 +1577,16 @@ def _structured_items_html(items: "list[dict[str, Any]]") -> str:
     return f"<div class='tool-result-json'>{_json_dump_value_html(pretty)}</div>"
 
 
-def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
+#: ``(media_type, base64 data) -> <img> HTML`` (or None to drop the
+#: image): how a renderer with an image export mode emits tool-result
+#: images. Without one they are embedded as data: URLs.
+ToolResultImageFormatter = Callable[[str, str], Optional[str]]
+
+
+def format_tool_result_content_raw(
+    tool_result: ToolResultContent,
+    image_formatter: Optional[ToolResultImageFormatter] = None,
+) -> str:
     """Format raw ToolResultContent as HTML (fallback formatter).
 
     This handles tool results that don't have specialized output types,
@@ -1585,6 +1594,7 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
 
     Args:
         tool_result: The raw tool result content
+        image_formatter: Emits each image's ``<img>``; None embeds them.
     """
     # Handle both string and structured content
     if isinstance(tool_result.content, str):
@@ -1613,8 +1623,13 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
                     media_type: str = str(source.get("media_type", "image/png"))
                     data: str = str(source.get("data", ""))
                     # Same gate as user/assistant images: allowlisted
-                    # (non-SVG) type and strictly-valid base64.
-                    if data and is_safe_image_source(media_type, data):
+                    # (non-SVG) type and strictly-valid base64 — applied
+                    # here or by the renderer's image formatter.
+                    if data and image_formatter is not None:
+                        tag = image_formatter(media_type, data)
+                        if tag is not None:
+                            image_html_parts.append(tag)
+                    elif data and is_safe_image_source(media_type, data):
                         data_url = f"data:{media_type};base64,{data}"
                         image_html_parts.append(
                             f'<img src="{escape_html(data_url)}" alt="Tool result image" '
@@ -1835,7 +1850,10 @@ def format_tool_execution_input(tool_input: ToolExecutionInput) -> str:
     )
 
 
-def format_tool_execution_output(output: ToolExecutionOutput) -> str:
+def format_tool_execution_output(
+    output: ToolExecutionOutput,
+    image_formatter: Optional[ToolResultImageFormatter] = None,
+) -> str:
     """Render transport status followed by a table of emitted results."""
     parts = [
         "<div class='tool-execution-status'>"
@@ -1855,7 +1873,8 @@ def format_tool_execution_output(output: ToolExecutionOutput) -> str:
                 type="tool_result",
                 tool_use_id="tool-execution",
                 content=content,
-            )
+            ),
+            image_formatter,
         )
         rows.append(
             "<tr>"

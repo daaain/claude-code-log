@@ -2802,7 +2802,7 @@ def _render_page_unit_inline(
     from .html.renderer import HtmlRenderer
 
     assert unit.entries is not None  # every page unit is planned with them
-    page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "embedded")
+    page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "referenced")
     page_renderer.depth = depth
     page_renderer.compact = compact
     page_renderer.no_recaps = no_recaps

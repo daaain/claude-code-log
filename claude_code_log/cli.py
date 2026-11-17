@@ -208,6 +208,11 @@ def _render_provider_input_file(
     session_key = messages[0].sessionId or input_path.stem
     title = f"{provider_name.title()}: {session_key}"
 
+    # A stdout stream renders into a discarded temp dir: inline its images.
+    stream_images = image_export_mode or (
+        "embedded" if _is_stdout_target(output) else None
+    )
+
     def render(destination: Path) -> Path:
         return render_normalized_session_file(
             messages,
@@ -215,7 +220,7 @@ def _render_provider_input_file(
             destination,
             output_format,
             title,
-            image_export_mode,
+            stream_images,
             depth,
             compact,
             no_timestamps,
@@ -1098,7 +1103,7 @@ def main() -> None:
     "--image-export-mode",
     type=click.Choice(["placeholder", "embedded", "referenced"]),
     default=None,
-    help="Image export mode: placeholder (mark position), embedded (base64), referenced (PNG files). Default: embedded for HTML, referenced for Markdown.",
+    help="Image export mode: placeholder (mark position), embedded (base64), referenced (image files in images/ beside the output; for HTML, compressed to AVIF and capped at 2000px). Default: referenced.",
 )
 @click.option(
     "--page-size",
@@ -1667,6 +1672,12 @@ def convert(
             messages = list(selected.load_session(matched_id))
             title = info.title or f"{provider.title()}: Session {matched_id[:8]}"
 
+            # A stdout stream renders into a discarded temp dir: inline
+            # its images.
+            stream_images = image_export_mode or (
+                "embedded" if _is_stdout_target(output) else None
+            )
+
             def render_provider(destination: Path) -> Path:
                 return render_normalized_session_file(
                     messages,
@@ -1674,7 +1685,7 @@ def convert(
                     destination,
                     output_format,
                     title,
-                    image_export_mode,
+                    stream_images,
                     depth_level,
                     compact,
                     no_timestamps,

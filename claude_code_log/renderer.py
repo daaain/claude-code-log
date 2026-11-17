@@ -5735,7 +5735,7 @@ def get_renderer(
     Args:
         format: The output format ("html", "md", or "markdown").
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
-            If None, defaults to "embedded" for HTML and "referenced" for Markdown.
+            If None, defaults to "referenced" for both HTML and Markdown.
         depth: Output depth level controlling which message types are included.
         compact: If True, merge consecutive same-type headings (Markdown only).
         no_timestamps: If True, suppress per-message timestamp lines
@@ -5761,8 +5761,9 @@ def get_renderer(
     if format == "html":
         from .html.renderer import HtmlRenderer
 
-        # For HTML, default to embedded mode (current behavior)
-        mode = image_export_mode or "embedded"
+        # For HTML, default to referenced mode: compressed image files
+        # beside the page (embedded when there is no output directory)
+        mode = image_export_mode or "referenced"
         renderer = HtmlRenderer(image_export_mode=mode)
     elif format in ("md", "markdown"):
         from .markdown.renderer import MarkdownRenderer
