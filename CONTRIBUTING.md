@@ -114,6 +114,17 @@ just test-all
 just test-cov
 ```
 
+### Host Settings Don't Reach the Tests
+
+The test run removes every `CLAUDE_CODE_LOG_*` variable (and the other
+settings the package reads, such as `CODEX_HOME`) from its environment
+before anything imports the package, and the pytest header lists the
+ones it removed. Exporting `CLAUDE_CODE_LOG_THEME=minimal` in your shell,
+say, no longer changes what the tests check. A test that needs a setting
+sets it with `monkeypatch.setenv`. `test/host_env.py` holds the list, and
+`test/test_host_env_isolation.py` fails if the package starts reading a
+variable that the list doesn't cover.
+
 ### Snapshot Testing
 
 Snapshot tests detect unintended HTML output changes using [syrupy](https://github.com/syrupy-project/syrupy):
@@ -586,6 +597,12 @@ for every change:
   sweep in `test/test_minimal_parity_browser.py` checks every filter
   toggle × fold depth × branch mode with the timeline open, search and
   live updates included; extend it when adding a message type.
+
+The tests that check one route to the output against another (memoized
+against plain, streamed, session-scoped or incremental against a full
+render, parallel against serial) run in both themes: the module assigns
+`theme = run_in_both_themes("convert_jsonl_to")` from `test/conftest.py`.
+Give a new performance path's equivalence tests the same line.
 
 To compare how long a page takes to load and lay out in each theme, run
 `uv run python scripts/bench_page_load.py` (the minimal theme lays the

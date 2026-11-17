@@ -23,6 +23,32 @@ from claude_code_log.html.renderer import generate_html
 REAL_PROJECTS_DIR = Path(__file__).parent / "test_data" / "real_projects"
 
 
+@pytest.fixture(autouse=True)
+def _timing_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Render with the timing instrumentation on.
+
+    ``DEBUG_TIMING`` is read from the environment once, at import, and the
+    HTML renderer imports its own copy, so setting the variable here would
+    be too late, and the test run removes the host's setting anyway (see
+    test/host_env.py): both copies are switched on directly.
+    """
+    from claude_code_log import renderer_timings
+    from claude_code_log.html import renderer as html_renderer
+
+    monkeypatch.setattr(renderer_timings, "DEBUG_TIMING", True)
+    monkeypatch.setattr(html_renderer, "DEBUG_TIMING", True)
+
+
+def test_timing_instrumentation_runs_here(capsys: pytest.CaptureFixture[str]) -> None:
+    """These tests render with the timing branches on, which is also what
+    gives renderer_timings its coverage."""
+    generate_html(
+        load_transcript(Path(__file__).parent / "test_data" / "edit_tool.jsonl"),
+        "Timing",
+    )
+    assert "[TIMING] Render messages" in capsys.readouterr().out
+
+
 @pytest.mark.slow
 class TestRenderPerformance:
     """Test that rendering completes in reasonable time."""
@@ -34,18 +60,13 @@ class TestRenderPerformance:
             Path(__file__).parent / "test_data" / "real_projects" / "-src-deep-manifest"
         )
 
-    def test_render_performance_under_threshold(
-        self, sample_session_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_render_performance_under_threshold(self, sample_session_path: Path):
         """Test that rendering the sample session completes within threshold.
 
         The ~1.2MB sample session with ~325 messages should render in under 5 seconds.
         This includes loading, parsing, and HTML generation but not disk I/O for
         writing the output file.
         """
-        # Enable timing output (goes to stderr) - monkeypatch ensures cleanup
-        monkeypatch.setenv("CLAUDE_CODE_LOG_DEBUG_TIMING", "1")
-
         # Load all JSONL files in the session directory
         messages: List[TranscriptEntry] = []
         for jsonl_file in sorted(sample_session_path.glob("*.jsonl")):
