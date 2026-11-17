@@ -47,9 +47,10 @@ only a reference in the entry blob.
 CREATE TABLE image_blobs (
     digest TEXT PRIMARY KEY,      -- blake2b-128 of the decoded bytes, hex
     media_type TEXT NOT NULL,
-    data BLOB NOT NULL            -- raw bytes, not base64, not zlib
+    data BLOB NOT NULL,           -- raw bytes, not base64, not zlib
+    orphaned_at REAL              -- set by a sweep that found it unused
 );
-ALTER TABLE messages ADD COLUMN image_refs TEXT;  -- space-separated digests
+ALTER TABLE messages ADD COLUMN image_refs TEXT;  -- JSON array of digests
 CREATE INDEX idx_messages_image_refs ON messages(image_refs)
     WHERE image_refs IS NOT NULL;
 ```
@@ -61,6 +62,14 @@ junction table keyed by `messages.id`, on purpose: rows are copied
 between databases (spool → cache) and their ids change on the way. A
 column in `refresh_spool.MESSAGE_COLUMNS` travels with every row copy
 the cache already makes, with no id to remap.
+
+It is a JSON array so SQL can expand it with `json_each` and never needs
+a list of bound variables, however many digests a batch references (see
+the merge and the sweep below). The cache uses no JSON functions today:
+JSON1 is built into SQLite from 3.38 and compiled into CPython's own
+builds before that, but the floor is 3.35 (`MIN_SQLITE_VERSION`), so the
+migration checks `json_each` works once, next to the version check, and
+fails with a clear message rather than mid-merge.
 
 ### Write path
 
@@ -85,11 +94,31 @@ its own `messages` table, built from `MESSAGE_COLUMNS`. Adding
 (`CacheManager.atomic_refresh`), which copies rows by
 `MESSAGE_COLUMN_NAMES`, carries it with each row whatever id the row
 lands at. The spool also gets its own `image_blobs`, and the merge
-copies the blobs a batch of rows references (`INSERT OR IGNORE …
-SELECT … WHERE digest IN (…)`) **before** the rows, in the same
-transaction. That holds for both merge shapes: the single transaction
-(≤ `CLAUDE_CODE_LOG_ATOMIC_MERGE_MB`) and each per-file commit under the
-zero-total mark, which carries exactly its own rows' blobs.
+copies blobs **before** rows, in the same transaction. The spool is
+`ATTACH`ed to the cache connection for the merge, so the copy is pure
+SQL, with no bound digest list to outgrow SQLite's variable limit:
+
+- **Single transaction** (≤ `CLAUDE_CODE_LOG_ATOMIC_MERGE_MB`): every
+  spool blob belongs to the merge.
+  `INSERT OR IGNORE INTO main.image_blobs SELECT * FROM spool.image_blobs`.
+- **Per-file commits** under the zero-total mark: each carries exactly
+  its own rows' blobs, bound by one parameter, the file:
+
+  ```sql
+  INSERT OR IGNORE INTO main.image_blobs
+  SELECT b.* FROM spool.image_blobs b
+  WHERE b.digest IN (
+      SELECT j.value FROM spool.messages s, json_each(s.image_refs) j
+      WHERE s.file_id = ?
+  );
+  ```
+
+**Reads during a refresh.** While a refresh runs, the incremental
+refresh reads rows through a temp `messages` view that overlays the
+spool on the cache (`_create_overlay`). Entries read that way can
+reference blobs that are still only in the spool, so the overlay gets a
+matching temp `image_blobs` view (the cache's blobs `UNION ALL` the
+spool's) and the read path resolves through it.
 
 **The entry store's append-resume** (§ 2.16) appends only the new rows of
 a grown file. Appending goes through the same serialiser, so it inserts
@@ -106,9 +135,8 @@ are fed the same entries.
 
 Fetch per batch, not per row: loads already read many rows at once
 (`load_cached_entries` and friends), so collect the digests a batch
-references and fetch them with one `SELECT … WHERE digest IN (…)`
-(chunked under SQLite's variable limit), driven by the rows'
-`image_refs`.
+references and fetch them in one query driven by the rows' own
+`image_refs` (`json_each` over the batch's rows), not a bound list.
 
 This phase saves disk and cache I/O. It saves no RAM: entries in memory
 hold the base64 as they do today.
@@ -157,22 +185,53 @@ phase 1 stands without it.
 ### Garbage collection
 
 Blobs outlive their rows when a file is rewritten, deleted, or
-re-parsed (a salt bump, a refresh that replaces a file's rows). A sweep
-at the end of a pass, under the pass lock, collects the live digests
-from the rows that have any (the partial index keeps that to image-
-bearing rows), splitting `image_refs` into a temp table, and deletes
-the rest:
+re-parsed (a salt bump, a refresh that replaces a file's rows).
+
+**What keeps the write path safe is the transaction, not a lock.** A
+blob is inserted in the same transaction as the rows that reference it
+(above), so no other connection ever sees the blob without them, or
+them without it.
+
+**Readers are the hard part.** Only the all-projects pass takes the pass
+lock (`process_projects_hierarchy`; a `serve --watch` tick goes through
+it), while a single-project conversion and the TUI read the cache
+without it. A reader can read a row in one statement and its blobs in
+the next, and with phase 2 a render resolves bytes long after the entry
+was loaded. If another process rewrote that file and deleted the blobs
+in between, the lookup would miss. So deletion has a grace period:
+
+1. The sweep runs at the end of an all-projects pass, under the pass
+   lock, so two sweeps never race. Single-project conversions don't
+   sweep.
+2. It marks every blob no row references: `orphaned_at = now`, if not
+   already set. Blobs referenced again (an identical image reappeared)
+   get `orphaned_at = NULL`.
+3. It deletes blobs orphaned for longer than a grace period (an hour, say:
+   far longer than any load-to-render gap) that are still unreferenced:
 
 ```sql
+WITH live(digest) AS (
+    SELECT j.value FROM messages m, json_each(m.image_refs) j
+    WHERE m.image_refs IS NOT NULL
+)
 DELETE FROM image_blobs
-WHERE digest NOT IN (SELECT digest FROM temp.live_digests);
+WHERE orphaned_at < :now - :grace
+  AND digest NOT IN (SELECT digest FROM live);
 ```
 
-Running it once per pass, not per refresh, keeps it out of the hot path,
-and running it under the pass lock means no refresh can be between
-writing a blob and committing the row that references it. Space freed
-is reused by SQLite; the existing WAL truncation at the end of a pass is
-unchanged. `VACUUM` stays manual.
+The partial index on `image_refs` keeps the live scan to rows that hold
+images. A sweep per pass, not per refresh, keeps it out of the hot path.
+SQLite reuses the space freed; the existing WAL truncation at the end of
+a pass is unchanged. `VACUUM` stays manual.
+
+**A miss still has to be survivable**, since a grace period bounds
+the window rather than closing it: a process left suspended for longer than
+the grace period, say. The read path's fallback (see Effort and risk) treats a
+missing blob as "file not cached" and re-parses it from the JSONL. In
+phase 2, where the lookup happens at render time, the same fallback
+resolves the image from its source instead: the entry's file is
+re-parsed for that one image. That path is slow, but it is a correct
+answer to a case that should not happen.
 
 ### Cache invalidation
 
