@@ -80,7 +80,10 @@ fails with a clear message rather than mid-merge.
 
 1. decodes the base64 (it is already validated where it renders; here an
    undecodable `data` is simply left inline, as today);
-2. `INSERT OR IGNORE INTO image_blobs`;
+2. inserts it into `image_blobs`, or, if the digest is already there,
+   clears its `orphaned_at` (`ON CONFLICT(digest) DO UPDATE SET
+   orphaned_at = NULL`): a blob a sweep marked unused is in use again,
+   and its grace period must start over if it is orphaned later;
 3. replaces `source` with `{"type": "ref", "digest": …, "media_type": …}`
    in the dumped dict before it is JSON-encoded;
 4. sets the row's `image_refs` to the digests it replaced.
@@ -100,17 +103,27 @@ SQL, with no bound digest list to outgrow SQLite's variable limit:
 
 - **Single transaction** (≤ `CLAUDE_CODE_LOG_ATOMIC_MERGE_MB`): every
   spool blob belongs to the merge.
-  `INSERT OR IGNORE INTO main.image_blobs SELECT * FROM spool.image_blobs`.
+
+  ```sql
+  INSERT INTO main.image_blobs (digest, media_type, data)
+  SELECT digest, media_type, data FROM spool.image_blobs WHERE true
+  ON CONFLICT(digest) DO UPDATE SET orphaned_at = NULL;
+  ```
+
+  (`WHERE true` is SQLite's required disambiguation for an upsert on
+  `INSERT … SELECT`. The upsert, as on the write path, restarts the
+  grace period of a blob the merge puts back in use.)
 - **Per-file commits** under the zero-total mark: each carries exactly
   its own rows' blobs, bound by one parameter, the file:
 
   ```sql
-  INSERT OR IGNORE INTO main.image_blobs
-  SELECT b.* FROM spool.image_blobs b
+  INSERT INTO main.image_blobs (digest, media_type, data)
+  SELECT b.digest, b.media_type, b.data FROM spool.image_blobs b
   WHERE b.digest IN (
       SELECT j.value FROM spool.messages s, json_each(s.image_refs) j
       WHERE s.file_id = ?
-  );
+  )
+  ON CONFLICT(digest) DO UPDATE SET orphaned_at = NULL;
   ```
 
 **Reads during a refresh.** While a refresh runs, the incremental
@@ -137,6 +150,10 @@ Fetch per batch, not per row: loads already read many rows at once
 (`load_cached_entries` and friends), so collect the digests a batch
 references and fetch them in one query driven by the rows' own
 `image_refs` (`json_each` over the batch's rows), not a bound list.
+The row read and the blob query run in **one read transaction**, so
+they see the same snapshot. Otherwise a write landing between them
+could replace the batch's rows, and the blob query would follow the
+new references and miss blobs the rows already read still need.
 
 This phase saves disk and cache I/O. It saves no RAM: entries in memory
 hold the base64 as they do today.
@@ -225,13 +242,28 @@ SQLite reuses the space freed; the existing WAL truncation at the end of
 a pass is unchanged. `VACUUM` stays manual.
 
 **A miss still has to be survivable**, since a grace period bounds
-the window rather than closing it: a process left suspended for longer than
-the grace period, say. The read path's fallback (see Effort and risk) treats a
-missing blob as "file not cached" and re-parses it from the JSONL. In
-phase 2, where the lookup happens at render time, the same fallback
-resolves the image from its source instead: the entry's file is
-re-parsed for that one image. That path is slow, but it is a correct
-answer to a case that should not happen.
+the window rather than closing it: a process left suspended for longer
+than the grace period, say. What a miss means differs by phase:
+
+- **Phase 1, at load time.** The read path's fallback (see Effort and
+  risk) treats a missing blob as "file not cached" and re-parses the
+  file from the JSONL. That is a correct answer: the load gets the
+  file's current entries.
+- **Phase 2, at render time.** The entry was loaded earlier and the blob
+  has since gone, which takes its row being rewritten or deleted and
+  then a grace period passing. Re-parsing the file now gives its
+  *current* content, which may no longer hold that image, so it cannot
+  be the fallback. But the entry is then known to be out of date: its
+  source changed after it was loaded. The render emits the placeholder
+  for that image, finishes, and **does not record the page as fresh**:
+  it skips (or deletes) the page's `html_cache` / `html_pages` row, so
+  the next pass re-renders it from the current content. That has to be
+  explicit: a session page's freshness (`get_stale_sessions`) keys on
+  its message count, library version, combined link and theme, not on
+  its source files, so a rewrite that keeps the message count would
+  otherwise leave the placeholder in place. Keeping an old image alive
+  for a render of already-superseded data would buy nothing, so phase 2
+  doesn't pin blobs for active renders.
 
 ### Cache invalidation
 
