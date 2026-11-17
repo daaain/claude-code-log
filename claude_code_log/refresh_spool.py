@@ -57,6 +57,7 @@ MESSAGE_COLUMNS = (
     ("_level", "TEXT"),
     ("_operation", "TEXT"),
     ("content", "BLOB NOT NULL"),
+    ("image_refs", "TEXT"),
 )
 MESSAGE_COLUMN_NAMES = tuple(name for name, _ in MESSAGE_COLUMNS)
 MESSAGE_COLUMN_LIST = ", ".join(MESSAGE_COLUMN_NAMES)
@@ -82,6 +83,13 @@ CREATE TABLE messages (
     {", ".join(f"{name} {decl}" for name, decl in MESSAGE_COLUMNS)}
 );
 CREATE INDEX messages_file ON messages(file_id);
+-- The images the spooled rows reference (`cache_images`), copied into the
+-- cache's own table by the merge, before the rows.
+CREATE TABLE image_blobs (
+    digest TEXT PRIMARY KEY,
+    media_type TEXT NOT NULL,
+    data BLOB NOT NULL
+);
 -- The lookups the incremental refresh makes while the spool overlays the
 -- cache (`CacheManager.atomic_refresh`), so they search here as they do
 -- in the cache's own indexes.
@@ -178,7 +186,8 @@ class SpooledFile:
     ``expected_existing`` rows already in the cache). The remaining
     fields are the ``cached_files`` row as of the parse, which the merge
     writes verbatim, except ``content_bytes``: the size of the spooled
-    rows' content, which decides how the merge commits.
+    rows' content and of the images they brought, which decides how the
+    merge commits.
     """
 
     id: int
@@ -262,13 +271,24 @@ class RefreshSpool:
             file_id = cursor.lastrowid or 0
             size = 0
 
+            blobs: Dict[str, Any] = {}
+
             def counted() -> Iterable[Dict[str, Any]]:
                 nonlocal size
                 for row in rows:
                     size += len(row["content"])
+                    for blob in row.get("_image_blobs") or ():
+                        if blob.digest not in blobs:
+                            blobs[blob.digest] = blob
+                            size += len(blob.data)
                     yield {**row, "file_id": file_id}
 
             self._conn.executemany(_INSERT_ROW, counted())
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO image_blobs (digest, media_type, data)"
+                " VALUES (?, ?, ?)",
+                [(b.digest, b.media_type, b.data) for b in blobs.values()],
+            )
             self._conn.execute(
                 "UPDATE files SET content_bytes = ? WHERE id = ?", (size, file_id)
             )

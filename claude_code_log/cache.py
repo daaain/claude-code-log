@@ -9,15 +9,36 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import zlib
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    get_args,
+)
 
 from packaging import version
 from pydantic import BaseModel
 
+from .cache_images import (
+    MERGE_BLOBS,
+    MissingImageBlob,
+    dump_entry,
+    load_blobs,
+    restore_images,
+    row_refs,
+    write_blobs,
+)
 from .factories import create_transcript_entry
 from .migrations.runner import (
     WAL_SIZE_LIMIT_BYTES,
@@ -42,6 +63,15 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _row_has_images(row: sqlite3.Row) -> bool:
+    """Whether a ``messages`` row read with its ``image_refs`` references any
+    image (a row read without the column references none it can restore)."""
+    try:
+        return bool(row["image_refs"])
+    except (IndexError, KeyError):
+        return False
 
 
 # ========== Data Models ==========
@@ -562,7 +592,9 @@ def _fingerprints_match(cached: str, current: str) -> bool:
 # its name. Bump it and every cached blob is re-parsed once. Leave it alone
 # for field additions/removals/renames — those move the digest by
 # themselves, which is the point.
-_CONTENT_SCHEMA_SALT = "2"  # 2: Read results drop toolUseResult.file.base64
+_CONTENT_SCHEMA_SALT = (
+    "3"  # 2: Read results drop toolUseResult.file.base64; 3: images in image_blobs
+)
 
 
 def _nested_models(annotation: object) -> Generator[type[BaseModel], None, None]:
@@ -1039,6 +1071,47 @@ def checkpoint_wal(
         finally:
             conn.execute(f"PRAGMA busy_timeout = {int(previous)}")
         return (int(row[0]), int(row[1]), int(row[2]))
+    except sqlite3.Error:
+        return None
+    finally:
+        if leased is None:
+            conn.close()
+
+
+def sweep_image_blobs(
+    db_path: Path, *, grace_seconds: Optional[float] = None
+) -> Optional[int]:
+    """Delete the cached images no row has referenced for a while.
+
+    Blobs outlive their rows when a file is rewritten, re-parsed or
+    deleted. Run at the end of an all-projects pass, under the pass lock,
+    so two sweeps never race (`cache_images.sweep_blobs`): a blob no row
+    references is marked, one referenced again is unmarked, and one marked
+    for longer than ``grace_seconds`` (an hour) is deleted. The grace period
+    covers a reader that read rows and has yet to read their blobs; a
+    writer needs none, since a blob is written in the transaction of the
+    rows that reference it. Returns the number deleted, or None when the
+    database was missing, busy or unreadable. Never raises.
+    """
+    from .cache_images import SWEEP_GRACE_SECONDS, sweep_blobs
+
+    if not db_path.exists():
+        return None
+    grace = SWEEP_GRACE_SECONDS if grace_seconds is None else grace_seconds
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return None
+    try:
+        if conn.in_transaction:
+            return None
+        with write_transaction(conn):
+            return sweep_blobs(conn, time.time(), grace)
     except sqlite3.Error:
         return None
     finally:
@@ -1617,6 +1690,7 @@ class CacheManager:
             return
         conn.execute("DROP VIEW IF EXISTS temp.messages")
         conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+        conn.execute("DROP VIEW IF EXISTS temp.image_blobs")
         attached = {row[1] for row in conn.execute("PRAGMA database_list")}
         if "spool" in attached:
             conn.execute("DETACH DATABASE spool")
@@ -1690,10 +1764,19 @@ class CacheManager:
                 FROM spool.messages s JOIN spool.files f ON f.id = s.file_id {known}"""
         )
 
+        # The spooled rows' images are in the spool until the merge.
+        conn.execute(
+            """CREATE TEMP VIEW image_blobs AS
+                SELECT digest, media_type, data, orphaned_at FROM main.image_blobs
+                UNION ALL
+                SELECT digest, media_type, data, NULL FROM spool.image_blobs"""
+        )
+
     @staticmethod
     def _drop_overlay(conn: sqlite3.Connection) -> None:
         conn.execute("DROP VIEW IF EXISTS temp.messages")
         conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+        conn.execute("DROP VIEW IF EXISTS temp.image_blobs")
 
     def _merge_refresh(
         self, conn: sqlite3.Connection, pending: _PendingRefresh
@@ -1961,6 +2044,7 @@ class CacheManager:
                 ).fetchone()["n"]
                 if count == spooled.expected_existing:
                     conn.execute(_UPDATE_CACHED_FILE, (*record[2:], file_id))
+                    conn.execute(MERGE_BLOBS, (spooled.id,))
                     conn.execute(
                         _MERGE_MESSAGES, (self._project_id, file_id, spooled.id)
                     )
@@ -1980,6 +2064,7 @@ class CacheManager:
         conn.execute(_UPSERT_CACHED_FILE, record)
         file_id = self._file_id_under_lock(conn, spooled.file_name)
         conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
+        conn.execute(MERGE_BLOBS, (spooled.id,))
         conn.execute(_MERGE_MESSAGES, (self._project_id, file_id, spooled.id))
         return file_id
 
@@ -2232,11 +2317,14 @@ class CacheManager:
             "_leaf_uuid": None,
             "_level": None,
             "_operation": None,
-            "content": zlib.compress(
-                json.dumps(entry.model_dump(), separators=(",", ":")).encode("utf-8"),
-                CONTENT_COMPRESSION_LEVEL,
-            ),
         }
+        # Images go to `image_blobs`, once each; the row keeps a reference
+        # (`cache_images`). The blobs ride along with the row until it is
+        # written, in the same transaction.
+        text, image_refs, image_blobs = dump_entry(entry.model_dump())
+        base["content"] = zlib.compress(text.encode("utf-8"), CONTENT_COMPRESSION_LEVEL)
+        base["image_refs"] = json.dumps(image_refs) if image_refs else None
+        base["_image_blobs"] = image_blobs
 
         # Extract flattened usage for assistant messages
         if isinstance(entry, AssistantTranscriptEntry):
@@ -2267,10 +2355,32 @@ class CacheManager:
 
         return base
 
-    def _deserialize_entry(self, row: sqlite3.Row) -> TranscriptEntry:
-        """Convert SQLite row back to TranscriptEntry."""
+    def _deserialize_entry(
+        self,
+        row: sqlite3.Row,
+        blobs: Optional[Mapping[str, Tuple[str, bytes]]] = None,
+        *,
+        missing_ok: bool = False,
+    ) -> TranscriptEntry:
+        """Convert SQLite row back to TranscriptEntry, its images restored
+        from ``blobs`` (`_row_blobs`)."""
         content_dict = json.loads(zlib.decompress(row["content"]).decode("utf-8"))
+        if blobs is not None and _row_has_images(row):
+            restore_images(content_dict, blobs, missing_ok=missing_ok)
         return create_transcript_entry(content_dict)
+
+    @staticmethod
+    def _row_blobs(
+        conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+    ) -> Dict[str, Tuple[str, bytes]]:
+        """The image blobs ``rows`` reference, in one lookup on ``conn``."""
+        digests = [
+            digest
+            for row in rows
+            if _row_has_images(row)
+            for digest in row_refs(row["image_refs"])
+        ]
+        return load_blobs(conn, digests) if digests else {}
 
     def _get_file_id(self, jsonl_path: Path) -> Optional[int]:
         """Get the file ID for a JSONL file."""
@@ -2377,10 +2487,10 @@ class CacheManager:
 
     def _entries_for_file(
         self, file_id: int, from_date: Optional[str], to_date: Optional[str]
-    ) -> List[TranscriptEntry]:
+    ) -> Optional[List[TranscriptEntry]]:
         """A cached file's entries, in timestamp order, within the window if
-        one is given."""
-        sql = "SELECT content FROM messages WHERE file_id = ?"
+        one is given; None when one of its images has left the cache."""
+        sql = "SELECT content, image_refs FROM messages WHERE file_id = ?"
         params: List[Any] = [file_id]
 
         if from_date or to_date:
@@ -2407,8 +2517,20 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
+            blobs = self._row_blobs(conn, rows)
 
-        return [self._deserialize_entry(row) for row in rows]
+        try:
+            return [self._deserialize_entry(row, blobs) for row in rows]
+        except MissingImageBlob as exc:
+            # The sweep deletes only blobs no row has referenced for an
+            # hour, so this takes a reader that held these rows that long.
+            # The file reads as not cached, and is parsed again.
+            logger.warning(
+                "cached image %s of file id %s is gone; reading the file again",
+                exc,
+                file_id,
+            )
+            return None
 
     def save_cached_entries(
         self,
@@ -2547,6 +2669,7 @@ class CacheManager:
         conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
         for serialized in serialized_entries:
             serialized["file_id"] = file_id
+        write_blobs(conn, serialized_entries)
         conn.executemany(_INSERT_MESSAGE, serialized_entries)
         return file_id
 
@@ -2687,6 +2810,7 @@ class CacheManager:
                 file_id,
             ),
         )
+        write_blobs(conn, appended_rows)
         conn.executemany(
             _INSERT_MESSAGE, [{**row, "file_id": file_id} for row in appended_rows]
         )
@@ -3988,14 +4112,24 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(
-                """SELECT content FROM messages
+                """SELECT content, image_refs FROM messages
                    WHERE project_id = ? AND session_id = ?
                    ORDER BY timestamp NULLS LAST""",
                 (self._project_id, session_id),
             ).fetchall()
+            blobs = self._row_blobs(conn, rows)
 
-        # Content is stored as compressed, compact JSON - just decompress
-        return [zlib.decompress(row["content"]).decode("utf-8") for row in rows]
+        # Content is stored as compressed, compact JSON: decompress, and put
+        # its images back (`cache_images`) where it has any.
+        lines: List[str] = []
+        for row in rows:
+            text = zlib.decompress(row["content"]).decode("utf-8")
+            if _row_has_images(row):
+                content = json.loads(text)
+                restore_images(content, blobs, missing_ok=True)
+                text = json.dumps(content, separators=(",", ":"))
+            lines.append(text)
+        return lines
 
     def load_session_entries(self, session_id: str) -> List[TranscriptEntry]:
         """Load transcript entries for a session from cache.
@@ -4014,13 +4148,16 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(
-                """SELECT content FROM messages
+                """SELECT content, image_refs FROM messages
                    WHERE project_id = ? AND session_id = ?
                    ORDER BY timestamp NULLS LAST""",
                 (self._project_id, session_id),
             ).fetchall()
+            blobs = self._row_blobs(conn, rows)
 
-        return [self._deserialize_entry(row) for row in rows]
+        # An archived session may have no transcript left to parse again:
+        # an image gone from the cache renders as a placeholder.
+        return [self._deserialize_entry(row, blobs, missing_ok=True) for row in rows]
 
     # ========== Page Cache Methods (Pagination) ==========
 

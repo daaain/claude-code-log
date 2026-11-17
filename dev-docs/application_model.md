@@ -319,6 +319,33 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   conversion 11% faster — compressing rows is the largest item in a
   watch tick). Reading is level-agnostic, so rows written at any level
   still load.
+- Per-image (migration 017): each distinct image an entry carries
+  (a pasted image, a tool result's: mostly Read screenshots) is stored
+  once, as raw bytes, in `image_blobs`, keyed by a BLAKE2b-128 digest
+  ([`cache_images.py`](../claude_code_log/cache_images.py)). The row's
+  JSON holds `{"type": "ref", "digest": …, "media_type": …}` in place of
+  the base64 source, and `messages.image_refs` lists the digests as a
+  JSON array; reading the row (`_entries_for_file`,
+  `load_session_entries`, `export_session_to_jsonl`) fetches the batch's
+  blobs in one query and puts the base64 back, so every consumer sees the
+  entry as parsed. A source swaps only when it is exact: no other key,
+  base64 that re-encodes to the same text, and at least 2 KB of it; any
+  other stays inline. Blobs are written in the transaction of the rows
+  that reference them; a refresh spools them with its rows
+  (`refresh_spool.py` has its own `image_blobs`) and its merge copies each
+  file's blobs before its rows (`cache_images.MERGE_BLOBS`, through the
+  rows' own `image_refs` and `json_each`, which `check_json1` makes sure
+  of at migration), and the overlay a refresh reads through has an
+  `image_blobs` view too. Blobs outlive their rows when a file is
+  rewritten or deleted: at the end of an all-projects pass, under the
+  pass lock, `sweep_image_blobs` marks the blobs no row references,
+  unmarks those referenced again, and deletes those marked for over an
+  hour. A reader that still misses one (it would have to hold its rows
+  for that hour) reads the file as not cached and parses it again; an
+  archived session, with no transcript to parse, shows a placeholder.
+  On the archive measured in #416 this took the cache from 4.13 GB to
+  3.46 GB (3,881 distinct images, 1.03 GB raw, referenced from 5,980
+  rows); `_CONTENT_SCHEMA_SALT` 3 re-parses older caches once.
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.

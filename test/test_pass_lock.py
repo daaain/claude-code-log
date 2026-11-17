@@ -376,7 +376,8 @@ def test_the_pass_lock_covers_the_trim_the_catch_up_the_compaction_and_the_check
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The lock is taken before the WAL trim and released only after the
-    search-index catch-up, the cache compaction and the WAL checkpoint, so
+    search-index catch-up, the image sweep, the cache compaction and the
+    WAL checkpoint, so
     a waiting pass never contends with them and starts on a reset log."""
     from claude_code_log import converter
     from claude_code_log.cache import get_cache_db_path
@@ -393,6 +394,7 @@ def test_the_pass_lock_covers_the_trim_the_catch_up_the_compaction_and_the_check
     for name in (
         "trim_oversized_wal",
         "catch_up_search_index",
+        "sweep_image_blobs",
         "compact_cache",
         "checkpoint_wal",
     ):
@@ -412,6 +414,7 @@ def test_the_pass_lock_covers_the_trim_the_catch_up_the_compaction_and_the_check
     assert held == {
         "trim_oversized_wal": True,
         "catch_up_search_index": True,
+        "sweep_image_blobs": True,
         "compact_cache": True,
         "checkpoint_wal": True,
     }

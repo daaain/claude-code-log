@@ -65,6 +65,7 @@ from .cache import (
     catch_up_search_index,
     checkpoint_wal,
     compact_cache,
+    sweep_image_blobs,
     connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
@@ -7093,6 +7094,7 @@ def process_projects_hierarchy(
             db_path = get_cache_db_path(projects_path)
             try:
                 catch_up_search_index(db_path)
+                sweep_image_blobs(db_path)
                 reclaimed = compact_cache(db_path)
                 if reclaimed and not silent:
                     print(f"Compacted the cache by {reclaimed / 1e6:.0f} MB")

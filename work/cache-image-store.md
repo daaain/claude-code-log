@@ -1,9 +1,26 @@
 # Cache image store: images out of the entry blobs
 
-**Status:** proposal. The first, cheap step shipped with the AVIF image
-export (branch `feat/hashed-images`): Read results drop
-`toolUseResult.file.base64` at parse time (`UserTranscriptEntry`
-validator, `_CONTENT_SCHEMA_SALT` 2). This doc is the rest.
+**Status:** phase 1 built (issue #418): migration 017,
+`cache_images.py`, `_CONTENT_SCHEMA_SALT` 3, documented as built in
+dev-docs/application_model.md § 2.3. Phase 2 (lazy images) is still a
+proposal. The first, cheap step shipped with the AVIF image export
+(#416): Read results drop `toolUseResult.file.base64` at parse time
+(`UserTranscriptEntry` validator, `_CONTENT_SCHEMA_SALT` 2).
+
+Where phase 1 as built differs from the proposal below:
+
+- **Small images stay inline**: a source under 2 KB of base64 costs less
+  in its row than as a blob plus a reference. So does any source that
+  would not round-trip exactly (another key, non-canonical base64).
+- **The blob lookup is a bound list, not `json_each` over the rows**,
+  chunked at 500 digests; the merge and the sweep do use `json_each`.
+- **No shared read transaction** for a batch's rows and blobs. The
+  sweep's marking makes a miss take a reader holding its rows for the
+  whole grace period, and a miss is caught: `_entries_for_file` returns
+  None (the file reads as not cached and is parsed again), and an
+  archived session's image becomes a placeholder.
+- **`VACUUM` is no longer manual**: a pass compacts a sparse cache
+  (`cache.compact_cache`, also from #418).
 
 ## Why
 
