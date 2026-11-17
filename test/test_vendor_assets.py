@@ -97,13 +97,6 @@ class TestEnsureVendorAssets:
         assert ensure_vendor_assets(tmp_path) is False
 
 
-@pytest.fixture
-def windows_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The sharing-violation retry budget Windows gets, at a test's pace."""
-    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_ATTEMPTS", 10)
-    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
-
-
 def _access_denied() -> PermissionError:
     return PermissionError(13, "Access is denied")
 

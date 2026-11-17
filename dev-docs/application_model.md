@@ -940,7 +940,10 @@ exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already
 the right bytes; writers go through a unique temp file + atomic
 `os.replace`, so concurrent exporters of the same image replace
-identical content). This replaced a per-render counter whose names
+identical content; on Windows, where one exporter's replace can be
+refused while another's lands, a refused replace counts as done once the
+file exists, and is otherwise retried briefly — the same treatment as the
+timeline assets below). This replaced a per-render counter whose names
 collided between the combined-page and per-session passes — each pass
 restarted at `image_0001` and assigned the same names to different
 images, so the last pass to run overwrote the other's files. Content

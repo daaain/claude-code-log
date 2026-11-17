@@ -3,7 +3,11 @@
 import pytest
 from pathlib import Path
 
-from claude_code_log.image_export import _encoding_tag, export_image
+from claude_code_log.image_export import (
+    _encoding_tag,
+    export_compressed_image,
+    export_image,
+)
 from claude_code_log.models import ImageContent, ImageSource
 
 
@@ -577,3 +581,92 @@ class TestHtmlRendererImageModes:
         renderer._output_dir = tmp_path
         html = self._tool_result_html(renderer)
         assert "[Image]" in html and "<img" not in html
+
+
+# ---------------------------------------------------------------------------
+# Concurrent writers on Windows
+# ---------------------------------------------------------------------------
+
+
+def _export(writer: str, data: str, output_dir: Path) -> "str | None":
+    """Export *data* (a PNG) with one of the two referenced-mode writers."""
+    if writer == "compressed":
+        exported = export_compressed_image("image/png", data, output_dir)
+        return None if exported is None else exported.src
+    return export_image(_image("image/png", data), "referenced", output_dir)
+
+
+@pytest.mark.usefixtures("windows_retries")
+@pytest.mark.parametrize("writer", ["compressed", "plain"])
+class TestConcurrentWriters:
+    """Render workers and watch threads may export one image at once.
+
+    Image files are named after their content, so whichever writer lands
+    first writes exactly the bytes the others would. On Windows, though,
+    ``os.replace`` onto a file another process is replacing at that moment
+    raises PermissionError (WinError 5), which used to read as an
+    unwritable folder: the image rendered as a placeholder. Simulated
+    here, as the suite doesn't run on the platform that does it.
+    """
+
+    def _data(self) -> str:
+        # Big enough that the compressed writer re-encodes it.
+        return _b64_image("PNG", (64, 64))
+
+    def _assert_no_temp_files(self, output_dir: Path) -> None:
+        images = output_dir / "images"
+        assert [p.name for p in images.iterdir() if p.name.startswith(".")] == []
+
+    def test_losing_the_race_to_another_writer_is_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+    ):
+        import os
+        import shutil
+
+        calls: list[Path] = []
+
+        def winner_got_there_first(src: Path, dst: Path) -> None:
+            calls.append(Path(dst))
+            shutil.copyfile(src, dst)  # the other writer's identical bytes
+            raise PermissionError(13, "Access is denied")
+
+        monkeypatch.setattr(os, "replace", winner_got_there_first)
+        src = _export(writer, self._data(), tmp_path)
+        assert src is not None and (tmp_path / src).is_file()
+        assert len(calls) == 1  # accepted at once, no retry spent
+        self._assert_no_temp_files(tmp_path)
+
+    def test_a_transient_refusal_is_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+    ):
+        import os
+
+        real_replace = os.replace
+        refused: list[Path] = []
+
+        def busy_once(src: Path, dst: Path) -> None:
+            if not refused:
+                refused.append(Path(dst))
+                raise PermissionError(13, "Access is denied")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", busy_once)
+        src = _export(writer, self._data(), tmp_path)
+        assert src is not None and (tmp_path / src).is_file()
+        self._assert_no_temp_files(tmp_path)
+
+    def test_a_refusal_that_never_clears_still_degrades(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+    ):
+        import os
+
+        calls: list[int] = []
+
+        def always_denied(src: Path, dst: Path) -> None:
+            calls.append(1)
+            raise PermissionError(13, "Access is denied")
+
+        monkeypatch.setattr(os, "replace", always_denied)
+        assert _export(writer, self._data(), tmp_path) is None
+        assert len(calls) == 10  # the retry budget, then a placeholder
+        assert list((tmp_path / "images").iterdir()) == []
