@@ -369,7 +369,11 @@ when available memory is under ~2.4× those bytes — the conversion
 then runs store-less at its pre-store footprint; an explicit `=1`
 forces the store past the valve. See
 [dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
-for its correctness guards.
+for its correctness guards. "Transcript bytes", here and in every
+memory check below, are the top-level session files' bytes less the
+image base64 a parse doesn't keep in memory, which the cache counts
+per file (`utils.resident_transcript_bytes`); on image-heavy projects
+that is most of the file.
 
 A project's own pages and session files are additionally rendered in
 parallel worker processes, on by default at the CPU count. Set

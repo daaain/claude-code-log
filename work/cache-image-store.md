@@ -247,11 +247,13 @@ parsing the base64, which convert-at-parse still pays once.
 | Warm, serial | 8.7 s, 1.17 GB | 6.0 s, 0.70 GB |
 | Watch tick (+1 message) | 15.4 s, 1.13 GB | 9.6 s, 0.59 GB |
 
-So about a third off the time and 40–50% off peak memory on every path,
-and most of the fan-out's memory is images: the parallel render holds
-2.5x the serial one's. A cold run that encodes the images (56 s for the
-first project) is dominated by AVIF encoding, which phase 2 does not
-change.
+So 25–38% off the time and 31–51% off peak memory, varying by path
+rather than uniform: the smallest gains are the first project's watch
+tick (25% time, 31% memory), the largest the second project's watch
+tick (38% time) and parallel warm render (51% memory). The parallel
+render holds 2.3–2.5x what the serial one does. A cold run that encodes
+the images (56 s for the first project) is dominated by AVIF encoding,
+which phase 2 does not change.
 
 **Gotchas found on the way:**
 
@@ -310,36 +312,67 @@ change.
   `ImageRef.digest` must be 32 hex characters (it reaches file names).
 
 **Measured as built**, the same two projects and machine as the
-experiment, against the branch before phase 2 (dbf3cae), with real
-image bytes in both. "First run" encodes every image; "cold" re-parses
-with the images already exported; the tick appends one message to the
-largest session.
+experiment (8 cores, 16 GB), against the branch before phase 2
+(dbf3cae), with real image bytes in both and the memory-check change
+below included. Medians of three runs, except the first run (one
+each); peak RSS is summed over the process tree. "First run" encodes
+every image; "cold" re-parses with the images already exported; each
+tick appends one message to the largest session.
 
-| danieldemmel-me-next (1.29 GB) | before | phase 2 |
+| danieldemmel-me-next (1.29 GB) | before | phase 2 | time | peak |
+|---|---|---|---|---|
+| First run | 56.2 s, 3.89 GB | 52.2 s, 2.71 GB | −7% | −30% |
+| Cold, images on disk | 27.3 s, 4.05 GB | 22.1 s, 2.33 GB | −19% | −42% |
+| Warm, render every page | 10.9 s, 4.06 GB | 8.2 s, 2.37 GB | −25% | −42% |
+| Warm, serial | 16.7 s, 1.41 GB | 13.6 s, 0.83 GB | −19% | −41% |
+| Watch tick (+1 message) | 10.3 s, 0.90 GB | 7.1 s, 0.48 GB | −31% | −47% |
+
+| feedback-loop-talk (1.06 GB) | before | phase 2 | time | peak |
+|---|---|---|---|---|
+| First run | 43.1 s, 2.99 GB | 40.7 s, 1.89 GB | −6% | −37% |
+| Cold, images on disk | 19.6 s, 2.94 GB | 16.3 s, 1.48 GB | −17% | −50% |
+| Warm, render every page | 9.5 s, 2.82 GB | 7.1 s, 1.49 GB | −25% | −47% |
+| Warm, serial | 8.8 s, 1.18 GB | 6.7 s, 0.63 GB | −24% | −47% |
+| Watch tick (+1 message) | 15.3 s, 1.40 GB | 11.5 s, 0.76 GB | −25% | −46% |
+
+So, excluding the first run, 17–31% off the time and 41–50% off peak
+memory. The first run is dominated by AVIF encoding and gains 6–7% in
+time, 30–37% in memory. Peak memory lands on the experiment's upper
+bound (the first project's cold run: 2.33 GB against 2.24 GB). Time
+does not on a cold run (22.1 s against 17.1 s), which still decodes and
+hashes every image once, and falls a little short warm (8.2 s against
+7.6 s). Single runs vary: one tick measured 0.69 GB and then 0.84 GB,
+hence the medians. Pages are byte-identical before and after (39 + 10
+pages, 2,174 images) once each exported image's name is replaced by a
+hash of its content, and every reference resolves to a file.
+
+**The memory checks size from what a parse holds** (follow-up, same
+PR): the fragment-store and streaming valves, the fan-out's worker cap,
+the all-projects plan and the entry store used to count image base64,
+64–67% of the trunk bytes on these two projects (35–40% image blocks,
+27–29% Read copies) and 30% across the whole archive (3.86 GB of trunk
+files in 146 projects, 2.71 GB without). The parse counts each file's
+(`take_images`), the cache records it (migration 018,
+`cached_files.image_bytes`), and the checks take it off
+(`utils.resident_transcript_bytes`); see dev-docs/application_model.md
+§ 2.9.
+
+The worker cap's estimate then matches what phase 2 holds, as the old
+one matched what the branch before it held. For the first project at
+8 workers it estimates 2.29 GB (the parent at 4.5× its 86 MB resident
+plus 150 MB, each worker at 0.8× plus 150 MB), against 2.37 GB measured. The old estimate,
+3.97 GB from 241 MB, matched the 4.06 GB measured before phase 2. On
+this 16 GB machine none of the checks binds for these projects, so the
+tables above are unchanged by it. Applied to the whole archive with less
+free memory, the checks change these decisions:
+
+| Free memory | Worker cap raised | Fragment store kept (streaming not forced) |
 |---|---|---|
-| First run | 52.8 s, 4.73 GB | 50.8 s, 2.66 GB |
-| Cold, images on disk | 26.6 s, 4.20 GB | 21.4 s, 2.37 GB |
-| Warm, render every page | 10.0 s, 4.08 GB | 7.7 s, 2.24 GB |
-| Warm, serial | 16.1 s, 1.38 GB | 12.6 s, 0.81 GB |
-| Watch tick (+1 message) | 12.6 s, 1.51 GB | 9.0 s, 0.62 GB |
-
-| feedback-loop-talk (1.06 GB) | before | phase 2 |
-|---|---|---|
-| First run | 41.7 s, 2.88 GB | 40.3 s, 1.50 GB |
-| Cold, images on disk | 19.5 s, 3.36 GB | 15.7 s, 1.55 GB |
-| Warm, render every page | 9.3 s, 2.81 GB | 6.8 s, 1.35 GB |
-| Warm, serial | 8.6 s, 1.19 GB | 6.3 s, 0.72 GB |
-| Watch tick (+1 message) | 14.9 s, 1.22 GB | 11.2 s, 0.69 GB |
-
-So 19–29% off the time of every run but the first (which AVIF encoding
-dominates) and 39–59% off peak memory, at the experiment's upper bound:
-the base64 parsed once costs nothing visible. Pages are byte-identical
-(all 49, 2,174 images) once each exported image's name is replaced by a
-hash of its content.
-
-**Left for later:** the fragment-store and fan-out memory valves still
-size themselves from transcript bytes, images included, so on an
-image-heavy project they now decline more often than memory requires.
+| 0.5 GB | none | 4 projects, both measured ones among them |
+| 1 GB | 7 projects | 1 project |
+| 2 GB | 12 projects, the two measured ones 1 → 3 | none |
+| 4 GB | 8 projects, the two measured ones 3 → 8 | none |
+| 8 GB | 2 projects | none |
 
 ### Garbage collection
 

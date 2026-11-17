@@ -963,8 +963,9 @@ A transcript's own `ref` source is forged (Claude Code writes images
 inline), so the parser empties it, and an `ImageRef` digest must be 32
 hex characters: it becomes part of a file name. On the two most
 image-heavy projects of a real archive (43% of their transcript bytes is
-images), this took 19–29% off the time of every run but the first (which AVIF
-encoding dominates) and 39–59% off peak memory, with byte-identical pages
+images), this took 17–31% off the time of every run but the first (which AVIF
+encoding dominates: 6–7%) and 41–50% off peak memory (30–37% on the
+first run), medians of three runs, with byte-identical pages
 ([work/cache-image-store.md](../work/cache-image-store.md)).
 
 Referenced files land in `images/` beside the page, named
@@ -1146,6 +1147,27 @@ store-less at its pre-store footprint instead of trading its last RAM
 for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
 valve; whenever the valve trips, the render pool's far higher memory
 bar has already declined, so a store-less conversion is always serial.
+
+**What "transcript bytes" means to every memory check** (this valve,
+the streaming valve of § 2.13, the render pool's worker cap of § 2.10
+and the all-projects plan that pre-sizes it, and the parsed-entry
+store of § 2.16): the trunk files' bytes less the image base64 a parse
+does not hold (`utils.resident_transcript_bytes`). A parse holds each
+image by reference and drops a Read result's second copy (§ 2.7), and
+counts per file the characters it took out that way
+(`image_store.take_images`; a resumed parse starts from its held
+prefix's count), which the cache records in `cached_files.image_bytes`
+(migration 018). The coefficients were calibrated on what a parsed
+entry costs per byte of its line, so the base64 never belonged in the
+count: on the two most image-heavy projects measured it is 64–67% of
+the trunk bytes (35–40% image blocks, 27–29% Read copies; 30% across a
+whole 146-project archive), and the checks overestimated those
+conversions about threefold. Counted out, the worker cap's estimate
+matches again: 2.29 GB for the heavier at 8 workers, 2.37 GB measured
+(before phase 2: 3.97 GB estimated, 4.06 GB measured). With 4 GB free
+those two projects now render on 8 workers instead of 3, and with 2 GB
+on 3 instead of 1. A file the cache has no count for yet is taken
+whole, which only overestimates.
 
 A fragment is *not* a pure function of its source entry, and the store
 carries three guards for the three ways the same message legitimately
