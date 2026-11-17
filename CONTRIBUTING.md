@@ -114,6 +114,17 @@ just test-all
 just test-cov
 ```
 
+### Host Settings Don't Reach the Tests
+
+The test run removes every `CLAUDE_CODE_LOG_*` variable (and the other
+settings the package reads, such as `CODEX_HOME`) from its environment
+before anything imports the package, and the pytest header lists the
+ones it removed. Exporting `CLAUDE_CODE_LOG_THEME=minimal` in your shell,
+say, no longer changes what the tests check. A test that needs a setting
+sets it with `monkeypatch.setenv`. `test/host_env.py` holds the list, and
+`test/test_host_env_isolation.py` fails if the package starts reading a
+variable that the list doesn't cover.
+
 ### Snapshot Testing
 
 Snapshot tests detect unintended HTML output changes using [syrupy](https://github.com/syrupy-project/syrupy):

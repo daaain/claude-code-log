@@ -9,10 +9,22 @@ if TYPE_CHECKING:
     from _pytest.config import Config
     from claude_code_log.cache import CacheManager
 
+from test.host_env import scrub_host_settings
 from test.snapshot_serializers import (
     NormalisedHTMLSerializer,
     NormalisedMarkdownSerializer,
 )
+
+# ========== Host settings stay out of the run ==========
+# Before anything imports claude_code_log: some settings are read at import
+# time. Nothing imported above may import it. See test/host_env.py.
+_SCRUBBED_HOST_SETTINGS = scrub_host_settings()
+
+
+def pytest_report_header() -> Optional[str]:
+    if not _SCRUBBED_HOST_SETTINGS:
+        return None
+    return "host settings removed for the run: " + ", ".join(_SCRUBBED_HOST_SETTINGS)
 
 
 # ========== Guard: --snapshot-update must not run under xdist parallelism ==========
