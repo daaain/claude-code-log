@@ -911,7 +911,11 @@ displayed (EXIF-oriented, scaled) `width`/`height`, so lazy loading
 doesn't shift the layout; the sizes come from the encode or, for a
 file already on disk, from its header. A render with no output
 directory (an in-memory page) embeds instead, as does every stdout
-stream, whose temp directory is discarded. Before this, an image-heavy
+stream, whose temp directory is discarded. An image written into
+Markdown text as a `data:` URL (a fetched page, a pasted snippet) comes
+out of the Markdown render as an inline `<img>`; in referenced mode
+`HtmlRenderer._export_inline_data_images` moves it into a file the same
+way, on each formatted fragment, before the fragment store keeps it. Before this, an image-heavy
 session's page held each Read-tool screenshot as inline base64 — a
 real 350MB session page is 30MB plus 73MB of AVIF files.
 

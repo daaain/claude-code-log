@@ -583,6 +583,70 @@ class TestHtmlRendererImageModes:
         assert "[Image]" in html and "<img" not in html
 
 
+class TestInlineDataImagesInText:
+    """A ``data:`` image written into Markdown text (a fetched page, a pasted
+    snippet) is exported like any other image in referenced mode."""
+
+    @staticmethod
+    def _page(tmp_path: Path, mode: str) -> str:
+        import json
+
+        from claude_code_log.converter import convert_jsonl_to
+
+        data = _b64_image("PNG", (300, 200))
+        entry = {
+            "type": "assistant",
+            "timestamp": "2025-07-01T10:00:00Z",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": "/tmp",
+            "sessionId": "s1",
+            "version": "2.1.0",
+            "uuid": "a1",
+            "requestId": "req_1",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-test",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"The logo: ![logo](data:image/png;base64,{data})",
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        }
+        transcript = tmp_path / "s1.jsonl"
+        transcript.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        page = convert_jsonl_to(
+            "html", transcript, use_cache=False, silent=True, image_export_mode=mode
+        )
+        return Path(page).read_text(encoding="utf-8")
+
+    def test_referenced_moves_it_into_a_file(self, tmp_path: Path):
+        import re
+
+        html = self._page(tmp_path, "referenced")
+        match = re.search(
+            r'<img src="(images/image_[0-9a-f]{16}\.\w+)" width="300" '
+            r'height="200" loading="lazy" decoding="async" alt="logo"',
+            html,
+        )
+        assert match, re.findall(r"<img[^>]*>", html)
+        assert (tmp_path / match.group(1)).exists()
+        assert "data:image/png" not in html
+
+    def test_embedded_keeps_it_inline(self, tmp_path: Path):
+        html = self._page(tmp_path, "embedded")
+        assert '<img src="data:image/png;base64,' in html
+        assert not (tmp_path / "images").exists()
+
+
 # ---------------------------------------------------------------------------
 # Concurrent writers on Windows
 # ---------------------------------------------------------------------------

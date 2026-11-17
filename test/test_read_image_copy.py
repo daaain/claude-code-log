@@ -187,9 +187,7 @@ def test_markdown_writes_the_read_image_as_an_image(
         encoding="utf-8",
     )
 
-    page = Path(
-        convert_jsonl_to("md", transcript, silent=True, image_export_mode=mode)
-    )
+    page = Path(convert_jsonl_to("md", transcript, silent=True, image_export_mode=mode))
 
     markdown = page.read_text(encoding="utf-8")
     assert expected in markdown

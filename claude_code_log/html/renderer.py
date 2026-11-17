@@ -340,6 +340,13 @@ def _build_html_project_tree(template_projects: list[Any]) -> dict[str, Any]:
     return root
 
 
+# A ``data:`` image as the Markdown render writes it (``<img src="…" alt``),
+# for the media types ``is_harmful_url`` lets through.
+_INLINE_DATA_IMAGE_RE = re.compile(
+    r'<img src="data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+=*)"'
+)
+
+
 class HtmlRenderer(Renderer):
     """HTML renderer for Claude Code transcripts."""
 
@@ -544,6 +551,42 @@ class HtmlRenderer(Renderer):
         if tag is None and self.image_export_mode == "placeholder":
             return "[Image]"
         return tag
+
+    def _export_inline_data_images(self, html: str) -> str:
+        """Move ``data:`` images out of a formatted fragment, into files.
+
+        Markdown text can carry an image as a ``data:`` URL (a fetched
+        page, a pasted snippet), which the Markdown render keeps as an
+        inline ``<img>``. In referenced mode it is exported like any other
+        image; one Pillow can't read stays inline, as before.
+        """
+        if (
+            self.image_export_mode != "referenced"
+            or self._output_dir is None
+            or 'src="data:image/' not in html
+        ):
+            return html
+        from ..image_export import export_compressed_image
+
+        output_dir = self._output_dir
+
+        def swap(match: "re.Match[str]") -> str:
+            exported = export_compressed_image(
+                match.group(1), match.group(2), output_dir
+            )
+            if exported is None:
+                return match.group(0)
+            size = (
+                f' width="{exported.width}" height="{exported.height}"'
+                if exported.width and exported.height
+                else ""
+            )
+            return (
+                f'<img src="{escape_html(exported.src)}"{size} '
+                'loading="lazy" decoding="async"'
+            )
+
+        return _INLINE_DATA_IMAGE_RE.sub(swap, html)
 
     def _image_tag(
         self, media_type: str, data: str, alt: str, css_class: str
@@ -1760,7 +1803,7 @@ class HtmlRenderer(Renderer):
                 )
                 with footnote_scope(scope):
                     title = self.title_content(msg)
-                    html = self.format_content(msg)
+                    html = self._export_inline_data_images(self.format_content(msg))
                 formatted_ts = format_timestamp(
                     msg.meta.timestamp if msg.meta else None
                 )
