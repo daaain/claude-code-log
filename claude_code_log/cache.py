@@ -1046,6 +1046,81 @@ def checkpoint_wal(
             conn.close()
 
 
+# A pass compacts the cache when at least this share of it, and this many
+# bytes, are free pages. Free pages are reused by later writes, so most
+# runs leave few; a re-parse after a schema change (a content-schema salt
+# bump, say) frees a lot at once and nothing hands it back to the disk.
+_COMPACT_MIN_FREE_FRACTION = 0.2
+_COMPACT_MIN_FREE_BYTES = 64 * 1024 * 1024
+_COMPACT_BUSY_TIMEOUT_MS = 5000
+
+
+def compact_cache(
+    db_path: Path,
+    *,
+    min_free_fraction: float = _COMPACT_MIN_FREE_FRACTION,
+    min_free_bytes: int = _COMPACT_MIN_FREE_BYTES,
+) -> Optional[int]:
+    """``VACUUM`` the cache when enough of it is free pages.
+
+    SQLite never shrinks a database file on its own: pages a write frees
+    stay in the file for later writes to reuse. After #416's re-parse a
+    real 5.57GB cache held about 1.4GB it no longer needed. Run at the end
+    of a pass, after the search index catch-up and before the WAL
+    checkpoint (``VACUUM`` writes the whole database through the WAL in WAL
+    mode; the checkpoint then truncates it).
+
+    Returns the bytes the file shrank by, or None when it was not sparse
+    enough, or the database was missing, busy (another process reading or
+    writing: the next pass tries again) or unreadable. Never raises.
+    ``CLAUDE_CODE_LOG_CACHE_COMPACT=0`` switches it off.
+    """
+    if os.environ.get("CLAUDE_CODE_LOG_CACHE_COMPACT", "").strip().lower() in (
+        "0",
+        "off",
+        "no",
+        "false",
+    ):
+        return None
+    if not db_path.exists():
+        return None
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return None
+    try:
+        if conn.in_transaction:
+            return None
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        free_pages = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+        free_bytes = free_pages * page_size
+        if (
+            page_count == 0
+            or free_bytes < min_free_bytes
+            or free_pages < page_count * min_free_fraction
+        ):
+            return None
+        previous = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {int(_COMPACT_BUSY_TIMEOUT_MS)}")
+        try:
+            conn.execute("VACUUM")
+        finally:
+            conn.execute(f"PRAGMA busy_timeout = {int(previous)}")
+        after = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        return max(0, (page_count - after) * page_size)
+    except sqlite3.Error:
+        return None
+    finally:
+        if leased is None:
+            conn.close()
+
+
 def catch_up_search_index(db_path: Path) -> int:
     """Bring an existing search index up to date after a hierarchy pass.
 

@@ -656,6 +656,14 @@ the first connection has to read the whole log to recover it anyway, and
 the checkpoint costs about as much again (2 GB: 1.1 s + 1.1 s on a warm
 Linux page cache; the reporter's disk ran ~30 MB/s), so paying it up front
 spares every read and write of the pass. Otherwise it costs one `stat`.
+Before its checkpoint a pass also hands free pages back to the disk
+(`cache.compact_cache`): SQLite keeps the pages a write frees in the
+file for later writes, so a re-parse after a content-schema change
+(#416's left ~1.4 GB of a 5.57 GB cache free) never shrinks it. When at
+least a fifth of the file, and 64 MB, is free pages, it runs `VACUUM`,
+waiting at most 5 s for a writer and otherwise leaving it for the next
+pass; `CLAUDE_CODE_LOG_CACHE_COMPACT=0` turns it off. `VACUUM` writes the
+whole database through the WAL, which the checkpoint then truncates.
 Separately, `save_cached_entries` and
 `extend_cached_entries` serialise their entries (json + zlib, the part
 that scales with the session) *before* their first write, because

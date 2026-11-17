@@ -662,7 +662,9 @@ The tool implements a SQLite-based caching system for performance:
   the lock). Against other processes connections wait 30 s
   (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
   locked out is retried after the pool rather than failed. A pass compacts
-  an oversized WAL before it starts and truncates the WAL when it ends. A
+  an oversized WAL before it starts and truncates the WAL when it ends,
+  after a `VACUUM` when at least a fifth of the cache (and 64 MB) is free
+  pages (`CLAUDE_CODE_LOG_CACHE_COMPACT=0` turns that off). A
   refresh of a project the cache already holds runs in one scope
   (`CacheManager.atomic_refresh`): while it parses, its entry rows go to a
   spool file beside the cache (`<cache>.spool-<pid>-<n>`, `refresh_spool.py`),

@@ -64,6 +64,7 @@ from .cache import (
     SessionCacheData,
     catch_up_search_index,
     checkpoint_wal,
+    compact_cache,
     connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
@@ -7089,10 +7090,14 @@ def process_projects_hierarchy(
             # `checkpoint_wal` (issue #332). The catch-up reports its own
             # failures; the `finally` is for whatever it did not foresee,
             # so the checkpoint is never the casualty of the index.
+            db_path = get_cache_db_path(projects_path)
             try:
-                catch_up_search_index(get_cache_db_path(projects_path))
+                catch_up_search_index(db_path)
+                reclaimed = compact_cache(db_path)
+                if reclaimed and not silent:
+                    print(f"Compacted the cache by {reclaimed / 1e6:.0f} MB")
             finally:
-                checkpoint_wal(get_cache_db_path(projects_path))
+                checkpoint_wal(db_path)
         return result
 
 

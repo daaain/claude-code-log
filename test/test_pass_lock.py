@@ -372,12 +372,12 @@ def test_two_passes_over_one_cache_run_one_after_the_other(tmp_path: Path) -> No
     assert (projects / "index.html").exists()
 
 
-def test_the_pass_lock_covers_the_trim_the_catch_up_and_the_checkpoint(
+def test_the_pass_lock_covers_the_trim_the_catch_up_the_compaction_and_the_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The lock is taken before the WAL trim and released only after the
-    search-index catch-up and the WAL checkpoint, so a waiting pass never
-    contends with the serial catch-up and starts on a reset log."""
+    search-index catch-up, the cache compaction and the WAL checkpoint, so
+    a waiting pass never contends with them and starts on a reset log."""
     from claude_code_log import converter
     from claude_code_log.cache import get_cache_db_path
     from claude_code_log.converter import process_projects_hierarchy
@@ -390,7 +390,12 @@ def test_the_pass_lock_covers_the_trim_the_catch_up_and_the_checkpoint(
     db_path = get_cache_db_path(projects)
 
     held: dict[str, bool] = {}
-    for name in ("trim_oversized_wal", "catch_up_search_index", "checkpoint_wal"):
+    for name in (
+        "trim_oversized_wal",
+        "catch_up_search_index",
+        "compact_cache",
+        "checkpoint_wal",
+    ):
         real = getattr(converter, name)
 
         def recording(
@@ -407,6 +412,7 @@ def test_the_pass_lock_covers_the_trim_the_catch_up_and_the_checkpoint(
     assert held == {
         "trim_oversized_wal": True,
         "catch_up_search_index": True,
+        "compact_cache": True,
         "checkpoint_wal": True,
     }
     assert not pass_lock_held(db_path), "the lock outlived the pass"
