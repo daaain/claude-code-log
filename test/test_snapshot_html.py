@@ -247,6 +247,14 @@ class TestMinimalThemeHTMLSnapshots:
         html = renderer.generate_projects_index([alpha, beta], expand_paths_tree=True)
         assert html == html_snapshot
 
+    def test_minimal_project_index_temp_group_html(self, html_snapshot):
+        """Temp-dir projects folded into one group after the list, and a
+        project with nothing to open left out, minimal theme."""
+        html = generate_projects_index_html(
+            _index_project_summaries_with_temp(), theme="minimal"
+        )
+        assert html == html_snapshot
+
     def test_minimal_archive_search_html(self, html_snapshot):
         """The archive search page in the minimal theme (its rows are built
         by the page's script; this pins the page, its styles and scripts)."""
@@ -291,8 +299,50 @@ def _index_project_summaries() -> list[dict[str, Any]]:
     ]
 
 
+def _index_project_summaries_with_temp() -> list[dict[str, Any]]:
+    """The two projects, a scratchpad agent's project worked on from /tmp,
+    and a pytest run's project with no message (nothing to open)."""
+    return [
+        *_index_project_summaries(),
+        {
+            "name": "-private-tmp-claude-501-scratchpad-agents-clone",
+            "path": Path("/tmp/project-clone"),
+            "html_file": "-private-tmp-claude-501-scratchpad-agents-clone/combined_transcripts.html",
+            "jsonl_count": 1,
+            "message_count": 19,
+            "last_modified": 1700000200.0,
+            "latest_timestamp": "2025-01-16T10:00:00Z",
+            "earliest_timestamp": "2025-01-16T09:58:00Z",
+            "working_directories": ["/private/tmp/claude/501/scratchpad/agents/clone"],
+            "sessions": [
+                {
+                    "id": "session-temp0001",
+                    "summary": "Clone the repo",
+                    "timestamp_range": "2025-01-16 09:58:00 to 2025-01-16 10:00:00",
+                    "message_count": 19,
+                    "first_user_message": "Clone it into the scratchpad",
+                }
+            ],
+        },
+        {
+            "name": "-private-var-folders-5l-T-pytest-of-u-pytest-1478-repo",
+            "path": Path("/tmp/project-pytest"),
+            "html_file": "-private-var-folders-5l-T-pytest-of-u-pytest-1478-repo/combined_transcripts.html",
+            "jsonl_count": 1,
+            "message_count": 0,
+            "last_modified": 1700000300.0,
+        },
+    ]
+
+
 class TestIndexHTMLSnapshots:
     """Snapshot tests for project index HTML output."""
+
+    def test_project_index_temp_group_html(self, html_snapshot):
+        """Temp-dir projects folded into one group after the list, and a
+        project with nothing to open left out, classic theme."""
+        html = generate_projects_index_html(_index_project_summaries_with_temp())
+        assert html == html_snapshot
 
     def test_project_index_html(self, html_snapshot):
         """Snapshot test for project index template."""

@@ -252,6 +252,7 @@ When processing all projects, the tool generates:
 - **Session Navigation**: Expandable session list with summaries and quick access to individual session files
 - **Summary Statistics**: Total projects, transcript files, and message counts with token usage
 - **Recent Activity**: Projects sorted by last modification date
+- **Temporary directories folded away**: Projects worked on only from a temp dir (`/tmp`, `/var/folders`, …: test suites, scratchpad agents, scripted `claude -p` runs) sit in one collapsed group at the end, and projects with nothing to open are left out; `--show-temp-projects` lists them with the rest
 - **Quick Navigation**: One-click access to combined transcripts or individual sessions
 - **Clean URLs**: Readable project names converted from directory names
 

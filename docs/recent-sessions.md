@@ -12,6 +12,14 @@ open ~/.claude/projects/recent.html
 It is written on every full run, in both themes, and works opened as a
 file: no server is involved.
 
+Sessions that ran in a temporary directory (`/tmp`, `/private/tmp`,
+`/var/folders`, …), which is where test suites, scratchpad agents and
+scripted `claude -p` calls run, are left out, so a burst of them can't
+push your own sessions off the list. The index folds their projects
+into one *Temporary directories* group for the same reason. To list them
+like any other, pass `--show-temp-projects` (to the run, `serve` or
+`watch`) or set `CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS=1`.
+
 <video controls muted playsinline preload="metadata" width="100%" src="../assets/demos/7-recent.mp4"></video>
 
 <!-- Chapter 7 of the demo videos (scripts/demos/record.py, chapter_recent);

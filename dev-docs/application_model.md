@@ -2111,7 +2111,8 @@ to it (one line in each theme).
 
 **Data.** [`recent.build_recent_payload`](../claude_code_log/recent.py)
 runs one query over the shared cache — `sessions JOIN projects`,
-`hidden = 0`, newest `last_timestamp` first — then loads each listed
+`hidden = 0`, not run in a temp dir, newest `last_timestamp` first —
+then loads each listed
 session's entries from the cache (`CacheManager.load_session_entries`,
 read-only) and summarises them in `summarise_session`. No schema change:
 everything is derived from rows the cache already holds, so archived
@@ -2139,6 +2140,31 @@ pipeline (§ 2.17). Tool lines and errors stay plain `text`.
 
 These are **transcript states, not liveness**: nothing here can tell an
 agent that stopped from one waiting quietly.
+
+**Temp-dir sessions.** A session whose cwd is a temp dir
+(`utils.is_temp_session`: its cwd, else its project folder's decoded
+name, against the fixed roots in `utils._TEMP_ROOTS` plus Windows'
+`AppData\Local\Temp`; deliberately not `$TMPDIR`, which tools point at
+odd places) is test-suite, scratchpad-agent or scripted-run debris. The
+query leaves it out with `ccl_is_temp_session`, a Python function
+registered on the read-only connection (`recent._temp_filter`), so the
+filter runs *before* `LIMIT`: dropping rows afterwards would let a burst
+of them crowd real sessions off the page. A date window's candidates are
+filtered by project folder before their `MAX_SESSIONS` cut, then by cwd
+in the same query. `--show-temp-projects`
+(`CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS`) turns the filter off; it reaches
+the page through `process_projects_hierarchy` → `_write_recent_page`, and
+`watch`'s per-tick `write_recent_data`. The index's side is in
+`renderer.prepare_projects_index`: it drops projects with nothing to
+open (`has_nothing_to_open`: no message and no listable session) from
+the rows and the totals, and flags each remaining project
+`is_temporary` (`utils.is_temp_project`: every working dir a temp dir;
+with none recorded, the folder name decides). The HTML index (both
+themes, flat list or `--expand-paths` tree) renders the flagged ones
+after the list in one collapsed `<details class='temp-projects'>`, the
+Markdown index under a *Temporary directories* line at the end, and
+the JSON index lists every project as data. With no temp project the
+markup is byte-identical to before.
 
 **Background work.** [`background_work.BackgroundWork`](../claude_code_log/background_work.py)
 collects what a session ran in the background as `summarise_session`

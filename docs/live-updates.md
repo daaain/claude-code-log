@@ -110,6 +110,7 @@ page notices on its next poll.
 | `--all-projects` | off | Watch the whole archive instead of one project |
 | `--combined` | `no` | `no` keeps ticks cheap: only the changed session is regenerated |
 | `--theme` | `$CLAUDE_CODE_LOG_THEME`, else `default` | HTML theme: `classic` (current look), `minimal`, or `default` (the built-in default, currently `classic`). Also on `serve` |
+| `--show-temp-projects` | off (`$CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS`) | List temp-dir projects with the rest on the index and their sessions on the recent page, instead of folding / leaving them out. Also on `serve` |
 
 Raise `--quiet-period` if conversions feel too frequent on a large
 project; lower `--interval` if you want changes noticed sooner.

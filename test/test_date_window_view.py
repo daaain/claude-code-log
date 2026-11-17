@@ -94,6 +94,7 @@ def _window(
     fmt: str = "html",
     force: bool = False,
     jobs: int = 1,
+    show_temp_projects: bool = False,
 ) -> Path:
     return process_projects_hierarchy(
         projects,
@@ -103,6 +104,7 @@ def _window(
         force=force,
         from_date=DAY,
         to_date=DAY,
+        show_temp_projects=show_temp_projects,
     )
 
 
@@ -301,7 +303,9 @@ def test_the_recent_page_lists_the_window_s_sessions_with_its_counts(
     session's, as on the index."""
     _full(projects)
     view = tmp_path / "view"
-    _window(projects, view)
+    # The fixture's sessions ran in /tmp, which the page leaves out by
+    # default (test_recent.py pins that under a window too).
+    _window(projects, view, show_temp_projects=True)
     payload = _recent_payload(view)
     sessions = {s["id"]: s for s in payload["sessions"]}
     assert set(sessions) == INSIDE
