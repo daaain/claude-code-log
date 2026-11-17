@@ -314,6 +314,9 @@ def export_compressed_image(
     with _exported_lock:
         known = _exported.get(key)
     if known is not None and (output_dir / known.src).exists():
+        # Touched as the disk branch does: a long-lived process (a watch)
+        # may reuse a memoized image long after its last page was written.
+        _touch(output_dir / known.src)
         return known
 
     stem = f"image_{digest}"

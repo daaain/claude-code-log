@@ -834,6 +834,10 @@ class TestPruneUnreferencedImages:
         image_export._exported.clear()  # a later process
         assert image_export.export_compressed_image("image/png", data, tmp_path)
         assert path.stat().st_mtime > then + 3600
+        # And from this process's memo, an hour on (a long watch).
+        os.utime(path, (then, then))
+        assert image_export.export_compressed_image("image/png", data, tmp_path)
+        assert path.stat().st_mtime > then + 3600
 
 
 def test_the_first_conversion_after_an_upgrade_removes_old_images(
@@ -923,3 +927,56 @@ def test_clear_output_removes_the_images_only_its_pages_showed(tmp_path: Path):
     assert not html_only.exists()
     assert in_markdown.exists()
     assert "Removed 1 images" in result.output
+
+
+def test_session_pages_beside_the_project_get_their_own_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`-o page.html` writes the combined page elsewhere and the session
+    pages in the project: a fragment formatted for one must not lend the
+    other an image that was only exported beside the first."""
+    import json
+    import re
+
+    from claude_code_log.converter import convert_jsonl_to
+
+    monkeypatch.setenv("CLAUDE_CODE_LOG_FRAGMENT_STORE", "1")
+    project = tmp_path / "project"
+    project.mkdir()
+    entry = {
+        "type": "user",
+        "timestamp": "2025-07-01T10:00:00Z",
+        "parentUuid": None,
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/tmp",
+        "sessionId": "s1",
+        "version": "2.1.0",
+        "uuid": "u1",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _b64_image("PNG", (64, 48)),
+                    },
+                },
+            ],
+        },
+    }
+    (project / "s1.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere" / "page.html"
+    elsewhere.parent.mkdir()
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+    convert_jsonl_to("html", project, elsewhere, silent=True)
+
+    for page in (elsewhere, project / "session-s1.html"):
+        srcs = re.findall(r'src="(images/[^"]+)"', page.read_text(encoding="utf-8"))
+        assert srcs, page
+        for src in srcs:
+            assert (page.parent / src).exists(), (page, src)

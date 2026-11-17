@@ -302,3 +302,49 @@ def test_an_archived_session_exports_its_images(project: Path) -> None:
     assert len(lines) == 1 and image in lines[0]
     entries = manager.load_session_entries("s1")
     assert image in json.dumps([e.model_dump() for e in entries])
+
+
+def test_each_reference_keeps_its_own_media_type(project: Path) -> None:
+    """Identical bytes under two media types share one blob; each source
+    still reads back with its own."""
+    data = _png(13)
+    jpeg_labelled = {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/jpeg", "data": data},
+    }
+    _write(project / "s1.jsonl", _user("u1", "s1", None, [_image(data)]))
+    _write(project / "s2.jsonl", _user("u22", "s2", None, [jpeg_labelled]))
+    manager = _manager(project)
+    ensure_fresh_cache(project, manager, silent=True)
+    assert _blob_count(project) == 1
+
+    for name, sid, media_type in (
+        ("s1.jsonl", "s1", "image/png"),
+        ("s2.jsonl", "s2", "image/jpeg"),
+    ):
+        loaded = _manager(project).load_cached_entries(project / name)
+        assert loaded is not None
+        dumped = json.dumps([e.model_dump() for e in loaded])
+        assert f'"media_type": "{media_type}"' in dumped
+        assert f'"media_type":"{media_type}"' in manager.export_session_to_jsonl(sid)[0]
+
+
+def test_the_render_s_read_keeps_a_file_whose_image_is_gone(project: Path) -> None:
+    """The snapshot read may not parse the file again: an image gone from
+    the cache becomes a placeholder, and the file's other entries stay."""
+    path = project / "s1.jsonl"
+    _write(
+        path,
+        _user("u1", "s1", None, [{"type": "text", "text": "kept"}]),
+        _user("u22", "s1", "u1", [_image(_png(14))]),
+    )
+    manager = _manager(project)
+    ensure_fresh_cache(project, manager, silent=True)
+    with _db(project) as conn:
+        conn.execute("DELETE FROM image_blobs")
+    conn.close()
+
+    loaded = manager.load_snapshot_entries(path)
+    assert loaded is not None and len(loaded) == 2
+    dumped = json.dumps([e.model_dump() for e in loaded])
+    assert "kept" in dumped and '"data": ""' in dumped

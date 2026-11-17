@@ -341,8 +341,12 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   pass lock, `sweep_image_blobs` marks the blobs no row references,
   unmarks those referenced again, and deletes those marked for over an
   hour. A reader that still misses one (it would have to hold its rows
-  for that hour) reads the file as not cached and parses it again; an
-  archived session, with no transcript to parse, shows a placeholder.
+  for that hour) reads the file as not cached and parses it again; the
+  render's snapshot read (`load_snapshot_entries`), which may not parse
+  again, and an archived session, with no transcript to parse, show a
+  placeholder for that image and keep the rest. Identical bytes under two
+  media types share a blob; each source reads back with the media type
+  of its own reference.
   On the archive measured in #416 this took the cache from 4.13 GB to
   3.46 GB (3,881 distinct images, 1.03 GB raw, referenced from 5,980
   rows); `_CONTENT_SCHEMA_SALT` 3 re-parses older caches once.

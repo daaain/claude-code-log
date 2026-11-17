@@ -4031,9 +4031,13 @@ def convert_jsonl_to(
 
         # Never leave a combined output of another version or theme behind
         # for this run's session pages to link back to: rewrite it once.
+        # Not for a date window: its combined page would replace the full
+        # one with the window's view.
         if (
             not write_combined
             and generate_individual_sessions
+            and from_date is None
+            and to_date is None
             and combined_output_outdated(effective_output_dir, suffix, ext, theme)
         ):
             if not silent:

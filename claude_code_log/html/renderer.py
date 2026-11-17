@@ -1748,7 +1748,8 @@ class HtmlRenderer(Renderer):
         # filenames are content-addressed (see image_export.export_image),
         # so a stored fragment's <img src> is the same name any tree would
         # allocate, and a fragment can only exist because a prior pass this
-        # conversion already wrote (or placeholdered) that file.
+        # conversion already wrote (or placeholdered) that file — into the
+        # same output directory, which is part of the key.
         fragment_store = self.fragment_store
         from .utils import footnote_scope
 
@@ -1781,6 +1782,11 @@ class HtmlRenderer(Renderer):
                         msg.agent_depth,
                         msg.spawns_collapsed_transcript,
                         msg.in_workflow_sidechannel,
+                        # A fragment's referenced images were exported
+                        # beside the page it was formatted for: an
+                        # `-o page.html` combined page and the session
+                        # pages in the project are two destinations.
+                        str(self._output_dir),
                     )
             cached = (
                 fragment_store.get(fragment_key, msg.content)

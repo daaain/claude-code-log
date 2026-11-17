@@ -2483,13 +2483,24 @@ class CacheManager:
 
         if row is None or row["content_version"] != content_schema_version():
             return None
-        return self._entries_for_file(row["id"], from_date, to_date)
+        # The render may not parse the file again (it may have grown past
+        # the refresh), so an image gone from the cache is a placeholder.
+        return self._entries_for_file(
+            row["id"], from_date, to_date, missing_images_ok=True
+        )
 
     def _entries_for_file(
-        self, file_id: int, from_date: Optional[str], to_date: Optional[str]
+        self,
+        file_id: int,
+        from_date: Optional[str],
+        to_date: Optional[str],
+        *,
+        missing_images_ok: bool = False,
     ) -> Optional[List[TranscriptEntry]]:
         """A cached file's entries, in timestamp order, within the window if
-        one is given; None when one of its images has left the cache."""
+        one is given. When one of its images has left the cache: None (the
+        file reads as not cached, and is parsed again), or, with
+        ``missing_images_ok``, the entries with that image as a placeholder."""
         sql = "SELECT content, image_refs FROM messages WHERE file_id = ?"
         params: List[Any] = [file_id]
 
@@ -2520,7 +2531,10 @@ class CacheManager:
             blobs = self._row_blobs(conn, rows)
 
         try:
-            return [self._deserialize_entry(row, blobs) for row in rows]
+            return [
+                self._deserialize_entry(row, blobs, missing_ok=missing_images_ok)
+                for row in rows
+            ]
         except MissingImageBlob as exc:
             # The sweep deletes only blobs no row has referenced for an
             # hour, so this takes a reader that held these rows that long.

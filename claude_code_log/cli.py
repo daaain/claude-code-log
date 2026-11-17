@@ -808,12 +808,25 @@ def _clear_unreferenced_images(directory: Path, file_ext: str) -> int:
 
 
 def _clear_output_files(
-    input_path: Path, all_projects: bool, output_format: str
+    input_path: Path,
+    all_projects: bool,
+    output_format: str,
+    *,
+    output_dir: Optional[Path] = None,
 ) -> None:
     """Clear generated output files (HTML/Markdown/JSON) for the specified path,
-    and the exported images only they showed."""
+    and the exported images only they showed. ``output_dir`` is a directory
+    ``--output`` for one project or file: its pages are cleared there."""
     file_ext = get_file_extension(output_format)
     ext_upper = file_ext.upper()
+    if output_dir is not None and not all_projects:
+        if input_path.is_file():
+            input_path = output_dir / input_path.name
+        elif output_dir.is_dir():
+            input_path = output_dir
+        else:
+            click.echo(f"No {ext_upper} files found to remove")
+            return
     try:
         if all_projects:
             # Clear output files for all project directories
@@ -1983,7 +1996,19 @@ def convert(
 
         # Handle output files clearing
         if clear_output:
-            _clear_output_files(input_path, all_projects, output_format)
+            # For one project or file, a directory --output is where its
+            # pages went (as for the conversion below), so it is what clears.
+            clear_dir = (
+                output
+                if output is not None
+                and not all_projects
+                and not _is_stdout_target(output)
+                and not _output_path_is_file(output)
+                else None
+            )
+            _clear_output_files(
+                input_path, all_projects, output_format, output_dir=clear_dir
+            )
             if clear_output and not (from_date or to_date or input_path.is_file()):
                 # If only clearing output files, exit after clearing
                 file_ext = get_file_extension(output_format)
@@ -2206,12 +2231,16 @@ def convert(
             # An explicit `-o` *file* always regenerates: the version-marker
             # skip only knows the embedded version, not which source produced
             # the file, so it would keep stale content at a user-chosen path
-            # (issue #221). Scoped to file destinations — directory exports
-            # keep the cache's per-source incremental skip (is_transcript_stale),
-            # which already tracks the source (a different transcript to the
-            # same dir still regenerates), and `--all-projects` calls this
-            # with output=None anyway, so its skip is never forced.
-            force_regenerate=output is not None and _output_path_is_file(output),
+            # (issue #221). A single transcript into an `-o` directory too:
+            # its page is named after the file alone, so another source of
+            # the same name would pass the same check. A project into an
+            # `-o` directory keeps the cache's per-source incremental skip
+            # (is_transcript_stale), which already tracks the source (a
+            # different transcript to the same dir still regenerates), and
+            # `--all-projects` calls this with output=None anyway, so its
+            # skip is never forced.
+            force_regenerate=output is not None
+            and (_output_path_is_file(output) or input_path.is_file()),
             report=report,
             # A single-project conversion has the whole machine to itself,
             # so `--jobs` is the cap for its render fan-out. Whether that

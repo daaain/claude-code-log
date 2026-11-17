@@ -19,6 +19,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -383,6 +384,42 @@ class TestCliOutputDirectory:
         assert result.exit_code == 0, result.output
         assert (out / "sess1.html").is_file()
         assert not (tmp_path / "sess1.html").exists()
+
+    def test_another_file_of_the_same_name_replaces_its_page(
+        self, tmp_path: Path
+    ) -> None:
+        """The page in the directory is named after the file alone, so a
+        second source of that name must not pass for the first's."""
+        out = tmp_path / "out"
+        for n, marker in ((1, "FIRST-SOURCE"), (2, "SECOND-SOURCE")):
+            source = tmp_path / f"src{n}" / "sess.jsonl"
+            source.parent.mkdir()
+            _write_session(source, "sess")
+            source.write_text(
+                source.read_text().replace("hi 0", marker), encoding="utf-8"
+            )
+            # Older than the page already there: only the source tells them apart.
+            os.utime(source, (1_000_000_000, 1_000_000_000))
+            result = CliRunner().invoke(cli_main, [str(source), "-o", str(out)])
+            assert result.exit_code == 0, result.output
+        page = (out / "sess.html").read_text(encoding="utf-8")
+        assert "SECOND-SOURCE" in page and "FIRST-SOURCE" not in page
+
+    def test_clear_output_clears_the_directory_it_wrote(self, tmp_path: Path) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        out = tmp_path / "out"
+        runner = CliRunner()
+        assert runner.invoke(cli_main, [str(project)]).exit_code == 0
+        assert runner.invoke(cli_main, [str(project), "-o", str(out)]).exit_code == 0
+
+        result = runner.invoke(
+            cli_main, [str(project), "-o", str(out), "--clear-output"]
+        )
+        assert result.exit_code == 0, result.output
+        assert not list(out.glob("*.html"))
+        assert (project / "combined_transcripts.html").exists()
 
     def test_a_file_suffix_still_names_the_combined_page(self, tmp_path: Path) -> None:
         project = tmp_path / "proj"

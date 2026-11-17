@@ -356,6 +356,34 @@ class TestThemeSwitchRegenerates:
         convert_jsonl_to(fmt, project, silent=True, write_combined=False, report=steady)
         assert not steady.combined_regenerated
 
+    def test_a_date_window_never_rewrites_the_combined_output(
+        self, tmp_path: Path
+    ) -> None:
+        """The promotion is for full runs: a window's combined page would
+        replace the full one with the window's view."""
+        project = _small_project(tmp_path)
+        convert_jsonl_to("html", project, silent=True)
+        combined = project / "combined_transcripts.html"
+        stamp = f"claude-code-log v{get_library_version()}"
+        old = combined.read_text(encoding="utf-8").replace(
+            stamp, "claude-code-log v0.0.1", 1
+        )
+        combined.write_text(old, encoding="utf-8")
+
+        report = RegenerationReport()
+        convert_jsonl_to(
+            "html",
+            project,
+            silent=True,
+            write_combined=False,
+            from_date="2025-07-03",
+            to_date="2025-07-03",
+            force=True,
+            report=report,
+        )
+        assert not report.combined_regenerated
+        assert combined.read_text(encoding="utf-8") == old
+
     def test_combined_no_without_combined_output_stays_combined_free(
         self, tmp_path: Path
     ) -> None:

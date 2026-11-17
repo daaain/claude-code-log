@@ -119,7 +119,8 @@ def restore_images(
 ) -> None:
     """Put each referenced image's base64 back into ``content``, in place.
 
-    ``blobs`` maps a digest to its media type and bytes. A reference with
+    ``blobs`` maps a digest to its media type and bytes; each source keeps
+    the media type of its own reference. A reference with
     no blob raises `MissingImageBlob`, or with ``missing_ok`` becomes an
     empty source, which renders as a placeholder (for a session whose
     transcript is gone, so cannot be parsed again).
@@ -129,14 +130,15 @@ def restore_images(
             continue
         digest = source.get("digest")
         found = blobs.get(digest) if isinstance(digest, str) else None
+        # The reference's own media type: identical bytes cited under two
+        # media types share one blob, which keeps only the first.
+        media_type = str(source.get("media_type", ""))
         if found is None:
             if not missing_ok:
                 raise MissingImageBlob(digest)
             data = ""
-            media_type = str(source.get("media_type", ""))
         else:
-            media_type, raw = found
-            data = base64.b64encode(raw).decode("ascii")
+            data = base64.b64encode(found[1]).decode("ascii")
         source.clear()
         source.update({"type": "base64", "media_type": media_type, "data": data})
 
