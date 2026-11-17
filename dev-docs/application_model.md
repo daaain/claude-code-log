@@ -960,7 +960,13 @@ copy. A bare-string render (`generate_html()` without `output_dir`) gets
 empty paths, and its timeline reports the missing library rather than
 fetching one. File names carry the library version, so an upgrade adds
 files instead of overwriting them; writes are temp file + `os.replace`
-because the render fan-out's workers all ensure the folder at once. The
+because the render fan-out's workers all ensure the folder at once. On
+Windows one worker's replace can be refused (WinError 5) while another's
+is landing; a refused replace counts as done once the file is that
+build (same name, same size), and is otherwise retried briefly
+(`utils.retry_on_sharing_violation`) before the page renders without
+timeline sources — which a parallel render once did, differing from the
+serial one. The
 library used to come from unpkg, unpinned, the one network request a
 generated page made (issue #278).
 

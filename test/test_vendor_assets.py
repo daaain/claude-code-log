@@ -9,6 +9,7 @@ page written to disk, and the page loads it from there.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 from pathlib import Path
@@ -94,6 +95,102 @@ class TestEnsureVendorAssets:
         """A file where the folder should be: report it, don't raise."""
         (tmp_path / VENDOR_ASSETS_DIRNAME).write_text("not a directory")
         assert ensure_vendor_assets(tmp_path) is False
+
+
+@pytest.fixture
+def windows_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sharing-violation retry budget Windows gets, at a test's pace."""
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_ATTEMPTS", 10)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
+
+
+def _access_denied() -> PermissionError:
+    return PermissionError(13, "Access is denied")
+
+
+@pytest.mark.usefixtures("windows_retries")
+class TestConcurrentInstallers:
+    """Render-pool workers rendering one project all ensure its assets/.
+
+    On Windows, ``os.replace`` onto a file another process is replacing at
+    that moment raises PermissionError (WinError 5). That used to be
+    reported as an unwritable folder, so the page rendered without its
+    timeline sources: CI saw a parallel render differ from the serial one
+    (test_render_cache_equivalence, windows-latest). Simulated here, as
+    the suite doesn't run on the platform that does it.
+    """
+
+    def _assets(self, tmp_path: Path) -> Path:
+        return tmp_path / VENDOR_ASSETS_DIRNAME
+
+    def _assert_installed(self, tmp_path: Path) -> None:
+        names = sorted([VIS_TIMELINE_JS, VIS_TIMELINE_CSS, VIS_TIMELINE_LICENSE])
+        assets = self._assets(tmp_path)
+        # Every file is the real build, and no temp file is left behind.
+        assert sorted(p.name for p in assets.iterdir()) == names
+        for name in names:
+            assert (assets / name).read_bytes() == (VENDOR_DIR / name).read_bytes()
+
+    def test_losing_the_race_to_another_worker_is_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The replace is refused because another worker just installed it."""
+        calls: list[Path] = []
+
+        def winner_got_there_first(src: Path, dst: Path) -> None:
+            calls.append(Path(dst))
+            shutil.copyfile(VENDOR_DIR / Path(dst).name, dst)
+            raise _access_denied()
+
+        monkeypatch.setattr(os, "replace", winner_got_there_first)
+        assert ensure_vendor_assets(tmp_path) is True
+        self._assert_installed(tmp_path)
+        # Each file: one refused replace, then accepted as installed, with
+        # no retry spent on a file that is already right.
+        assert len(calls) == 3
+
+    def test_a_transient_refusal_is_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The replace is refused once, mid-swap, and then goes through."""
+        real_replace = os.replace
+        refused: set[str] = set()
+
+        def busy_once(src: Path, dst: Path) -> None:
+            name = Path(dst).name
+            if name not in refused:
+                refused.add(name)
+                raise _access_denied()
+            real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", busy_once)
+        assert ensure_vendor_assets(tmp_path) is True
+        self._assert_installed(tmp_path)
+
+    @pytest.mark.parametrize("stale", [False, True], ids=["missing", "stale"])
+    def test_a_refusal_that_never_clears_still_degrades(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
+    ):
+        """Bounded: it gives up, and a stale file doesn't pass for installed."""
+        assets = self._assets(tmp_path)
+        if stale:
+            assets.mkdir()
+            js = assets / VIS_TIMELINE_JS
+            js.write_bytes((VENDOR_DIR / VIS_TIMELINE_JS).read_bytes()[:100])
+        calls: list[int] = []
+
+        def always_denied(src: Path, dst: Path) -> None:
+            calls.append(1)
+            raise _access_denied()
+
+        monkeypatch.setattr(os, "replace", always_denied)
+        assert ensure_vendor_assets(tmp_path) is False
+        # The retry budget is spent on the first file, then it stops.
+        assert len(calls) == 10
+        # No temp file is left behind; a stale file is left as it was.
+        assert [p.name for p in assets.iterdir()] == (
+            [VIS_TIMELINE_JS] if stale else []
+        )
 
 
 class TestRenderedPage:
