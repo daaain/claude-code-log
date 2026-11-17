@@ -897,7 +897,9 @@ Referenced files land in `images/` beside the page, named
 taken over them. HTML re-encodes through `export_compressed_image`
 (Pillow): AVIF at quality 50, speed 8, longest side capped at 2000px,
 full 4:4:4 chroma for non-JPEG sources (mostly screenshots, where
-subsampling smears coloured text), and no EXIF in the output. Its
+subsampling smears coloured text), no EXIF in the output, and a PNG
+colour key (tRNS) turned into a real alpha channel, which AVIF needs to
+keep those pixels transparent. Its
 digest covers the source bytes *and* the encoder settings
 (`_encoding_tag`), so a file is found again — by any pass, run or
 worker — without decoding the source, and a settings change renames
@@ -925,12 +927,13 @@ images go through the same gate and, in HTML, the same export mode
 (`HtmlRenderer._format_tool_result_image`), and plugins get it from
 `claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
 
-Default is `embedded` for HTML (single self-contained file) and
-`referenced` for Markdown (keeps the `.md` text small and lets
-images live as separate PNGs alongside).
+Default is `referenced` for both: an HTML page or `.md` file then
+needs the `images/` directory beside it, and `embedded` gives the
+single self-contained file HTML used to default to.
 
 Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
-from a BLAKE2b digest of the decoded bytes — so a given image maps to
+from a BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
+exports, the encoder settings, as above) — so a given image maps to
 exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already
 the right bytes; writers go through a unique temp file + atomic
