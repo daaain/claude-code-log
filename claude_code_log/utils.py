@@ -281,14 +281,18 @@ def format_duration(total_seconds: float) -> str:
     return f"{minutes}m {seconds}s"
 
 
-def compact_count(value: int) -> str:
-    """``950`` → ``950``, ``9400`` → ``9.4k``, ``182345`` → ``182k``."""
+def compact_count(value: int, *, decimal_threshold: int = 100) -> str:
+    """``950`` → ``950``, ``9400`` → ``9.4k``, ``182345`` → ``182k``.
+
+    ``decimal_threshold`` is the scaled value below which one decimal is kept.
+    The default preserves the historical rule (decimals below 100k/100M/100B).
+    """
     if value < 1000:
         return str(value)
     for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "k")):
         if value >= divisor:
             scaled = value / divisor
-            text = f"{scaled:.1f}" if scaled < 100 else f"{scaled:.0f}"
+            text = f"{scaled:.1f}" if scaled < decimal_threshold else f"{scaled:.0f}"
             if text.endswith(".0"):
                 text = text[:-2]
             return text + suffix
