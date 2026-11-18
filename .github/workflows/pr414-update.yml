@@ -1,7 +1,9 @@
 name: Update PR414 from upstream
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - "405-compact-cache-token-usage"
 
 permissions:
   contents: write
@@ -12,7 +14,10 @@ concurrency:
 
 jobs:
   update:
-    if: github.ref == 'refs/heads/405-compact-cache-token-usage'
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/405-compact-cache-token-usage' &&
+      github.event.head_commit.message == 'Enable PR414 push workflow'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the reviewed startup commit
@@ -24,7 +29,8 @@ jobs:
       - name: Merge upstream and apply the reviewed snapshot fix
         env:
           EXPECTED_PUBLIC_HEAD: 12faebf1577a700193514794ea961c87c9f1df9b
-          EXPECTED_STARTUP_BASE: 644264a7bf7b7c35ee8475bc9f4954c3d046e9f9
+          EXPECTED_STARTUP_W: 644264a7bf7b7c35ee8475bc9f4954c3d046e9f9
+          EXPECTED_STARTUP_W2: 0783b81b72e52e38bb74f42753ba6b0baad7ef77
           EXPECTED_UPSTREAM: 763365c942cad45b2648f9056f737167cef3234a
           EXPECTED_FINAL_TREE: f4dd721baaecf97fbe4dae3c51236a1ed8956c8a
           EXPECTED_SNAPSHOT_SHA256: 4f653b43077d443deb453532b4b9025c897e0110e1eda2ec5f30581842c529b3
@@ -35,9 +41,11 @@ jobs:
           git config user.email "346683525+hchc00787@users.noreply.github.com"
 
           startup_head="$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_STARTUP_BASE"
-          test "$(git rev-parse HEAD^^)" = "$EXPECTED_PUBLIC_HEAD"
-          test "$(git rev-list --count "$EXPECTED_PUBLIC_HEAD"..HEAD)" = "2"
+          test "$(git show -s --format=%s HEAD)" = "Enable PR414 push workflow"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_STARTUP_W2"
+          test "$(git rev-parse HEAD^^)" = "$EXPECTED_STARTUP_W"
+          test "$(git rev-parse HEAD^^^)" = "$EXPECTED_PUBLIC_HEAD"
+          test "$(git rev-list --count "$EXPECTED_PUBLIC_HEAD"..HEAD)" = "3"
           test "$(git diff --name-status "$EXPECTED_PUBLIC_HEAD" HEAD | awk '{print $1}')" = "A"
           test "$(git diff --name-only "$EXPECTED_PUBLIC_HEAD" HEAD)" = "$WORKFLOW_PATH"
           test -z "$(git status --porcelain)"
