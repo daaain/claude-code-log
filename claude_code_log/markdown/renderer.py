@@ -1200,6 +1200,24 @@ class MarkdownRenderer(Renderer):
             return "[Image]"
         return f"![image]({src})"
 
+    def _tool_result_image(self, item: dict[str, Any]) -> Optional[str]:
+        """A tool result's ``image`` item as an image, like any other.
+
+        A Read of an image returns one. ``None`` when the item is not an
+        image (inline or a reference), so the caller keeps it as
+        structured content.
+        """
+        if item.get("type") != "image":
+            return None
+        source = item.get("source")
+        if not isinstance(source, dict):
+            return None
+        try:
+            image = ImageContent.model_validate({"type": "image", "source": source})
+        except ValueError:  # pydantic's ValidationError is a ValueError
+            return None
+        return self._format_image(image)
+
     def _lang_from_path(self, path: str) -> str:
         """Get language hint from file extension."""
         ext_map = {
@@ -1940,6 +1958,8 @@ class MarkdownRenderer(Renderer):
                             json.dumps(decoded, indent=2, ensure_ascii=False), "json"
                         )
                     )
+            elif (image := self._tool_result_image(item)) is not None:
+                parts.append(image)
             else:
                 parts.append(
                     self._code_fence(
@@ -2665,9 +2685,12 @@ class MarkdownRenderer(Renderer):
         # block, instead of dumping the whole list verbatim (issue #227).
         text_parts: list[str] = []
         structured_items: list[dict[str, Any]] = []
+        images: list[str] = []
         for item in output.content:
             if item.get("type") == "text":
                 text_parts.append(str(item.get("text", "")))
+            elif (image := self._tool_result_image(item)) is not None:
+                images.append(image)
             else:
                 structured_items.append(item)
         parts: list[str] = []
@@ -2683,6 +2706,7 @@ class MarkdownRenderer(Renderer):
                     json.dumps(structured_items, indent=2, ensure_ascii=False), "json"
                 )
             )
+        parts.extend(images)
         return "\n\n".join(parts)
 
     # -------------------------------------------------------------------------

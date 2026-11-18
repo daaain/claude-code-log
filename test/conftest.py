@@ -79,6 +79,50 @@ def pytest_configure(config: "Config") -> None:
         raise pytest.UsageError(message)
 
 
+# ========== Guard: tests leave test/test_data/ as they found it ==========
+# A test that converts a fixture in place writes its page, and the timeline's
+# assets/, beside the fixture, in the source tree. Copy the fixture into
+# tmp_path instead. The controller lists the tree before and after the run and
+# fails the run if anything appeared.
+
+_TEST_DATA_DIR = Path(__file__).parent / "test_data"
+_FIXTURE_TREE_KEY = pytest.StashKey[frozenset[str]]()
+
+
+def _fixture_tree() -> frozenset[str]:
+    return frozenset(
+        path.relative_to(_TEST_DATA_DIR).as_posix()
+        for path in _TEST_DATA_DIR.rglob("*")
+        if "__pycache__" not in path.parts
+    )
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    if not hasattr(session.config, "workerinput"):
+        session.config.stash[_FIXTURE_TREE_KEY] = _fixture_tree()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    before = session.config.stash.get(_FIXTURE_TREE_KEY, None)
+    if before is None:
+        return
+    added = sorted(_fixture_tree() - before)
+    if not added:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.ensure_newline()
+        reporter.write_line(
+            "test/test_data/ gained files during the run (a test wrote into "
+            "the fixture tree; copy the fixture into tmp_path instead): "
+            + ", ".join(added[:10])
+            + (" …" if len(added) > 10 else ""),
+            red=True,
+        )
+    if session.exitstatus == 0:
+        session.exitstatus = 1
+
+
 # ========== Collection cost control ==========
 # Browser test modules import `playwright` and TUI modules import `textual`
 # at module top level. pytest imports every test module during collection and
@@ -132,6 +176,18 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     if not expr.evaluate(has_marker):
         return True
     return None
+
+
+@pytest.fixture(autouse=True)
+def _fresh_image_store() -> Any:
+    """Each test starts as a fresh process does: no image bytes held from
+    an earlier test's parse, and no earlier test's cache to read them from
+    (`image_store`)."""
+    from claude_code_log import image_store
+
+    image_store.reset()
+    yield
+    image_store.reset()
 
 
 # ========== Cache Test Fixtures ==========
@@ -244,11 +300,25 @@ def browser_context_args(browser_context_args):
 
 @pytest.fixture(scope="session")
 def browser_type_launch_args(browser_type_launch_args):
-    """Configure browser launch arguments."""
+    """Configure browser launch arguments.
+
+    RenderDocument is off. With it, Chromium gives a navigation a new
+    document host, and under load a ``file://`` page's localStorage write
+    can be lost across it: the reloaded or linked page reads the value from
+    before the write, and so does every other page from then on. With 8
+    busy cores, 16 of 30 reloads after the theme toggle lost the choice from
+    disk, none of 30 when served, and none of 30 from disk with the feature
+    off. ``test_minimal_pages_browser``'s from-disk theme tests failed this
+    way about one xdist run in three.
+    """
     return {
         **browser_type_launch_args,
         "headless": True,  # Set to False for debugging
         "slow_mo": 0,  # Add delay for debugging
+        "args": [
+            *browser_type_launch_args.get("args", []),
+            "--disable-features=RenderDocument",
+        ],
     }
 
 

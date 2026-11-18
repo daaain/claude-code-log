@@ -11,6 +11,7 @@ from typing import Any, Optional, TYPE_CHECKING, cast
 from pydantic import BaseModel
 
 from ..cache import get_library_version
+from ..image_store import inline_images
 from ..models import TranscriptEntry
 from ..renderer import (
     Renderer,
@@ -28,7 +29,10 @@ def _json_default(obj: Any) -> Any:
     all structure.
     """
     if isinstance(obj, BaseModel):
-        return obj.model_dump(mode="json")
+        dumped = obj.model_dump(mode="json")
+        # An image is written out whole, as the transcript had it.
+        inline_images(dumped)
+        return dumped
     if isinstance(obj, Enum):
         return obj.value
     if isinstance(obj, Path):
@@ -61,6 +65,9 @@ class JsonRenderer(Renderer):
         content_dump.pop("meta", None)
         # `message_index` is a render-time back-reference, already exposed as `index`.
         content_dump.pop("message_index", None)
+        # Images held by reference (`image_store`) are written out whole,
+        # as the transcript had them: a tool result's are plain dicts here.
+        inline_images(content_dump)
 
         node: dict[str, Any] = {
             "index": msg.message_index,

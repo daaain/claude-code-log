@@ -57,29 +57,30 @@ pass --force to overwrite them (nothing is removed), or choose another
 --output.
 ```
 
-For one project, the session pages are written into the project's
-directory whatever `-o` names, so the way out it offers is the combined
-page alone:
+For one project, an `-o` *file* (`-o page.html`) names the combined page
+alone, and the session pages are still written into the project's
+directory, so the ways out it offers are an output directory or the
+combined page alone:
 
 ```text
 Error: /path/to/project/session-1a2b3c4d.html already exists. A date-filtered
 run writes only into a destination that holds none of the files it writes:
-pass --force to overwrite them (nothing is removed), or write the combined
-page alone elsewhere, with --combined only and --output.
+pass --force to overwrite them (nothing is removed), or choose an --output
+directory, or write the combined page alone elsewhere, with --combined only
+and an --output file.
 ```
 
 With `--combined no` there is no combined page to send elsewhere, so the
-error offers `--force` alone.
+error offers `--force` or an output directory.
 
 You then have two ways out:
 
 - **`-o` / `--output` another directory.** This is the usual way: the
-  full view stays where it is, and the window's view goes next to it.
-  For one project, `-o` names the combined page alone, and its session
-  pages are still written into the project's directory, where the full
-  view's are. To leave those alone, write the combined page only
-  (`--combined only -o page.html`), or the whole view in place with
-  `--force`.
+  full view stays where it is, and the window's view goes next to it,
+  for one project as for all of them. An `-o` with a file suffix
+  (`-o page.html`) names the combined page alone, and its session pages
+  are still written into the project's directory, where the full view's
+  are; `--combined only -o page.html` writes the combined page alone.
 - **`--force`** writes the window's view over the existing pages. It
   removes nothing: pages of the full view that the window does not
   rewrite (session pages outside the window, other projects' pages) stay

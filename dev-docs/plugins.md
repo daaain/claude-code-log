@@ -289,12 +289,12 @@ moves to the next ancestor.
 
 ### 4.1 Plugin-facing helpers
 
-Seven helpers are re-exported from `claude_code_log.plugins` for use
+Ten helpers are re-exported from `claude_code_log.plugins` for use
 in `format_html` / `format_markdown` / `title` methods. The re-export is
 the stable plugin API; the underlying implementation (in
 `claude_code_log/html/utils.py`, `claude_code_log/markdown/renderer.py`,
-`claude_code_log/image_export.py` and `claude_code_log/utils.py`) may
-move or be renamed.
+`claude_code_log/image_export.py`, `claude_code_log/image_store.py` and
+`claude_code_log/utils.py`) may move or be renamed.
 
 ```python
 from claude_code_log.plugins import (
@@ -305,6 +305,9 @@ from claude_code_log.plugins import (
     is_safe_web_url,
     safe_markdown_link_target,
     is_safe_image_source,
+    is_safe_source,
+    image_bytes,
+    image_base64,
 )
 ```
 
@@ -317,6 +320,37 @@ from claude_code_log.plugins import (
 | `is_safe_web_url(url)` | `(str) -> bool` | Gating a transcript-derived URL before making it clickable — an `href` in `format_html` or a `[text](target)` destination in `format_markdown`. Escaping cannot neutralise a hostile scheme (`javascript:alert(1)` survives `escape_html` intact), so emit the link only when this returns True and degrade to inert escaped text otherwise. http(s) whitelist, fails closed. |
 | `safe_markdown_link_target(url)` | `(str) -> str` | Encoding a URL you are about to place in a Markdown `(target)` slot — a `[text](target)` link or `![](target)` image in `format_markdown`. An `is_safe_web_url`-accepted URL can still carry `"`/`'`/`<`/`>`/space/parens that break out of the destination or smuggle attributes once a downstream viewer converts the Markdown to HTML; this percent-encodes them. Use **after** the scheme gate, on the target only (label the link with `safe_markdown_inline` text). |
 | `is_safe_image_source(media_type, data)` | `(str, str) -> bool` | Gating a transcript-derived image before you build a `data:{media_type};base64,{data}` URL for an `<img src>` (or a Markdown `![](…)` target). True only for an allowlisted type (`image/png`, `image/jpeg`, `image/gif`, `image/webp` — never the scriptable `image/svg+xml`) with strictly-valid base64; render a placeholder otherwise. The same gate the core image sinks use. It does not escape: still `escape_html` the finished URL in an HTML attribute. |
+| `is_safe_source(source)` | `(ImageSource \| ImageRef \| dict) -> bool` | The same gate for an image source of either kind (below): its media type, and for inline data its base64. |
+| `image_bytes(source)` | `(ImageSource \| ImageRef \| dict) -> bytes \| None` | An image's decoded bytes, whichever kind its source is. None when they can't be had (bad base64, or a reference no cache holds any longer): render a placeholder. |
+| `image_base64(source)` | `(ImageSource \| ImageRef \| dict) -> str \| None` | The same as base64, for a `data:` URL (after `is_safe_source`). |
+
+**Images are references.** Since 1.9, an image's `source`
+(`ImageContent.source`, or the `source` dict of an image inside a
+`ToolResultContent.content` list) is usually not inline base64 but a
+reference to bytes held elsewhere: an `ImageRef` with `type: "ref"`,
+`digest` and `media_type` (as a dict in a tool result, the same three
+keys). Only a small image (under 2 KB of base64), or one whose source
+would not round-trip exactly, is still an `ImageSource` with `data`. So
+read an image through `image_bytes` / `image_base64`, never `.data` or
+`source["data"]`, and gate it with `is_safe_source`:
+
+```python
+from claude_code_log.models import ImageContent
+from claude_code_log.plugins import escape_html, image_base64, is_safe_source
+
+def image_tag(image: ImageContent) -> str:
+    source = image.source  # an ImageSource or an ImageRef
+    data = image_base64(source) if is_safe_source(source) else None
+    if data is None:
+        return "[Image]"
+    url = f"data:{source.media_type};base64,{data}"
+    return f'<img src="{escape_html(url)}" />'
+```
+
+There is no compatibility layer: code that read `source.data` gets an
+`AttributeError` on a reference (or a `KeyError` on a tool result's
+dict). `image_bytes` works in any process that parsed the transcript or
+opened its cache.
 
 The reference plugin's
 [`tool_communicate_result.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/tool_communicate_result.py)
@@ -350,7 +384,7 @@ output paths:
 | `title()` return | `escape_html(value)` — the HTML header emits it via `\| safe` (no core escaping); the Markdown heading is auto-gated by the core |
 | URL made clickable (`href` attribute) | gate on `is_safe_web_url(url)` first, **then** `escape_html(url)` for the attribute text — the scheme check and the escaping guard different attacks |
 | URL made clickable (Markdown link/image target) | gate on `is_safe_web_url(url)` first, **then** `safe_markdown_link_target(url)` for the `(target)` slot — guards against attribute-smuggling through the downstream Markdown→HTML pass |
-| Image `data:` URL (`<img src>` or Markdown `![](…)`) from a transcript `media_type` + base64 `data` | gate on `is_safe_image_source(media_type, data)` first (allowlist without SVG, strict base64), **then** `escape_html(data_url)` for the HTML attribute — a crafted `media_type` such as `png"><script>…` otherwise closes the attribute (#277) |
+| Image `data:` URL (`<img src>` or Markdown `![](…)`) from a transcript image | gate on `is_safe_source(source)` (or `is_safe_image_source(media_type, data)` for base64 you hold) first (allowlist without SVG, strict base64), take the data from `image_base64(source)`, **then** `escape_html(data_url)` for the HTML attribute — a crafted `media_type` such as `png"><script>…` otherwise closes the attribute (#277) |
 
 Notes:
 

@@ -73,7 +73,7 @@ from claude_code_log.render_pool import (  # noqa: E402
 )
 from claude_code_log.utils import (  # noqa: E402
     THEME_CHOICES,
-    project_transcript_bytes,
+    resident_transcript_bytes,
 )
 
 
@@ -136,9 +136,18 @@ def _transcript_bytes(project: Path) -> int:
     top-level `agent-*.jsonl` too, so the memory preview and the
     `both (N->M workers)` labels predicted a worker cap the conversion
     would not actually apply — 16 of 79 projects in the reference corpus
-    carry such files, one inflating its measured size by 30%.
+    carry such files, one inflating its measured size by 30%. Less the
+    images a parse doesn't hold, as far as the project's cache (if it has
+    one yet) has counted them.
     """
-    return project_transcript_bytes(project)
+    from claude_code_log.cache import CacheManager, get_library_version
+
+    try:
+        manager = CacheManager(project, get_library_version(), read_only=True)
+        image_bytes = manager.image_bytes_by_file()
+    except Exception:
+        image_bytes = {}
+    return resident_transcript_bytes(project, image_bytes)
 
 
 def _clear_outputs(target: Path, all_projects: bool) -> None:

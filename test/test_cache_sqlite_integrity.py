@@ -684,6 +684,15 @@ class TestConnectionCensus:
             1,
             "applies apply_write_pragmas",
         ),
+        ("image_store.py", "_read_from_cache"): (
+            1,
+            "read-only (mode=ro): one image's bytes by digest, closed at once",
+        ),
+        ("migrations/runner.py", "check_json1"): (
+            1,
+            "in-memory JSON1 capability probe, not the cache: connects to "
+            ":memory: before the migrations run",
+        ),
         ("cli.py", "_build_search_index"): (1, "applies apply_write_pragmas"),
         ("search.py", "fts5_available"): (
             1,

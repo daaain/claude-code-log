@@ -9,15 +9,37 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import zlib
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    get_args,
+)
 
 from packaging import version
 from pydantic import BaseModel
 
+from . import image_store
+from .cache_images import (
+    MERGE_BLOBS,
+    dump_entry,
+    load_blobs,
+    missing_blobs,
+    restore_images,
+    row_refs,
+    write_blobs,
+)
 from .factories import create_transcript_entry
 from .migrations.runner import (
     WAL_SIZE_LIMIT_BYTES,
@@ -42,6 +64,15 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _row_has_images(row: sqlite3.Row) -> bool:
+    """Whether a ``messages`` row read with its ``image_refs`` references any
+    image (a row read without the column references none it can restore)."""
+    try:
+        return bool(row["image_refs"])
+    except (IndexError, KeyError):
+        return False
 
 
 # ========== Data Models ==========
@@ -562,7 +593,9 @@ def _fingerprints_match(cached: str, current: str) -> bool:
 # its name. Bump it and every cached blob is re-parsed once. Leave it alone
 # for field additions/removals/renames — those move the digest by
 # themselves, which is the point.
-_CONTENT_SCHEMA_SALT = "2"  # 2: Read results drop toolUseResult.file.base64
+_CONTENT_SCHEMA_SALT = (
+    "3"  # 2: Read results drop toolUseResult.file.base64; 3: images in image_blobs
+)
 
 
 def _nested_models(annotation: object) -> Generator[type[BaseModel], None, None]:
@@ -824,6 +857,26 @@ _migrated_db_paths: set[str] = set()
 # Connections currently inside a `write_transaction`, by id (sqlite3
 # connections take no attributes). Thread-bound like the connections.
 _open_write_transactions = threading.local()
+# Per connection id: the images its open transaction stores, released
+# from memory (`image_store.release`) once it commits.
+_images_on_commit = threading.local()
+
+
+def _release_images_on_commit(conn: sqlite3.Connection, digests: Set[str]) -> None:
+    """Let go of these held images once ``conn``'s transaction commits:
+    from then on they are read back from the cache."""
+    if not digests:
+        return
+    pending: Dict[int, Set[str]] = getattr(_images_on_commit, "by_conn", None) or {}
+    _images_on_commit.by_conn = pending
+    pending.setdefault(id(conn), set()).update(digests)
+
+
+def _images_committed(conn: sqlite3.Connection, committed: bool) -> None:
+    pending: Dict[int, Set[str]] = getattr(_images_on_commit, "by_conn", None) or {}
+    digests = pending.pop(id(conn), None)
+    if digests and committed:
+        image_store.release(digests)
 
 
 @contextmanager
@@ -853,12 +906,18 @@ def write_transaction(conn: sqlite3.Connection) -> Generator[None, None, None]:
         yield
         return
     if conn.in_transaction:
-        yield
+        try:
+            yield
+        except BaseException:
+            _images_committed(conn, False)
+            raise
         conn.commit()
+        _images_committed(conn, True)
         return
     with write_turn():
         conn.execute("BEGIN IMMEDIATE")
         open_ids.add(id(conn))
+        committed = False
         try:
             yield
         except BaseException:
@@ -867,8 +926,10 @@ def write_transaction(conn: sqlite3.Connection) -> Generator[None, None, None]:
             raise
         else:
             conn.commit()
+            committed = True
         finally:
             open_ids.discard(id(conn))
+            _images_committed(conn, committed)
 
 
 def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
@@ -1046,6 +1107,122 @@ def checkpoint_wal(
             conn.close()
 
 
+def sweep_image_blobs(
+    db_path: Path, *, grace_seconds: Optional[float] = None
+) -> Optional[int]:
+    """Delete the cached images no row has referenced for a while.
+
+    Blobs outlive their rows when a file is rewritten, re-parsed or
+    deleted. Run at the end of an all-projects pass, under the pass lock,
+    so two sweeps never race (`cache_images.sweep_blobs`): a blob no row
+    references is marked, one referenced again is unmarked, and one marked
+    for longer than ``grace_seconds`` (an hour) is deleted. The grace period
+    covers a reader that read rows and has yet to read their blobs; a
+    writer needs none, since a blob is written in the transaction of the
+    rows that reference it. Returns the number deleted, or None when the
+    database was missing, busy or unreadable. Never raises.
+    """
+    from .cache_images import SWEEP_GRACE_SECONDS, sweep_blobs
+
+    if not db_path.exists():
+        return None
+    grace = SWEEP_GRACE_SECONDS if grace_seconds is None else grace_seconds
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return None
+    try:
+        if conn.in_transaction:
+            return None
+        with write_transaction(conn):
+            return sweep_blobs(conn, time.time(), grace)
+    except sqlite3.Error:
+        return None
+    finally:
+        if leased is None:
+            conn.close()
+
+
+# A pass compacts the cache when at least this share of it, and this many
+# bytes, are free pages. Free pages are reused by later writes, so most
+# runs leave few; a re-parse after a schema change (a content-schema salt
+# bump, say) frees a lot at once and nothing hands it back to the disk.
+_COMPACT_MIN_FREE_FRACTION = 0.2
+_COMPACT_MIN_FREE_BYTES = 64 * 1024 * 1024
+_COMPACT_BUSY_TIMEOUT_MS = 5000
+
+
+def compact_cache(
+    db_path: Path,
+    *,
+    min_free_fraction: float = _COMPACT_MIN_FREE_FRACTION,
+    min_free_bytes: int = _COMPACT_MIN_FREE_BYTES,
+) -> Optional[int]:
+    """``VACUUM`` the cache when enough of it is free pages.
+
+    SQLite never shrinks a database file on its own: pages a write frees
+    stay in the file for later writes to reuse. After #416's re-parse a
+    real 5.57GB cache held about 1.4GB it no longer needed. Run at the end
+    of a pass, after the search index catch-up and before the WAL
+    checkpoint (``VACUUM`` writes the whole database through the WAL in WAL
+    mode; the checkpoint then truncates it).
+
+    Returns the bytes the file shrank by, or None when it was not sparse
+    enough, or the database was missing, busy (another process reading or
+    writing: the next pass tries again) or unreadable. Never raises.
+    ``CLAUDE_CODE_LOG_CACHE_COMPACT=0`` switches it off.
+    """
+    if os.environ.get("CLAUDE_CODE_LOG_CACHE_COMPACT", "").strip().lower() in (
+        "0",
+        "off",
+        "no",
+        "false",
+    ):
+        return None
+    if not db_path.exists():
+        return None
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return None
+    try:
+        if conn.in_transaction:
+            return None
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        free_pages = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+        free_bytes = free_pages * page_size
+        if (
+            page_count == 0
+            or free_bytes < min_free_bytes
+            or free_pages < page_count * min_free_fraction
+        ):
+            return None
+        previous = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {int(_COMPACT_BUSY_TIMEOUT_MS)}")
+        try:
+            conn.execute("VACUUM")
+        finally:
+            conn.execute(f"PRAGMA busy_timeout = {int(previous)}")
+        after = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        return max(0, (page_count - after) * page_size)
+    except sqlite3.Error:
+        return None
+    finally:
+        if leased is None:
+            conn.close()
+
+
 def catch_up_search_index(db_path: Path) -> int:
     """Bring an existing search index up to date after a hierarchy pass.
 
@@ -1148,8 +1325,9 @@ _INSERT_MESSAGE = (
 _UPSERT_CACHED_FILE = """
     INSERT INTO cached_files
     (project_id, file_name, file_path, source_mtime, source_size,
-     cached_mtime, message_count, subagents_fingerprint, content_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     cached_mtime, message_count, subagents_fingerprint, content_version,
+     image_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id, file_name) DO UPDATE SET
         file_path = excluded.file_path,
         source_mtime = excluded.source_mtime,
@@ -1157,14 +1335,16 @@ _UPSERT_CACHED_FILE = """
         cached_mtime = excluded.cached_mtime,
         message_count = excluded.message_count,
         subagents_fingerprint = excluded.subagents_fingerprint,
-        content_version = excluded.content_version
+        content_version = excluded.content_version,
+        image_bytes = excluded.image_bytes
 """
 
 # The same columns on a file whose id is known (an append).
 _UPDATE_CACHED_FILE = """
     UPDATE cached_files
     SET file_path = ?, source_mtime = ?, source_size = ?, cached_mtime = ?,
-        message_count = ?, subagents_fingerprint = ?, content_version = ?
+        message_count = ?, subagents_fingerprint = ?, content_version = ?,
+        image_bytes = ?
     WHERE id = ?
 """
 
@@ -1260,7 +1440,8 @@ class _PendingRefresh:
         self.records = records
         self.deferred: List[Callable[[sqlite3.Connection], None]] = []
         self.appends: Dict[
-            str, Tuple[Path, List[TranscriptEntry], Optional[str], os.stat_result]
+            str,
+            Tuple[Path, List[TranscriptEntry], Optional[str], os.stat_result, int],
         ] = {}
 
 
@@ -1322,6 +1503,10 @@ class CacheManager:
         # derived writes; None means every write lands at once.
         self._refresh: Optional[_PendingRefresh] = None
         self._cold: Optional[_ColdBuild] = None
+
+        # Images not held in memory are read back from here (render
+        # workers' read-only instances included).
+        image_store.register_cache(self.db_path)
 
         self._project_id: Optional[int] = None
         if read_only:
@@ -1510,6 +1695,8 @@ class CacheManager:
                         self._refresh = None
                         self._drop_overlay(conn)
                     self._merge_refresh(conn, pending)
+                    # Committed: the spooled images are the cache's now.
+                    image_store.release(pending.spool.image_digests)
                 finally:
                     self._detach_spool(conn, pending.spool)
             finally:
@@ -1542,6 +1729,7 @@ class CacheManager:
             return
         conn.execute("DROP VIEW IF EXISTS temp.messages")
         conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+        conn.execute("DROP VIEW IF EXISTS temp.image_blobs")
         attached = {row[1] for row in conn.execute("PRAGMA database_list")}
         if "spool" in attached:
             conn.execute("DETACH DATABASE spool")
@@ -1615,10 +1803,19 @@ class CacheManager:
                 FROM spool.messages s JOIN spool.files f ON f.id = s.file_id {known}"""
         )
 
+        # The spooled rows' images are in the spool until the merge.
+        conn.execute(
+            """CREATE TEMP VIEW image_blobs AS
+                SELECT digest, media_type, data, orphaned_at FROM main.image_blobs
+                UNION ALL
+                SELECT digest, media_type, data, NULL FROM spool.image_blobs"""
+        )
+
     @staticmethod
     def _drop_overlay(conn: sqlite3.Connection) -> None:
         conn.execute("DROP VIEW IF EXISTS temp.messages")
         conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+        conn.execute("DROP VIEW IF EXISTS temp.image_blobs")
 
     def _merge_refresh(
         self, conn: sqlite3.Connection, pending: _PendingRefresh
@@ -1873,6 +2070,7 @@ class CacheManager:
             spooled.message_count,
             spooled.subagents_fingerprint,
             spooled.content_version,
+            spooled.image_bytes,
         )
         if spooled.mode == "append":
             row = conn.execute(
@@ -1886,6 +2084,7 @@ class CacheManager:
                 ).fetchone()["n"]
                 if count == spooled.expected_existing:
                     conn.execute(_UPDATE_CACHED_FILE, (*record[2:], file_id))
+                    conn.execute(MERGE_BLOBS, (spooled.id,))
                     conn.execute(
                         _MERGE_MESSAGES, (self._project_id, file_id, spooled.id)
                     )
@@ -1894,17 +2093,18 @@ class CacheManager:
             # process rewrote the file's rows since the parse): rewrite
             # the file whole from the parse, under the lock, as the
             # direct path's refused append falls back to a full save.
-            jsonl_path, entries, subagents_fp, source_stat = pending.appends[
-                spooled.file_name
-            ]
+            jsonl_path, entries, subagents_fp, source_stat, image_bytes = (
+                pending.appends[spooled.file_name]
+            )
             rows = [self._serialize_entry(entry, 0) for entry in entries]
             return self._replace_file_rows(
-                conn, jsonl_path, rows, source_stat, subagents_fp
+                conn, jsonl_path, rows, source_stat, subagents_fp, image_bytes
             )
 
         conn.execute(_UPSERT_CACHED_FILE, record)
         file_id = self._file_id_under_lock(conn, spooled.file_name)
         conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
+        conn.execute(MERGE_BLOBS, (spooled.id,))
         conn.execute(_MERGE_MESSAGES, (self._project_id, file_id, spooled.id))
         return file_id
 
@@ -2157,11 +2357,14 @@ class CacheManager:
             "_leaf_uuid": None,
             "_level": None,
             "_operation": None,
-            "content": zlib.compress(
-                json.dumps(entry.model_dump(), separators=(",", ":")).encode("utf-8"),
-                CONTENT_COMPRESSION_LEVEL,
-            ),
         }
+        # Images go to `image_blobs`, once each; the row keeps a reference
+        # (`cache_images`). The blobs ride along with the row until it is
+        # written, in the same transaction.
+        text, image_refs, image_blobs = dump_entry(entry.model_dump())
+        base["content"] = zlib.compress(text.encode("utf-8"), CONTENT_COMPRESSION_LEVEL)
+        base["image_refs"] = json.dumps(image_refs) if image_refs else None
+        base["_image_blobs"] = image_blobs
 
         # Extract flattened usage for assistant messages
         if isinstance(entry, AssistantTranscriptEntry):
@@ -2193,9 +2396,29 @@ class CacheManager:
         return base
 
     def _deserialize_entry(self, row: sqlite3.Row) -> TranscriptEntry:
-        """Convert SQLite row back to TranscriptEntry."""
+        """Convert SQLite row back to TranscriptEntry. Its images stay
+        references, read from the cache where one is written out
+        (`image_store`)."""
         content_dict = json.loads(zlib.decompress(row["content"]).decode("utf-8"))
         return create_transcript_entry(content_dict)
+
+    @staticmethod
+    def _row_digests(rows: Sequence[sqlite3.Row]) -> List[str]:
+        """The image digests ``rows`` reference."""
+        return [
+            digest
+            for row in rows
+            if _row_has_images(row)
+            for digest in row_refs(row["image_refs"])
+        ]
+
+    @classmethod
+    def _row_blobs(
+        cls, conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+    ) -> Dict[str, Tuple[str, bytes]]:
+        """The image blobs ``rows`` reference, in one lookup on ``conn``."""
+        digests = cls._row_digests(rows)
+        return load_blobs(conn, digests) if digests else {}
 
     def _get_file_id(self, jsonl_path: Path) -> Optional[int]:
         """Get the file ID for a JSONL file."""
@@ -2298,14 +2521,25 @@ class CacheManager:
 
         if row is None or row["content_version"] != content_schema_version():
             return None
-        return self._entries_for_file(row["id"], from_date, to_date)
+        # The render may not parse the file again (it may have grown past
+        # the refresh), so an image gone from the cache is a placeholder.
+        return self._entries_for_file(
+            row["id"], from_date, to_date, missing_images_ok=True
+        )
 
     def _entries_for_file(
-        self, file_id: int, from_date: Optional[str], to_date: Optional[str]
-    ) -> List[TranscriptEntry]:
+        self,
+        file_id: int,
+        from_date: Optional[str],
+        to_date: Optional[str],
+        *,
+        missing_images_ok: bool = False,
+    ) -> Optional[List[TranscriptEntry]]:
         """A cached file's entries, in timestamp order, within the window if
-        one is given."""
-        sql = "SELECT content FROM messages WHERE file_id = ?"
+        one is given. When one of its images has left the cache: None (the
+        file reads as not cached, and is parsed again), or, with
+        ``missing_images_ok``, the entries with that image as a placeholder."""
+        sql = "SELECT content, image_refs FROM messages WHERE file_id = ?"
         params: List[Any] = [file_id]
 
         if from_date or to_date:
@@ -2332,7 +2566,21 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
+            digests = self._row_digests(rows)
+            missing: Set[str] = set()
+            if digests and not missing_images_ok:
+                missing = missing_blobs(conn, digests)
 
+        if missing:
+            # The sweep deletes only blobs no row has referenced for an
+            # hour, so this takes a reader that held these rows that long.
+            # The file reads as not cached, and is parsed again.
+            logger.warning(
+                "cached image %s of file id %s is gone; reading the file again",
+                sorted(missing)[0],
+                file_id,
+            )
+            return None
         return [self._deserialize_entry(row) for row in rows]
 
     def save_cached_entries(
@@ -2341,8 +2589,13 @@ class CacheManager:
         entries: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
         source_stat: Optional[os.stat_result] = None,
+        image_bytes: int = 0,
     ) -> None:
         """Save parsed transcript entries to cache.
+
+        ``image_bytes`` is how much of the file's own text the parse did
+        not keep in memory (`image_store.take_images`), recorded for the
+        memory checks (`resident_transcript_bytes`).
 
         ``subagents_fp`` is the sidecar fingerprint AS OF THE PARSE —
         callers that scanned sidecars should pass the value captured
@@ -2378,7 +2631,9 @@ class CacheManager:
             # Spooled: the merge at the scope's end writes it, in one
             # transaction with everything else the refresh produced.
             self._refresh.spool.add(
-                self._file_record(jsonl_path, source_stat, len(entries), subagents_fp),
+                self._file_record(
+                    jsonl_path, source_stat, len(entries), subagents_fp, image_bytes
+                ),
                 serialized_entries,
                 mode="replace",
             )
@@ -2386,7 +2641,12 @@ class CacheManager:
 
         with self._get_connection() as conn, write_transaction(conn):
             file_id = self._replace_file_rows(
-                conn, jsonl_path, serialized_entries, source_stat, subagents_fp
+                conn,
+                jsonl_path,
+                serialized_entries,
+                source_stat,
+                subagents_fp,
+                image_bytes,
             )
             if self._cold is not None:
                 self._cold.written[jsonl_path.name] = self._file_record_identity(
@@ -2420,6 +2680,7 @@ class CacheManager:
         source_stat: os.stat_result,
         message_count: int,
         subagents_fp: Optional[str],
+        image_bytes: int = 0,
     ) -> Dict[str, Any]:
         """A file's ``cached_files`` columns as of a parse, by name."""
         return {
@@ -2431,6 +2692,7 @@ class CacheManager:
             "message_count": message_count,
             "subagents_fingerprint": subagents_fp,
             "content_version": content_schema_version(),
+            "image_bytes": image_bytes,
         }
 
     def _file_id_under_lock(self, conn: sqlite3.Connection, file_name: str) -> int:
@@ -2448,11 +2710,12 @@ class CacheManager:
         serialized_entries: List[Dict[str, Any]],
         source_stat: os.stat_result,
         subagents_fp: Optional[str],
+        image_bytes: int = 0,
     ) -> int:
         """Write a file's record and its whole row set, under the caller's
         write lock; returns the file id."""
         record = self._file_record(
-            jsonl_path, source_stat, len(serialized_entries), subagents_fp
+            jsonl_path, source_stat, len(serialized_entries), subagents_fp, image_bytes
         )
         conn.execute(
             _UPSERT_CACHED_FILE,
@@ -2466,12 +2729,14 @@ class CacheManager:
                 record["message_count"],
                 record["subagents_fingerprint"],
                 record["content_version"],
+                record["image_bytes"],
             ),
         )
         file_id = self._file_id_under_lock(conn, jsonl_path.name)
         conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
         for serialized in serialized_entries:
             serialized["file_id"] = file_id
+        _release_images_on_commit(conn, write_blobs(conn, serialized_entries))
         conn.executemany(_INSERT_MESSAGE, serialized_entries)
         return file_id
 
@@ -2482,6 +2747,7 @@ class CacheManager:
         appended: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
         source_stat: Optional[os.stat_result] = None,
+        image_bytes: int = 0,
     ) -> bool:
         """Insert only ``appended``, leaving the file's existing rows in place.
 
@@ -2528,7 +2794,7 @@ class CacheManager:
                 return False
             self._refresh.spool.add(
                 self._file_record(
-                    jsonl_path, source_stat, len(all_entries), subagents_fp
+                    jsonl_path, source_stat, len(all_entries), subagents_fp, image_bytes
                 ),
                 appended_rows,
                 mode="append",
@@ -2539,6 +2805,7 @@ class CacheManager:
                 all_entries,
                 subagents_fp,
                 source_stat,
+                image_bytes,
             )
             return True
 
@@ -2560,6 +2827,7 @@ class CacheManager:
                 expected_existing,
                 source_stat,
                 subagents_fp,
+                image_bytes,
             )
             if appended_ok and self._cold is not None:
                 self._cold.written[jsonl_path.name] = self._file_record_identity(
@@ -2576,6 +2844,7 @@ class CacheManager:
         expected_existing: int,
         source_stat: os.stat_result,
         subagents_fp: Optional[str],
+        image_bytes: int = 0,
     ) -> bool:
         """The checked append itself, run under the caller's write lock.
 
@@ -2597,7 +2866,7 @@ class CacheManager:
             return False
 
         record = self._file_record(
-            jsonl_path, source_stat, len(all_entries), subagents_fp
+            jsonl_path, source_stat, len(all_entries), subagents_fp, image_bytes
         )
         conn.execute(
             _UPDATE_CACHED_FILE,
@@ -2609,9 +2878,11 @@ class CacheManager:
                 record["message_count"],
                 record["subagents_fingerprint"],
                 record["content_version"],
+                record["image_bytes"],
                 file_id,
             ),
         )
+        _release_images_on_commit(conn, write_blobs(conn, appended_rows))
         conn.executemany(
             _INSERT_MESSAGE, [{**row, "file_id": file_id} for row in appended_rows]
         )
@@ -2912,6 +3183,25 @@ class CacheManager:
                     (self._project_id,),
                 )
             }
+
+    def image_bytes_by_file(self) -> Dict[str, int]:
+        """Per cached file of the project, how much of its text its parse
+        did not keep in memory (images, `image_store.take_images`); files
+        recorded before migration 018, or with no image, are left out."""
+        if self._project_id is None:
+            return {}
+        try:
+            with self._get_connection() as conn:
+                return {
+                    row["file_name"]: int(row["image_bytes"])
+                    for row in conn.execute(
+                        "SELECT file_name, image_bytes FROM cached_files"
+                        " WHERE project_id = ? AND image_bytes > 0",
+                        (self._project_id,),
+                    )
+                }
+        except sqlite3.Error:
+            return {}
 
     def get_file_states(self, file_names: List[str]) -> Dict[str, CachedFileState]:
         """Identity-relevant cached state per file (see CachedFileState).
@@ -3913,14 +4203,24 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(
-                """SELECT content FROM messages
+                """SELECT content, image_refs FROM messages
                    WHERE project_id = ? AND session_id = ?
                    ORDER BY timestamp NULLS LAST""",
                 (self._project_id, session_id),
             ).fetchall()
+            blobs = self._row_blobs(conn, rows)
 
-        # Content is stored as compressed, compact JSON - just decompress
-        return [zlib.decompress(row["content"]).decode("utf-8") for row in rows]
+        # Content is stored as compressed, compact JSON: decompress, and put
+        # its images back (`cache_images`) where it has any.
+        lines: List[str] = []
+        for row in rows:
+            text = zlib.decompress(row["content"]).decode("utf-8")
+            if _row_has_images(row):
+                content = json.loads(text)
+                restore_images(content, blobs, missing_ok=True)
+                text = json.dumps(content, separators=(",", ":"))
+            lines.append(text)
+        return lines
 
     def load_session_entries(self, session_id: str) -> List[TranscriptEntry]:
         """Load transcript entries for a session from cache.
@@ -3939,12 +4239,14 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(
-                """SELECT content FROM messages
+                """SELECT content, image_refs FROM messages
                    WHERE project_id = ? AND session_id = ?
                    ORDER BY timestamp NULLS LAST""",
                 (self._project_id, session_id),
             ).fetchall()
 
+        # An archived session may have no transcript left to parse again:
+        # an image gone from the cache renders as a placeholder.
         return [self._deserialize_entry(row) for row in rows]
 
     # ========== Page Cache Methods (Pagination) ==========

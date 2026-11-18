@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple, cast
 
 if TYPE_CHECKING:
     from ..dag import SessionTree
@@ -340,6 +340,13 @@ def _build_html_project_tree(template_projects: list[Any]) -> dict[str, Any]:
     return root
 
 
+# A ``data:`` image as the Markdown render writes it (``<img src="…" alt``),
+# for the media types ``is_harmful_url`` lets through.
+_INLINE_DATA_IMAGE_RE = re.compile(
+    r'<img src="data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+=*)"'
+)
+
+
 class HtmlRenderer(Renderer):
     """HTML renderer for Claude Code transcripts."""
 
@@ -527,27 +534,64 @@ class HtmlRenderer(Renderer):
 
     def _format_image(self, image: ImageContent) -> str:
         """Format image based on export mode."""
-        tag = self._image_tag(
-            image.source.media_type, image.source.data, "image", "uploaded-image"
-        )
+        tag = self._image_tag(image.source, "image", "uploaded-image")
         return "[Image]" if tag is None else tag
 
-    def _format_tool_result_image(self, media_type: str, data: str) -> Optional[str]:
+    def _format_tool_result_image(self, source: Mapping[str, Any]) -> Optional[str]:
         """Tool-result images follow the export mode like any other image.
 
-        An image the mode can't emit is dropped, as an unsafe one always
-        was — except in placeholder mode, which marks where it was.
+        ``source`` is the image item's ``source`` dict, inline or a
+        reference (`image_store`). An image the mode can't emit is
+        dropped, as an unsafe one always was — except in placeholder
+        mode, which marks where it was.
         """
-        tag = self._image_tag(
-            media_type, data, "Tool result image", "tool-result-image"
-        )
+        tag = self._image_tag(source, "Tool result image", "tool-result-image")
         if tag is None and self.image_export_mode == "placeholder":
             return "[Image]"
         return tag
 
-    def _image_tag(
-        self, media_type: str, data: str, alt: str, css_class: str
-    ) -> Optional[str]:
+    def _export_inline_data_images(self, html: str) -> str:
+        """Move ``data:`` images out of a formatted fragment, into files.
+
+        Markdown text can carry an image as a ``data:`` URL (a fetched
+        page, a pasted snippet), which the Markdown render keeps as an
+        inline ``<img>``. In referenced mode it is exported like any other
+        image; one Pillow can't read stays inline, as before.
+        """
+        if (
+            self.image_export_mode != "referenced"
+            or self._output_dir is None
+            or 'src="data:image/' not in html
+        ):
+            return html
+        from ..image_export import export_compressed_image
+
+        output_dir = self._output_dir
+
+        def swap(match: "re.Match[str]") -> str:
+            exported = export_compressed_image(
+                {
+                    "type": "base64",
+                    "media_type": match.group(1),
+                    "data": match.group(2),
+                },
+                output_dir,
+            )
+            if exported is None:
+                return match.group(0)
+            size = (
+                f' width="{exported.width}" height="{exported.height}"'
+                if exported.width and exported.height
+                else ""
+            )
+            return (
+                f'<img src="{escape_html(exported.src)}"{size} '
+                'loading="lazy" decoding="async"'
+            )
+
+        return _INLINE_DATA_IMAGE_RE.sub(swap, html)
+
+    def _image_tag(self, source: Any, alt: str, css_class: str) -> Optional[str]:
         """The ``<img>`` for one image under the export mode, or None.
 
         Referenced mode writes a compressed, content-addressed file beside
@@ -556,10 +600,9 @@ class HtmlRenderer(Renderer):
         write into (a page rendered in memory) it embeds instead.
         """
         from ..image_export import export_compressed_image, export_image
-        from ..models import ImageSource
 
         if self.image_export_mode == "referenced" and self._output_dir is not None:
-            exported = export_compressed_image(media_type, data, self._output_dir)
+            exported = export_compressed_image(source, self._output_dir)
             if exported is None:
                 return None
             size = (
@@ -576,14 +619,11 @@ class HtmlRenderer(Renderer):
             if self.image_export_mode == "referenced"
             else self.image_export_mode
         )
-        src = export_image(
-            ImageContent(
-                type="image",
-                source=ImageSource(type="base64", media_type=media_type, data=data),
-            ),
-            mode,
-            output_dir=self._output_dir,
-        )
+        try:
+            image = ImageContent.model_validate({"type": "image", "source": source})
+        except ValueError:  # pydantic's ValidationError is a ValueError
+            return None
+        src = export_image(image, mode, output_dir=self._output_dir)
         if src is None:
             return None
         # Escape the src: export_image allowlists the media type and
@@ -1705,7 +1745,8 @@ class HtmlRenderer(Renderer):
         # filenames are content-addressed (see image_export.export_image),
         # so a stored fragment's <img src> is the same name any tree would
         # allocate, and a fragment can only exist because a prior pass this
-        # conversion already wrote (or placeholdered) that file.
+        # conversion already wrote (or placeholdered) that file — into the
+        # same output directory, which is part of the key.
         fragment_store = self.fragment_store
         from .utils import footnote_scope
 
@@ -1738,6 +1779,11 @@ class HtmlRenderer(Renderer):
                         msg.agent_depth,
                         msg.spawns_collapsed_transcript,
                         msg.in_workflow_sidechannel,
+                        # A fragment's referenced images were exported
+                        # beside the page it was formatted for: an
+                        # `-o page.html` combined page and the session
+                        # pages in the project are two destinations.
+                        str(self._output_dir),
                     )
             cached = (
                 fragment_store.get(fragment_key, msg.content)
@@ -1760,7 +1806,7 @@ class HtmlRenderer(Renderer):
                 )
                 with footnote_scope(scope):
                     title = self.title_content(msg)
-                    html = self.format_content(msg)
+                    html = self._export_inline_data_images(self.format_content(msg))
                 formatted_ts = format_timestamp(
                     msg.meta.timestamp if msg.meta else None
                 )

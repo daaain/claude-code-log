@@ -2,6 +2,7 @@
 """Test cases for template rendering with representative JSONL data."""
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 import pytest
@@ -11,15 +12,23 @@ from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import generate_html
 from test.html_markup import rendered_markup
 
+_TEST_DATA = Path(__file__).parent / "test_data"
+
+
+def _fixture_copy(tmp_path: Path, name: str) -> Path:
+    """Copy a test_data transcript into tmp_path, so the page and its
+    assets/ are written there rather than into the source tree."""
+    dest = tmp_path / name
+    shutil.copy(_TEST_DATA / name, dest)
+    return dest
+
 
 class TestTemplateRendering:
     """Test template rendering with various message types."""
 
-    def test_representative_messages_render(self):
+    def test_representative_messages_render(self, tmp_path: Path):
         """Test that representative messages render correctly."""
-        test_data_path = (
-            Path(__file__).parent / "test_data" / "representative_messages.jsonl"
-        )
+        test_data_path = _fixture_copy(tmp_path, "representative_messages.jsonl")
 
         # Convert to HTML
         html_file = convert_jsonl_to_html(test_data_path)
@@ -61,18 +70,16 @@ class TestTemplateRendering:
         assert "<strong>" in html_content  # Bold text is rendered to strong tags
         assert "<code>" in html_content  # Inline code is rendered to code tags
 
-    def test_edge_cases_render(self):
+    def test_edge_cases_render(self, tmp_path: Path):
         """Test that edge cases render without errors."""
         from claude_code_log.models import RenderingDepth
 
-        test_data_path = Path(__file__).parent / "test_data" / "edge_cases.jsonl"
+        test_data_path = _fixture_copy(tmp_path, "edge_cases.jsonl")
 
         # Render at FULL: this fixture exercises full-detail edge content —
         # slash-command framing (SlashCommandMessage) and local-command
         # output (CommandOutputMessage) are ``depth_visibility = FULL``, so
         # the new HIGH default (--depth tool, #159) intentionally cleans them.
-        # ``use_cache=False`` avoids a stale shared test_data/*.html masking a
-        # wrong-level render between runs.
         html_file = convert_jsonl_to_html(
             test_data_path, depth=RenderingDepth.HOOK, use_cache=False
         )
@@ -118,7 +125,6 @@ class TestTemplateRendering:
             temp_path = Path(temp_dir)
 
             # Copy test files to temporary directory
-            import shutil
 
             shutil.copy(
                 test_data_dir / "representative_messages.jsonl",
@@ -183,11 +189,9 @@ class TestTemplateRendering:
         assert "class='message tool_result" in markup
         assert "File created successfully" in markup
 
-    def test_timestamp_formatting(self):
+    def test_timestamp_formatting(self, tmp_path: Path):
         """Test that timestamps are formatted correctly."""
-        test_data_path = (
-            Path(__file__).parent / "test_data" / "representative_messages.jsonl"
-        )
+        test_data_path = _fixture_copy(tmp_path, "representative_messages.jsonl")
 
         html_file = convert_jsonl_to_html(test_data_path)
         html_content = html_file.read_text(encoding="utf-8")
@@ -243,11 +247,9 @@ class TestTemplateRendering:
         assert "5" in index_html  # Total JSONL files (3+2)
         assert "23" in index_html  # Total messages (15+8)
 
-    def test_css_classes_applied(self):
+    def test_css_classes_applied(self, tmp_path: Path):
         """Test that correct CSS classes are applied to different message types."""
-        test_data_path = (
-            Path(__file__).parent / "test_data" / "representative_messages.jsonl"
-        )
+        test_data_path = _fixture_copy(tmp_path, "representative_messages.jsonl")
 
         html_file = convert_jsonl_to_html(test_data_path)
         html_content = html_file.read_text(encoding="utf-8")
@@ -262,11 +264,9 @@ class TestTemplateRendering:
         assert "tool_use" in html_content and "class='message" in html_content
         assert "tool_result" in html_content and "class='message" in html_content
 
-    def test_server_side_markdown_rendering(self):
+    def test_server_side_markdown_rendering(self, tmp_path: Path):
         """Test that markdown is rendered server-side, not client-side."""
-        test_data_path = (
-            Path(__file__).parent / "test_data" / "representative_messages.jsonl"
-        )
+        test_data_path = _fixture_copy(tmp_path, "representative_messages.jsonl")
 
         html_file = convert_jsonl_to_html(test_data_path)
         html_content = html_file.read_text(encoding="utf-8")

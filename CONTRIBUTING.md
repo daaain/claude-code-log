@@ -4,7 +4,7 @@ This guide covers development setup, testing, architecture, and release processe
 
 ## Prerequisites
 
-- Python 3.10+, linked against SQLite 3.35+ (the cache's minimum, `MIN_SQLITE_VERSION` in `claude_code_log/migrations/runner.py`)
+- Python 3.11+, linked against SQLite 3.35+ (the cache's minimum, `MIN_SQLITE_VERSION` in `claude_code_log/migrations/runner.py`)
 - [uv](https://docs.astral.sh/uv/) package manager
 
 ## Getting Started
@@ -62,7 +62,7 @@ work/                   # Plans, TODOs, in-flight design docs
 
 The project uses:
 
-- Python 3.10+ with uv package management
+- Python 3.11+ with uv package management
 - Click for CLI interface
 - Textual for Terminal User Interface
 - Pydantic for data modeling and validation
@@ -369,7 +369,11 @@ when available memory is under ~2.4× those bytes — the conversion
 then runs store-less at its pre-store footprint; an explicit `=1`
 forces the store past the valve. See
 [dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
-for its correctness guards.
+for its correctness guards. "Transcript bytes", here and in every
+memory check below, are the top-level session files' bytes less the
+image base64 a parse doesn't keep in memory, which the cache counts
+per file (`utils.resident_transcript_bytes`); on image-heavy projects
+that is most of the file.
 
 A project's own pages and session files are additionally rendered in
 parallel worker processes, on by default at the CPU count. Set
@@ -662,7 +666,9 @@ The tool implements a SQLite-based caching system for performance:
   the lock). Against other processes connections wait 30 s
   (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
   locked out is retried after the pool rather than failed. A pass compacts
-  an oversized WAL before it starts and truncates the WAL when it ends. A
+  an oversized WAL before it starts and truncates the WAL when it ends,
+  after a `VACUUM` when at least a fifth of the cache (and 64 MB) is free
+  pages (`CLAUDE_CODE_LOG_CACHE_COMPACT=0` turns that off). A
   refresh of a project the cache already holds runs in one scope
   (`CacheManager.atomic_refresh`): while it parses, its entry rows go to a
   spool file beside the cache (`<cache>.spool-<pid>-<n>`, `refresh_spool.py`),

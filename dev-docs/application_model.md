@@ -36,7 +36,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | CSS class taxonomy | `html/templates/components/*.css` | [css-classes.md](css-classes.md) |
 | JSON export (#36) | [`json/`](../claude_code_log/json/) | inlined below (§ 2.5) |
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
-| Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
+| Image export | [`image_export.py`](../claude_code_log/image_export.py), [`image_store.py`](../claude_code_log/image_store.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
 | Markdown engine (wenmode) | [`markdown_plugins.py`](../claude_code_log/markdown_plugins.py), `html/utils.py`, `markdown/renderer.py` | inlined below (§ 2.17) |
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
@@ -127,10 +127,12 @@ reports `file_version_mismatch` on every path — single-file, paginated,
 streaming (§ 2.13), session-scoped (§ 2.12), render pool (§ 2.10), the
 all-projects plan, `watch`/`serve`. Cache rows (`html_cache`,
 `html_pages`) are shared between themes and need no theme column. One
-promotion keeps archives single-themed: a `--combined no` run whose
-combined output carries the other theme rewrites it once
-(`converter.combined_theme_mismatch`), because its session pages link
-back to it. The project index and the archive search page are rewritten
+promotion keeps archives single-themed and current: a `--combined no`
+run whose combined output carries the other theme, or another library
+version's stamp, rewrites it once (`converter.combined_output_outdated`),
+because its session pages link back to it. Without it, an upgrade would
+leave the combined pages in the old rendering for as long as only
+`watch` or `serve --watch` ran. The project index and the archive search page are rewritten
 on every run and decide nothing from their stamp; they are rendered in
 the run's theme on every path that writes them (the all-projects run and
 so `serve`, its `--watch` ticks and `watch --all-projects`, and the
@@ -317,6 +319,40 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   conversion 11% faster — compressing rows is the largest item in a
   watch tick). Reading is level-agnostic, so rows written at any level
   still load.
+- Per-image (migration 017): each distinct image an entry carries
+  (a pasted image, a tool result's: mostly Read screenshots) is stored
+  once, as raw bytes, in `image_blobs`, keyed by a BLAKE2b-128 digest
+  ([`cache_images.py`](../claude_code_log/cache_images.py)). Entries
+  hold each image as a reference from the parse on (§ 2.7), so the
+  row's JSON holds `{"type": "ref", "digest": …, "media_type": …}` and
+  `messages.image_refs` lists the digests as a JSON array. Reading a row
+  leaves the reference as it is: `_entries_for_file` only checks, in one
+  query, that the cache still holds every blob the batch references, and
+  `export_session_to_jsonl`, whose lines leave the cache, puts the
+  base64 back. A source swaps only when it is exact: no other key,
+  base64 that re-encodes to the same text, and at least 2 KB of it; any
+  other stays inline. Blobs are written in the transaction of the rows
+  that reference them, from the bytes the process holds (a reference
+  whose bytes it no longer holds names a blob a cache already has), and
+  those bytes are released from memory once it commits. A refresh
+  spools them with its rows
+  (`refresh_spool.py` has its own `image_blobs`) and its merge copies each
+  file's blobs before its rows (`cache_images.MERGE_BLOBS`, through the
+  rows' own `image_refs` and `json_each`, which `check_json1` makes sure
+  of at migration), and the overlay a refresh reads through has an
+  `image_blobs` view too. Blobs outlive their rows when a file is
+  rewritten or deleted: at the end of an all-projects pass, under the
+  pass lock, `sweep_image_blobs` marks the blobs no row references,
+  unmarks those referenced again, and deletes those marked for over an
+  hour. A reader that still misses one (it would have to hold its rows
+  for that hour) reads the file as not cached and parses it again; the
+  render's snapshot read (`load_snapshot_entries`), which may not parse
+  again, and an archived session, with no transcript to parse, show a
+  placeholder for that image and keep the rest. Identical bytes under two
+  media types share a blob; each reference keeps its own media type.
+  On the archive measured in #416 this took the cache from 4.13 GB to
+  3.46 GB (3,881 distinct images, 1.03 GB raw, referenced from 5,980
+  rows); `_CONTENT_SCHEMA_SALT` 3 re-parses older caches once.
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.
@@ -654,6 +690,14 @@ the first connection has to read the whole log to recover it anyway, and
 the checkpoint costs about as much again (2 GB: 1.1 s + 1.1 s on a warm
 Linux page cache; the reporter's disk ran ~30 MB/s), so paying it up front
 spares every read and write of the pass. Otherwise it costs one `stat`.
+Before its checkpoint a pass also hands free pages back to the disk
+(`cache.compact_cache`): SQLite keeps the pages a write frees in the
+file for later writes, so a re-parse after a content-schema change
+(#416's left ~1.4 GB of a 5.57 GB cache free) never shrinks it. When at
+least a fifth of the file, and 64 MB, is free pages, it runs `VACUUM`,
+waiting at most 5 s for a writer and otherwise leaving it for the next
+pass; `CLAUDE_CODE_LOG_CACHE_COMPACT=0` turns it off. `VACUUM` writes the
+whole database through the WAL, which the checkpoint then truncates.
 Separately, `save_cached_entries` and
 `extend_cached_entries` serialise their entries (json + zlib, the part
 that scales with the session) *before* their first write, because
@@ -892,15 +936,49 @@ format-agnostic: HTML and Markdown both call into it. Three modes
 - `referenced` — write the image to disk next to the output and
   embed a `src=` reference. The default for both formats.
 
+**Images are held by reference.** A transcript carries each image as
+base64 inside its entry, and an entry is held whole: in the master list,
+in every slice fed to a render worker, in the parsed-entry store across
+watch ticks. So the parser swaps each image's source for a reference
+before the models are built
+([`image_store.py`](../claude_code_log/image_store.py), `take_images`,
+on any line whose text holds `"base64"`): `ImageContent.source` is an
+`ImageRef` (`type: "ref"`, `digest`, `media_type`), and a tool result's
+image dict carries the same three keys. The swap is the cache's (§ 2.3):
+only an exact source of 2 KB or more, so a small or odd one stays an
+inline `ImageSource`, and every reader takes both, through
+`image_bytes` / `image_base64` / `image_digest`, never a field. The
+bytes are held in the process, once per distinct image, until a cache
+write that stores them commits (`image_store.release`, from
+`write_transaction` or the end of `atomic_refresh`); after that, and in
+any process that opened the cache (each `CacheManager` registers its
+database, a render worker's read-only one included), they are read back
+from `image_blobs`, one image at a time on a connection of its own, with
+the last 32 MB read kept for the next pass over the same page. A run
+with no cache (a single transcript, `--no-cache`) keeps them held until
+`convert_jsonl_to` returns. A render pool hands its workers the parent's
+caches and, should any be left, the images it still holds. JSON export
+(`JsonRenderer`) writes each image out whole, as the transcript had it.
+A transcript's own `ref` source is forged (Claude Code writes images
+inline), so the parser empties it, and an `ImageRef` digest must be 32
+hex characters: it becomes part of a file name. On the two most
+image-heavy projects of a real archive (43% of their transcript bytes is
+images), this took 17–31% off the time of every run but the first (which AVIF
+encoding dominates: 6–7%) and 41–50% off peak memory (30–37% on the
+first run), medians of three runs, with byte-identical pages
+([work/cache-image-store.md](../work/cache-image-store.md)).
+
 Referenced files land in `images/` beside the page, named
-`image_<digest><ext>`. Markdown writes the source bytes, its digest
-taken over them. HTML re-encodes through `export_compressed_image`
+`image_<digest><ext>`, from the source image's digest, so an image
+already exported is found from its reference alone: a warm render reads
+no image bytes at all. Markdown writes the source bytes under the first
+16 hex digits of that digest. HTML re-encodes through `export_compressed_image`
 (Pillow): AVIF at quality 50, speed 8, longest side capped at 2000px,
 full 4:4:4 chroma for non-JPEG sources (mostly screenshots, where
 subsampling smears coloured text), no EXIF in the output, and a PNG
 colour key (tRNS) turned into a real alpha channel, which AVIF needs to
 keep those pixels transparent. Its
-digest covers the source bytes *and* the encoder settings
+digest covers the source's digest *and* the encoder settings
 (`_encoding_tag`), so a file is found again — by any pass, run or
 worker — without decoding the source, and a settings change renames
 every file instead of leaving old encodings behind a current name. The
@@ -911,20 +989,27 @@ displayed (EXIF-oriented, scaled) `width`/`height`, so lazy loading
 doesn't shift the layout; the sizes come from the encode or, for a
 file already on disk, from its header. A render with no output
 directory (an in-memory page) embeds instead, as does every stdout
-stream, whose temp directory is discarded. Before this, an image-heavy
+stream, whose temp directory is discarded. An image written into
+Markdown text as a `data:` URL (a fetched page, a pasted snippet) comes
+out of the Markdown render as an inline `<img>`; in referenced mode
+`HtmlRenderer._export_inline_data_images` moves it into a file the same
+way, on each formatted fragment, before the fragment store keeps it. Before this, an image-heavy
 session's page held each Read-tool screenshot as inline base64 — a
 real 350MB session page is 30MB plus 73MB of AVIF files.
 
 `embedded` and `referenced` both refuse an image unless
-`is_safe_image_source` passes: the media type must be PNG, JPEG, GIF
-or WebP (never the scriptable `image/svg+xml`) and the data strictly
-valid base64, otherwise the image degrades to the placeholder. The
+`is_safe_source` passes: the media type must be PNG, JPEG, GIF
+or WebP (never the scriptable `image/svg+xml`) and inline data strictly
+valid base64 (a reference's bytes passed that check when it was made),
+otherwise the image degrades to the placeholder, as does a reference
+whose bytes no cache holds any longer. The
 transcript's `media_type` and `data` are untrusted (an image can come
 back from a tool, an MCP server or a web page), and a crafted
 `media_type` used to break out of the `<img src>` attribute (issue
 #277); the HTML sinks also `escape_html` the final `src`. Tool-result
-images go through the same gate and, in HTML, the same export mode
-(`HtmlRenderer._format_tool_result_image`), and plugins get it from
+images go through the same gate and the same export mode
+(`HtmlRenderer._format_tool_result_image`,
+`MarkdownRenderer._tool_result_image`), and plugins get it from
 `claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
 
 Default is `referenced` for both: an HTML page or `.md` file then
@@ -934,7 +1019,7 @@ file: its timeline loads vis-timeline from the `assets/` directory
 beside it (below).
 
 Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
-from a BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
+from the BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
 exports, the encoder settings, as above) — so a given image maps to
 exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already
@@ -949,6 +1034,23 @@ restarted at `image_0001` and assigned the same names to different
 images, so the last pass to run overwrote the other's files. Content
 addressing is also what lets referenced-mode renders use the fragment
 store (§ 2.9) and the render fan-out (§ 2.10).
+
+**Images no page shows are removed**, by
+`image_export.prune_unreferenced_images`: it reads every HTML and
+Markdown page in the directory for `images/image_<digest>.<ext>`
+references and deletes the exported images none of them makes. Files
+not named like an exported image, and any modified in the last hour, are
+left alone; an exporter that reuses a file touches it, so an image a
+concurrent run is about to reference survives. Reading the pages costs
+about what writing them did, so a conversion sweeps only once per
+library version per output directory (`sweep_images_once`, which leaves
+the version in `images/.swept`): the run after an upgrade, which
+re-renders the pages and may orphan a previous encoder's files.
+`converter.sweep_project_images` runs it after each project converts
+(inline, in a pool worker, or from the CLI for one project), never for
+a date window or a single transcript. `--clear-output` prunes with no
+grace period after deleting a format's pages, so pages of the other
+format keep their images.
 
 **The timeline library is a sidecar too.** vis-timeline ships in the
 package (`html/assets/vendor/`, pinned with checksums in its
@@ -1045,6 +1147,27 @@ store-less at its pre-store footprint instead of trading its last RAM
 for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
 valve; whenever the valve trips, the render pool's far higher memory
 bar has already declined, so a store-less conversion is always serial.
+
+**What "transcript bytes" means to every memory check** (this valve,
+the streaming valve of § 2.13, the render pool's worker cap of § 2.10
+and the all-projects plan that pre-sizes it, and the parsed-entry
+store of § 2.16): the trunk files' bytes less the image base64 a parse
+does not hold (`utils.resident_transcript_bytes`). A parse holds each
+image by reference and drops a Read result's second copy (§ 2.7), and
+counts per file the characters it took out that way
+(`image_store.take_images`; a resumed parse starts from its held
+prefix's count), which the cache records in `cached_files.image_bytes`
+(migration 018). The coefficients were calibrated on what a parsed
+entry costs per byte of its line, so the base64 never belonged in the
+count: on the two most image-heavy projects measured it is 64–67% of
+the trunk bytes (35–40% image blocks, 27–29% Read copies; 30% across a
+whole 146-project archive), and the checks overestimated those
+conversions about threefold. Counted out, the worker cap's estimate
+matches again: 2.29 GB for the heavier at 8 workers, 2.37 GB measured
+(before phase 2: 3.97 GB estimated, 4.06 GB measured). With 4 GB free
+those two projects now render on 8 workers instead of 3, and with 2 GB
+on 3 instead of 1. A file the cache has no count for yet is taken
+whole, which only overestimates.
 
 A fragment is *not* a pure function of its source entry, and the store
 carries three guards for the three ways the same message legitimately

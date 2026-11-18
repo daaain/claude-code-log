@@ -209,6 +209,9 @@ env = { UV_LINK_MODE = "copy", UV_FROZEN = "1" }
 #     pyright PyPI package BUNDLES the pyright JS in its wheel and prefers a global `node`
 #     from PATH. Without one it falls back to nodeenv, which fetches a node tarball from
 #     nodejs.org — denied by the allowlist. Debian's nodejs (v20) satisfies it outright.
+#   • gh — reading and answering PR reviews and CI, given a GitHub credential: an [[inject]]
+#     row in your own foldyard.local.toml (`fy docs github-app`), whose token is injected
+#     host-side, so the box only ever holds a dummy GH_TOKEN.
 #   • the rest — what `playwright install-deps chromium` would install on Debian 13: its
 #     `tools` list (xvfb and the fonts pages and the demo videos render with) and its
 #     `chromium` list (the browser's shared libraries), as Playwright's nativeDeps declares
@@ -218,6 +221,7 @@ env = { UV_LINK_MODE = "copy", UV_FROZEN = "1" }
 packages = [
   "just",
   "nodejs",
+  "gh",
   # playwright install-deps chromium — tools
   "xvfb",
   "fonts-noto-color-emoji",

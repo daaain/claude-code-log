@@ -534,6 +534,7 @@ def test_a_file_whose_rows_fail_part_way_leaves_the_spool_whole(
                 "_level": None,
                 "_operation": None,
                 "content": b"x" * 2048,
+                "image_refs": None,
             }
 
     spool.add(record, rows(10), mode="replace")
@@ -780,7 +781,10 @@ def test_migration_016_heals_a_project_015_left_pending_and_drops_the_flag(
     016 drops the flag, and keeps that heal by zeroing the marked
     project's total, which the next run reads as a cache to refresh in
     full, from the cached entries."""
-    from claude_code_log.migrations.runner import get_current_version, run_migrations
+    from claude_code_log.migrations.runner import (
+        get_applied_migrations,
+        run_migrations,
+    )
 
     projects_dir = project.parent
     db_path = projects_dir / "cache.db"
@@ -798,7 +802,7 @@ def test_migration_016_heals_a_project_015_left_pending_and_drops_the_flag(
         conn.execute("DELETE FROM _schema_version WHERE version = 16")
     assert run_migrations(db_path) == 1
     with sqlite3.connect(db_path) as conn:
-        assert get_current_version(conn) == 16
+        assert 16 in {version for version, _ in get_applied_migrations(conn)}
         columns = [row[1] for row in conn.execute("PRAGMA table_info(projects)")]
         assert "refresh_pending" not in columns
         assert conn.execute("SELECT total_message_count FROM projects").fetchone() == (

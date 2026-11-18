@@ -180,9 +180,6 @@ cython_debug/
 .examples
 test_output
 .DS_Store
-test/test_data/*.html
-# Vendored front-end assets the tests copy beside those pages
-test/test_data/assets/
 .claude-trace
 .specstory
 

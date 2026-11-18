@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from .render_pool import RenderPool, RenderUnit, memory_capped_workers
-from .utils import project_transcript_bytes
+from .utils import resident_transcript_bytes
 
 if TYPE_CHECKING:
     from .cache import CacheManager
@@ -137,7 +137,9 @@ def build_render_pool(
     if message_count < _MIN_MESSAGES_FOR_RENDER_POOL:
         return None
 
-    transcript_bytes = project_transcript_bytes(input_path)
+    transcript_bytes = resident_transcript_bytes(
+        input_path, cache_manager.image_bytes_by_file()
+    )
     max_workers = memory_capped_workers(max_workers, transcript_bytes)
     if max_workers <= 1:
         return None

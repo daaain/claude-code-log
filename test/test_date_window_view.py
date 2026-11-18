@@ -587,9 +587,9 @@ def test_the_refusal_names_the_file_and_both_ways_out(projects: Path) -> None:
 def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
     projects: Path,
 ) -> None:
-    """For a project, ``--output`` names the combined page only: its
-    session pages are written into the project whatever it names, so a
-    refusal there offers the combined page alone instead."""
+    """For a project, an ``--output`` *file* names the combined page only:
+    its session pages are written into the project, so a refusal there
+    offers an output directory, or the combined page alone."""
     _full(projects)
     result = CliRunner().invoke(
         main,
@@ -607,6 +607,7 @@ def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
     assert str(projects / "-mixed" / "session-s-day2.html") in result.output
     assert "--force" in result.output
     assert "--combined only" in result.output
+    assert "--output directory" in result.output
     assert "another --output" not in result.output
 
 
@@ -614,7 +615,8 @@ def test_the_refusal_for_one_project_s_session_pages_alone_offers_force(
     projects: Path,
 ) -> None:
     """With ``--combined no`` there is no combined page to send elsewhere,
-    and the session pages go into the project: only --force is left."""
+    and the session pages go into the project unless an output directory
+    is given: --force or such a directory are left."""
     _full(projects)
     result = CliRunner().invoke(
         main,
@@ -631,8 +633,37 @@ def test_the_refusal_for_one_project_s_session_pages_alone_offers_force(
     assert result.exit_code == 1, result.output
     assert str(projects / "-mixed" / "session-s-day2.html") in result.output
     assert "--force" in result.output
+    assert "--output directory" in result.output
     assert "--combined only" not in result.output
     assert "another --output" not in result.output
+
+
+def test_an_output_directory_takes_one_project_s_whole_view(
+    projects: Path, tmp_path: Path
+) -> None:
+    """A suffix-less ``--output`` is a directory for one project as it is
+    for --all-projects: the view's session pages go there with its combined
+    page, so the full view in the project is neither refused nor touched."""
+    mixed = projects / "-mixed"
+    _full(projects)
+    before = {p.name: p.stat().st_mtime_ns for p in mixed.glob("*.html")}
+    view = tmp_path / "view"
+    result = CliRunner().invoke(
+        main,
+        [
+            str(mixed),
+            "-o",
+            str(view),
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (view / "combined_transcripts.html").exists()
+    assert _session_ids(set(_pages(view))) == INSIDE
+    assert {p.name: p.stat().st_mtime_ns for p in mixed.glob("*.html")} == before
 
 
 def test_force_is_accepted_with_a_window_only(projects: Path) -> None:

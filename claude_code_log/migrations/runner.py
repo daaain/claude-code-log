@@ -54,6 +54,28 @@ def check_sqlite_version(
     )
 
 
+def check_json1() -> None:
+    """Raise `SQLiteTooOldError` when SQLite lacks the JSON functions.
+
+    The image store (migration 017) expands ``messages.image_refs`` with
+    ``json_each``. JSON1 is built into SQLite from 3.38 and compiled into
+    CPython's own builds before that, but ``MIN_SQLITE_VERSION`` is 3.35,
+    so a build without it is possible: say so up front rather than fail
+    mid-merge.
+    """
+    probe = sqlite3.connect(":memory:")
+    try:
+        probe.execute("SELECT value FROM json_each('[1]')").fetchall()
+    except sqlite3.OperationalError as exc:
+        raise SQLiteTooOldError(
+            "the cache needs SQLite's JSON functions (json_each), which this "
+            f"Python's SQLite {sqlite3.sqlite_version} lacks ({exc}); use a "
+            "Python built with a SQLite that has them"
+        ) from None
+    finally:
+        probe.close()
+
+
 def cache_busy_timeout() -> float:
     """Seconds a cache connection waits on a lock before giving up.
 
@@ -257,10 +279,12 @@ def run_migrations(db_path: Path) -> int:
         Number of migrations applied
 
     Raises:
-        SQLiteTooOldError: SQLite is older than ``MIN_SQLITE_VERSION``;
-            raised before the database is opened, so nothing is touched.
+        SQLiteTooOldError: SQLite is older than ``MIN_SQLITE_VERSION``, or
+            lacks the JSON functions; raised before the database is opened,
+            so nothing is touched.
     """
     check_sqlite_version()
+    check_json1()
     conn = sqlite3.connect(db_path, timeout=cache_busy_timeout())
     # Everything after the connect goes inside the try, so no failure can
     # leave the handle open. That matters most for the pragmas: they are the

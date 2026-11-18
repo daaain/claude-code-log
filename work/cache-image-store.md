@@ -1,9 +1,29 @@
 # Cache image store: images out of the entry blobs
 
-**Status:** proposal. The first, cheap step shipped with the AVIF image
-export (branch `feat/hashed-images`): Read results drop
-`toolUseResult.file.base64` at parse time (`UserTranscriptEntry`
-validator, `_CONTENT_SCHEMA_SALT` 2). This doc is the rest.
+**Status:** phase 1 built (issue #418): migration 017,
+`cache_images.py`, `_CONTENT_SCHEMA_SALT` 3, documented as built in
+dev-docs/application_model.md § 2.3. Phase 2 (lazy images) built too,
+converting at parse time: `image_store.py`, documented in
+dev-docs/application_model.md § 2.7 and dev-docs/plugins.md § 4.1; how
+it differs from the plan is under "Phase 2 as built" below. The first,
+cheap step shipped with the AVIF image export
+(#416): Read results drop `toolUseResult.file.base64` at parse time
+(`UserTranscriptEntry` validator, `_CONTENT_SCHEMA_SALT` 2).
+
+Where phase 1 as built differs from the proposal below:
+
+- **Small images stay inline**: a source under 2 KB of base64 costs less
+  in its row than as a blob plus a reference. So does any source that
+  would not round-trip exactly (another key, non-canonical base64).
+- **The blob lookup is a bound list, not `json_each` over the rows**,
+  chunked at 500 digests; the merge and the sweep do use `json_each`.
+- **No shared read transaction** for a batch's rows and blobs. The
+  sweep's marking makes a miss take a reader holding its rows for the
+  whole grace period, and a miss is caught: `_entries_for_file` returns
+  None (the file reads as not cached and is parsed again), and an
+  archived session's image becomes a placeholder.
+- **`VACUUM` is no longer manual**: a pass compacts a sparse cache
+  (`cache.compact_cache`, also from #418).
 
 ## Why
 
@@ -198,6 +218,161 @@ bytes, so either version lets more projects take the fast paths on warm
 runs; only the second helps a cold run. Phase 2 touches the public
 `ImageSource` model and the plugin contract, so it needs its own review;
 phase 1 stands without it.
+
+### Phase 2: decisions and measurements (2026-11-17)
+
+**Decided:** convert at parse time, so every entry downstream carries a
+reference, cold runs included; and change the plugin contract outright,
+documented, with no compatibility layer. Nothing in this repo or the
+README's community extensions reads image bytes through the plugin API
+(the test plugin `clmail` and the built-in Codex one never touch images;
+archive-session drives the CLI).
+
+**Measured** on the archive's two most image-heavy projects (43% of
+their JSONL bytes is image base64), 8 cores, 16 GB, peak RSS summed over
+the process tree. "refs" is the same project with every image's base64
+replaced by a 1×1 PNG: an upper bound for phase 2, since it also skips
+parsing the base64, which convert-at-parse still pays once.
+
+| danieldemmel-me-next (1.29 GB) | bytes | refs |
+|---|---|---|
+| Cold, images already exported | 26.0 s, 3.85 GB | 17.1 s, 2.24 GB |
+| Warm, render every page | 11.0 s, 3.80 GB | 7.6 s, 2.40 GB |
+| Warm, serial (`RENDER_JOBS=1`) | 17.3 s, 1.52 GB | 12.0 s, 0.82 GB |
+| Watch tick (+1 message) | 10.0 s, 0.94 GB | 7.5 s, 0.65 GB |
+
+| feedback-loop-talk (1.06 GB) | bytes | refs |
+|---|---|---|
+| Warm, render every page | 9.6 s, 2.71 GB | 6.3 s, 1.34 GB |
+| Warm, serial | 8.7 s, 1.17 GB | 6.0 s, 0.70 GB |
+| Watch tick (+1 message) | 15.4 s, 1.13 GB | 9.6 s, 0.59 GB |
+
+So 25–38% off the time and 31–51% off peak memory, varying by path
+rather than uniform: the smallest gains are the first project's watch
+tick (25% time, 31% memory), the largest the second project's watch
+tick (38% time) and parallel warm render (51% memory). The parallel
+render holds 2.3–2.5x what the serial one does. A cold run that encodes
+the images (56 s for the first project) is dominated by AVIF encoding,
+which phase 2 does not change.
+
+**Gotchas found on the way:**
+
+- Bytes are read in more places than `source.data`: tool-result images
+  are plain dicts in `ToolResultContent.content` (`source["data"]`), the
+  Codex provider builds `ImageSource`s, `--format json` dumps entries
+  with `model_dump` and must write the bytes back, and the fragment
+  store's `content_digest` hashes every image on every pass (a reference
+  makes that cheap, and changes no key).
+- Exported file names must come from the reference's digest, not the
+  bytes, or a warm render still needs the bytes: one rename of every
+  exported image (`_ENCODING_REVISION` bump; the sweep removes the old
+  files).
+- Render workers are fed, not self-loading. A worker that meets an image
+  not yet on disk needs the bytes: either a read-only cache connection
+  in the worker, or the parent exporting every image before fanning out
+  (simpler, and exports are content-addressed, so it never repeats).
+- A cold parse has no cache rows yet: the parse-time pool has to hold
+  each image's bytes until the refresh writes its blob, and entries
+  parsed outside a conversion (tests, the TUI, plugins) need a pool too.
+
+### Phase 2 as built
+
+- **The swap runs on the raw JSONL dict**, before validation, not in a
+  model validator (`image_store.take_images`, gated on the line's text
+  holding `"base64"`, like the cache's own gate). It covers a tool
+  result's image dicts and `toolUseResult` the same way as
+  `message.content`, with the rules of phase 1's swap (exact, ≥ 2 KB),
+  and a `ref` source in a transcript, which Claude Code never writes, is
+  emptied there rather than trusted.
+- **Two models, not an optional field**: `ImageContent.source` is
+  `ImageSource` (inline, as before) or `ImageRef` (`type: "ref"`,
+  `digest`, `media_type`), a union on `type`. So a cached row and an
+  entry in memory are the same JSON, phase 1's rows load unchanged (no
+  salt bump), and type checkers find every `source.data` reader. The
+  digest must be 32 hex characters: it ends up in file names.
+- **The pool is per process, not per conversion**, with an explicit
+  release: bytes are held from the parse until a cache write that stores
+  them commits (`write_transaction` hands the digests to
+  `image_store.release`; `atomic_refresh` releases the spool's after its
+  merge), and `convert_jsonl_to` lets go of any still held when it
+  returns (a run without a cache). A rolled-back write keeps them.
+- **Bytes come back from the cache on demand**, one image per read-only
+  connection, opened and closed at once (a lingering handle would stop
+  the cache being deleted on Windows), with the last 32 MB read kept for
+  the session-file pass. Every `CacheManager` registers its database, so
+  a render worker's read-only one makes the parent's images readable
+  there; the pool also hands workers any image the parent still holds.
+  Nothing exports images before fanning out.
+- **Exported names hash the source digest**, so names changed without an
+  `_ENCODING_REVISION` bump; Markdown's plain exports take the digest's
+  first 16 hex digits. The once-per-version sweep removes the old files.
+- **`--format json` writes images out whole** (`JsonRenderer` inlines
+  them), so its output is unchanged.
+- **A `ref` source in a transcript is forged** and emptied at parse time;
+  `ImageRef.digest` must be 32 hex characters (it reaches file names).
+
+**Measured as built**, the same two projects and machine as the
+experiment (8 cores, 16 GB), against the branch before phase 2
+(dbf3cae), with real image bytes in both and the memory-check change
+below included. Medians of three runs, except the first run (one
+each); peak RSS is summed over the process tree. "First run" encodes
+every image; "cold" re-parses with the images already exported; each
+tick appends one message to the largest session.
+
+| danieldemmel-me-next (1.29 GB) | before | phase 2 | time | peak |
+|---|---|---|---|---|
+| First run | 56.2 s, 3.89 GB | 52.2 s, 2.71 GB | −7% | −30% |
+| Cold, images on disk | 27.3 s, 4.05 GB | 22.1 s, 2.33 GB | −19% | −42% |
+| Warm, render every page | 10.9 s, 4.06 GB | 8.2 s, 2.37 GB | −25% | −42% |
+| Warm, serial | 16.7 s, 1.41 GB | 13.6 s, 0.83 GB | −19% | −41% |
+| Watch tick (+1 message) | 10.3 s, 0.90 GB | 7.1 s, 0.48 GB | −31% | −47% |
+
+| feedback-loop-talk (1.06 GB) | before | phase 2 | time | peak |
+|---|---|---|---|---|
+| First run | 43.1 s, 2.99 GB | 40.7 s, 1.89 GB | −6% | −37% |
+| Cold, images on disk | 19.6 s, 2.94 GB | 16.3 s, 1.48 GB | −17% | −50% |
+| Warm, render every page | 9.5 s, 2.82 GB | 7.1 s, 1.49 GB | −25% | −47% |
+| Warm, serial | 8.8 s, 1.18 GB | 6.7 s, 0.63 GB | −24% | −47% |
+| Watch tick (+1 message) | 15.3 s, 1.40 GB | 11.5 s, 0.76 GB | −25% | −46% |
+
+So, excluding the first run, 17–31% off the time and 41–50% off peak
+memory. The first run is dominated by AVIF encoding and gains 6–7% in
+time, 30–37% in memory. Peak memory lands on the experiment's upper
+bound (the first project's cold run: 2.33 GB against 2.24 GB). Time
+does not on a cold run (22.1 s against 17.1 s), which still decodes and
+hashes every image once, and falls a little short warm (8.2 s against
+7.6 s). Single runs vary: one tick measured 0.69 GB and then 0.84 GB,
+hence the medians. Pages are byte-identical before and after (39 + 10
+pages, 2,174 images) once each exported image's name is replaced by a
+hash of its content, and every reference resolves to a file.
+
+**The memory checks size from what a parse holds** (follow-up, same
+PR): the fragment-store and streaming valves, the fan-out's worker cap,
+the all-projects plan and the entry store used to count image base64,
+64–67% of the trunk bytes on these two projects (35–40% image blocks,
+27–29% Read copies) and 30% across the whole archive (3.86 GB of trunk
+files in 146 projects, 2.71 GB without). The parse counts each file's
+(`take_images`), the cache records it (migration 018,
+`cached_files.image_bytes`), and the checks take it off
+(`utils.resident_transcript_bytes`); see dev-docs/application_model.md
+§ 2.9.
+
+The worker cap's estimate then matches what phase 2 holds, as the old
+one matched what the branch before it held. For the first project at
+8 workers it estimates 2.29 GB (the parent at 4.5× its 86 MB resident
+plus 150 MB, each worker at 0.8× plus 150 MB), against 2.37 GB measured. The old estimate,
+3.97 GB from 241 MB, matched the 4.06 GB measured before phase 2. On
+this 16 GB machine none of the checks binds for these projects, so the
+tables above are unchanged by it. Applied to the whole archive with less
+free memory, the checks change these decisions:
+
+| Free memory | Worker cap raised | Fragment store kept (streaming not forced) |
+|---|---|---|
+| 0.5 GB | none | 4 projects, both measured ones among them |
+| 1 GB | 7 projects | 1 project |
+| 2 GB | 12 projects, the two measured ones 1 → 3 | none |
+| 4 GB | 8 projects, the two measured ones 3 → 8 | none |
+| 8 GB | 2 projects | none |
 
 ### Garbage collection
 

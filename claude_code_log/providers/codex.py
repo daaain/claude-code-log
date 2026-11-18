@@ -8,7 +8,6 @@ shapes for which it has useful semantics.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from fnmatch import fnmatch
 import json
@@ -19,11 +18,12 @@ from pathlib import Path
 import re
 from typing import Any, Iterator, Optional, TypeAlias, cast
 
+from claude_code_log.image_store import hold_image
 from claude_code_log.models import (
     AssistantTranscriptEntry,
     ContentItem,
     ImageContent,
-    ImageSource,
+    ImageRef,
     TextContent,
     ToolResultContent,
     ToolUseResult,
@@ -2397,13 +2397,9 @@ class CodexProvider(BaseProvider):
             data = path.read_bytes()
         except OSError:
             return None
+        # Held by reference like a parsed transcript's images (`image_store`).
         return ImageContent(
-            type="image",
-            source=ImageSource(
-                type="base64",
-                media_type=media_type,
-                data=base64.b64encode(data).decode("ascii"),
-            ),
+            type="image", source=ImageRef.model_validate(hold_image(data, media_type))
         )
 
     def _event_message_fingerprint(

@@ -33,6 +33,7 @@ from .converter import (
     get_file_extension,
     get_index_filename,
     process_projects_hierarchy,
+    sweep_project_images,
 )
 from .cache import (
     CacheManager,
@@ -781,26 +782,55 @@ def _clear_caches(input_path: Path, all_projects: bool) -> None:
         click.echo(f"Warning: Failed to clear cache: {e}")
 
 
-def _list_generated_outputs(directory: Path, file_ext: str) -> list[Path]:
+def _list_generated_outputs(
+    directory: Path, file_ext: str, *, strict: bool = False
+) -> list[Path]:
     """Return only files this tool generates, not every file with the extension.
 
     Safe for JSON in particular, where the project directory may contain
-    unrelated user `.json` files that must not be deleted.
+    unrelated user `.json` files that must not be deleted. ``strict``
+    applies the same naming rule to every format: for a directory
+    ``--output``, which may be a vault of the user's own pages.
     """
-    if file_ext == "json":
+    if file_ext == "json" or strict:
         return [
-            *directory.glob("combined_transcripts*.json"),
-            *directory.glob("session-*.json"),
+            *directory.glob(f"combined_transcripts*.{file_ext}"),
+            *directory.glob(f"session-*.{file_ext}"),
         ]
     return list(directory.glob(f"*.{file_ext}"))
 
 
+def _clear_unreferenced_images(directory: Path, file_ext: str) -> int:
+    """After a format's pages are cleared from ``directory``, remove the
+    exported images that no page left there shows (pages of another
+    format keep theirs)."""
+    if file_ext not in ("html", "md"):
+        return 0
+    from .image_export import prune_unreferenced_images
+
+    return prune_unreferenced_images(directory, grace_seconds=0) or 0
+
+
 def _clear_output_files(
-    input_path: Path, all_projects: bool, output_format: str
+    input_path: Path,
+    all_projects: bool,
+    output_format: str,
+    *,
+    output_dir: Optional[Path] = None,
 ) -> None:
-    """Clear generated output files (HTML/Markdown/JSON) for the specified path."""
+    """Clear generated output files (HTML/Markdown/JSON) for the specified path,
+    and the exported images only they showed. ``output_dir`` is a directory
+    ``--output`` for one project or file: its pages are cleared there."""
     file_ext = get_file_extension(output_format)
     ext_upper = file_ext.upper()
+    if output_dir is not None and not all_projects:
+        if input_path.is_file():
+            input_path = output_dir / input_path.name
+        elif output_dir.is_dir():
+            input_path = output_dir
+        else:
+            click.echo(f"No {ext_upper} files found to remove")
+            return
     try:
         if all_projects:
             # Clear output files for all project directories
@@ -819,10 +849,15 @@ def _clear_output_files(
                     for output_file in output_files:
                         output_file.unlink()
                         total_removed += 1
+                    images_removed = _clear_unreferenced_images(project_dir, file_ext)
 
                     if output_files:
                         click.echo(
                             f"  Removed {len(output_files)} {ext_upper} files from {project_dir.name}"
+                        )
+                    if images_removed:
+                        click.echo(
+                            f"  Removed {images_removed} images from {project_dir.name}"
                         )
                 except Exception as e:
                     click.echo(
@@ -846,14 +881,19 @@ def _clear_output_files(
         elif input_path.is_dir():
             # Clear output files for single directory
             click.echo(f"Clearing {ext_upper} files for {input_path}...")
-            output_files = _list_generated_outputs(input_path, file_ext)
+            output_files = _list_generated_outputs(
+                input_path, file_ext, strict=output_dir is not None
+            )
             for output_file in output_files:
                 output_file.unlink()
+            images_removed = _clear_unreferenced_images(input_path, file_ext)
 
             if output_files:
                 click.echo(f"Removed {len(output_files)} {ext_upper} files")
             else:
                 click.echo(f"No {ext_upper} files found to remove")
+            if images_removed:
+                click.echo(f"Removed {images_removed} images")
         else:
             # Single file - remove corresponding output file
             output_file = input_path.with_suffix(f".{file_ext}")
@@ -998,10 +1038,11 @@ def main() -> None:
         "Output destination. Use '-' (or /dev/stdout) to stream the "
         "rendered document to stdout (status goes to stderr) for piping. "
         "With a recognised file suffix (.html/.md/.markdown/.json) treated "
-        "as a single output file; otherwise treated as a directory root "
-        "(and now also honoured for --all-projects, where outputs land at "
-        "<output>/<project>/...). Pair with --expand-paths to project "
-        "back to the real on-disk tree."
+        "as a single output file (for a project directory, its combined "
+        "page; the session pages stay beside the transcripts); otherwise "
+        "treated as a directory that every page is written under (for "
+        "--all-projects, at <output>/<project>/...). Pair with "
+        "--expand-paths to project back to the real on-disk tree."
     ),
 )
 @click.option(
@@ -1099,7 +1140,11 @@ def main() -> None:
     "--clear-html",
     "clear_output",
     is_flag=True,
-    help="Clear generated output files (HTML or Markdown based on --format) and force regeneration",
+    help=(
+        "Clear generated output files (HTML or Markdown based on --format), "
+        "and the exported images no remaining page shows, and force "
+        "regeneration"
+    ),
 )
 @click.option(
     "--tui",
@@ -1957,7 +2002,19 @@ def convert(
 
         # Handle output files clearing
         if clear_output:
-            _clear_output_files(input_path, all_projects, output_format)
+            # For one project or file, a directory --output is where its
+            # pages went (as for the conversion below), so it is what clears.
+            clear_dir = (
+                output
+                if output is not None
+                and not all_projects
+                and not _is_stdout_target(output)
+                and not _output_path_is_file(output)
+                else None
+            )
+            _clear_output_files(
+                input_path, all_projects, output_format, output_dir=clear_dir
+            )
             if clear_output and not (from_date or to_date or input_path.is_file()):
                 # If only clearing output files, exit after clearing
                 file_ext = get_file_extension(output_format)
@@ -2152,11 +2209,15 @@ def convert(
         # print a success line on top of its own "is current, skipping
         # regeneration" line, and don't claim to have "combined" anything
         # when only session files were written.
+        # A suffix-less --output is a directory: every page goes under it,
+        # the session pages too, as it does for --all-projects. A file
+        # suffix names the combined page (or the single transcript's page).
+        output_is_dir = output is not None and not _output_path_is_file(output)
         report = RegenerationReport()
         output_path = convert_jsonl_to(
             output_format,
             input_path,
-            output,
+            None if output_is_dir else output,
             from_date,
             to_date,
             write_individual,
@@ -2168,19 +2229,21 @@ def convert(
             # User's `-o` path is a one-off export, not a cached artifact:
             # don't occupy a cache slot keyed by an arbitrary destination.
             update_cache=output is None,
+            output_root=output if output_is_dir else None,
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
             theme=resolved_theme,
-            # An explicit `-o` *file* always regenerates: the version-marker
-            # skip only knows the embedded version, not which source produced
-            # the file, so it would keep stale content at a user-chosen path
-            # (issue #221). Scoped to file destinations — directory exports
-            # keep the cache's per-source incremental skip (is_transcript_stale),
-            # which already tracks the source (a different transcript to the
-            # same dir still regenerates), and `--all-projects` calls this
-            # with output=None anyway, so its skip is never forced.
-            force_regenerate=output is not None and _output_path_is_file(output),
+            # An explicit `-o` always regenerates: the version-marker skip
+            # only knows the embedded version, not which source produced the
+            # file, so it would keep stale content at a user-chosen path
+            # (issue #221). A directory too: a single transcript's page is
+            # named after the file alone, and a project's combined page
+            # after nothing of the project, while the cache's skip
+            # (is_transcript_stale) checks the version and the message
+            # count, which another source can match. `--all-projects` calls
+            # this with output=None, so its skip is never forced.
+            force_regenerate=output is not None,
             report=report,
             # A single-project conversion has the whole machine to itself,
             # so `--jobs` is the cap for its render fan-out. Whether that
@@ -2192,6 +2255,13 @@ def convert(
                 min(jobs, resolve_render_jobs(None)) if jobs is not None else None
             ),
             force=force,
+        )
+        sweep_project_images(
+            input_path,
+            output if output_is_dir else None,
+            output_format,
+            from_date,
+            to_date,
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so
