@@ -82,8 +82,10 @@ def test_a_filtered_pass_renders_an_unchanged_project_active_in_the_window(
         assert "reply 0" not in text, f"session-{sid} was not filtered"
     # The idle project is left exactly as it was, and said to be so.
     assert _outputs(idle, shape) == idle_before
-    assert f"{IDLE}: no messages in the window" in out, out
-    assert f"{IDLE}: cached" not in out, out
+    # Rolled up with the other untouched projects, not named on its own.
+    assert "  1 project with no messages in the window (" in out, out
+    assert "cached" not in out, out
+    assert f"{IDLE}:" not in out, out
 
 
 @pytest.mark.parametrize("shape", ["md-sessions", "html-combined"])
@@ -111,9 +113,12 @@ def test_a_filtered_pass_leaves_an_idle_project_current(
     capsys.readouterr()
     _run(active.parent, shape)
     out = capsys.readouterr().out
-    assert f"{IDLE}: cached" in out, out
-    # Control: the active project, rendered from the window, is redone.
-    assert f"{active.name}: cached" not in out, out
+    # The idle project is the one the rollup counts...
+    assert "  1 project cached (" in out, out
+    assert f"{IDLE}:" not in out, out
+    # ...and the control, the active project rendered from the window, is
+    # redone, so it gets its own line.
+    assert f"{active.name}:" in out, out
     for sid in SESSIONS:
         text = (active / f"session-{sid}.{ext}").read_text(encoding="utf-8")
         assert "reply 0" in text

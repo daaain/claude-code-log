@@ -161,12 +161,13 @@ not already hold. That check (`_window_view_files`: the index pages,
 each shown project's combined page and its window's session pages, not
 the vendored assets) runs before anything is written and raises
 `WindowOutputExists` unless the run is forced; nothing is ever removed.
-A project the window shows nothing of is not converted, is reported as
+A project the window shows nothing of is not converted, is counted as
 having no messages in the window and is left out of the index, which
 gives each listed project the window's totals; archived projects are
 left out too. Workers
-run silent; the parent prints one progress line per project as results
-arrive. All workers share the WAL-mode SQLite cache DB — each writes
+run silent; the parent prints one progress line per converted project
+as results arrive, after a single line counting the projects it had
+nothing to do for (cached, or with no messages in the window). All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
 transactions. Serialised is not the same as fair, though. SQLite does
 not queue writers: one that finds the lock taken polls with a growing

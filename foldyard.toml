@@ -6,8 +6,9 @@
 #      mounted, no push credential. `fy verify` proves the cage. The first `fy box up`
 #      offers you the handful of hosts the box needs to build itself ([proxy] below) —
 #      one yes each and it comes up walled and working. Poke around; nothing escapes.
-#   2. Uncomment ONE agent ([claude] or [codex]) + `fy box up` again — now an AI agent
-#      runs INSIDE the safe sandbox (it offers that agent's install hosts the same way).
+#   2. Uncomment ONE agent ([claude] or [codex]), `fy config adopt`, then `fy box recreate`
+#      (an agent is installed when the box is created) — now an AI agent runs INSIDE the
+#      safe sandbox (it offers that agent's install hosts the same way).
 #      Use it to work out the rest of this config with you.
 #   3. Uncomment a stack + the features at the bottom as the project needs them.
 # Resolution everywhere: explicit env var wins → foldyard.local.toml (gitignored,
@@ -28,21 +29,20 @@ prefix = "claude-code-log"
 #   compose = ["compose.yml"]  # compose files in -f order, relative to this dir
 # A floor, not a pin: `fy` refuses to run in this checkout below it. Raise it in the same
 # commit as a setting that needs it — an older `fy` silently ignores keys it doesn't know.
-min_foldyard_version = "0.5.0"
+min_foldyard_version = "0.11.0"
 
 [project.foldyard_version_reasons]
-"0.5.0" = "[box].packages: system packages baked into a cached image layer instead of installed by every fresh box"
-"0.4.0" = "egress-proxy security fixes (0.3.2); renamed [machine] firewall / [proxy] enforce keys; box shows host timezone"
+"0.6.0" = "security: a box could get files on your computer copied into its transcript archive; `fy docs github-app`"
+"0.7.0" = "security: `fy worktree add`/`remove` ran the repo's hooks on your computer; worktree port offsets recorded, never shared"
+"0.8.0" = "security: a box could read registry logins during a build, reach your loopback/LAN, and ask for git credentials"
+"0.11.0" = "`fy box recreate`, which the setup steps and `fy mode` point at"
 
 [machine]
-# A rootless VM that mounts ONLY this repo. Default here is the Lima backend + an in-VM
-# egress FIREWALL: fail-closed, so the box's only way out is the host's allowlisting proxy
-# (below). Sizing applies at FIRST creation; to resize later: `foldyard machine recreate`.
-#   backend = "podman"  # the single shared podman machine — no concurrent per-project
-#                       # VMs, and no in-VM firewall (egress is the host-side proxy + gvproxy)
-#   firewall = false    # lima but COOPERATIVE-only: the box uses the proxy, but nothing
-#                       # stops a process that ignores it (the firewall makes it fail-closed)
-backend = "lima"
+# A rootless Lima VM that mounts ONLY this repo, with an in-VM egress FIREWALL: fail-closed,
+# so the box's only way out is the host's allowlisting proxy (below). Sizing applies at
+# FIRST creation; to resize later: `fy machine recreate`.
+#   firewall = false    # COOPERATIVE-only: the box uses the proxy, but nothing stops a
+#                       # process that ignores it (the firewall makes it fail-closed)
 firewall = true
 name = "claude-code-log"
 cpus = 8
@@ -85,17 +85,17 @@ recommend = [
   { host = "ghcr.io", why = "box image build — the uv binary image layer" },
   { host = "pkg-containers.githubusercontent.com", why = "box image build — ghcr.io blob storage" },
   { host = "cdn.playwright.dev", why = "playwright browser bundles" },
-  { host = "downloads.claude.ai", why = "claude --upgrade / claude plugin — public CDN of signed release artefacts (NOT the keyless host; api.anthropic.com is implicit)" },
 ]
-# passthrough = ["@jvm", "@linux"]   # the default since 0.4.0: hosts tunnelled UN-decrypted;
+# passthrough = ["@jvm", "@linux"]   # the default: hosts tunnelled UN-decrypted;
 #                                    # everything else (uv, npm, git, playwright…) is decrypted
 #                                    # + logged. A cert error naming `mitmproxy` means a tool
 #                                    # needs its bundle here (or `["@all"]` for the old behaviour)
 
-# ── Agents — uncomment ONE, then `fy box up` (step 2) ────────────────────────────────────
+# ── Agents — uncomment ONE, then `fy config adopt` + `fy box recreate` (step 2) ──────────
 # Claude Code (`fy claude`). Declaring [claude] installs it on box-up + mounts its persisted
-# login/transcripts. Keyless: the real token is injected at the host proxy, NEVER in the box
-# (`fy box up` prompts once, hidden; stored only on the host). Then `fy mode claude=on`.
+# login/transcripts, and offers its own install hosts (claude.ai, downloads.claude.ai) — don't
+# list them in `recommend`. Keyless: the real token is injected at the host proxy, NEVER in
+# the box (`fy mode claude=on` prompts once, hidden; stored only on the host).
 # system_prompt is appended via --append-system-prompt, so a fresh `fy claude` starts
 # oriented instead of re-deriving the box and getting it wrong. The one below WORKS as
 # written for a BOX-ONLY project — uncomment and go. It says nothing about a stack, so it
@@ -110,8 +110,8 @@ prompts skipped. Orientation, so you don't have to re-derive it:
 
 `fy` works in here for the read and box verbs: `fy verify`, `fy box shell|ps|down`, and
 `fy mode` to SEE the credential posture — posture is SET from the host, not from in here,
-and so are egress grants. A second checkout beside this one is `fy worktree add <name>`,
-then `WORKTREE=<name> fy <verb>`.
+and so are egress grants. A second checkout beside this one is made from the host too
+(`fy worktree add <name>`, refused in here); then `WORKTREE=<name> fy <verb>`.
 
 Git: read and commit locally, but you CANNOT push — no credential in here reaches the
 origin, by design. Push from the host.
@@ -131,8 +131,8 @@ SKILL in .claude/skills/ (the model — posture, egress, why a change didn't tak
 [claude.settings]
 showThinkingSummaries = true
 
-# OpenAI Codex CLI (`fy codex`). Declaring [codex] installs it on box-up + mounts ~/.codex.
-# Needs node in the box. Keyless like Claude — the proxy injects host-side.
+# OpenAI Codex CLI (`fy codex`). Declaring [codex] installs it on box-up (native installer,
+# no node) + mounts ~/.codex. Keyless like Claude — the proxy injects host-side.
 [codex]
 keyless = "chatgpt"  # your ChatGPT subscription: the minter refreshes ~/.codex/auth.json
 transcript_sync_seconds = 10
@@ -142,8 +142,8 @@ prompts skipped. Orientation, so you don't have to re-derive it:
 
 `fy` works in here for the read and box verbs: `fy verify`, `fy box shell|ps|down`, and
 `fy mode` to SEE the credential posture — posture is SET from the host, not from in here,
-and so are egress grants. A second checkout beside this one is `fy worktree add <name>`,
-then `WORKTREE=<name> fy <verb>`.
+and so are egress grants. A second checkout beside this one is made from the host too
+(`fy worktree add <name>`, refused in here); then `WORKTREE=<name> fy <verb>`.
 
 Git: read and commit locally, but you CANNOT push — no credential in here reaches the
 origin, by design. Push from the host.
