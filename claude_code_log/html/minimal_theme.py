@@ -254,22 +254,18 @@ def _in_out(parts: dict[str, int]) -> tuple[int, int]:
     return total_in, parts.get("output", 0)
 
 
-_ROUGH_DECIMAL = re.compile(r"^(\d{2,})\.\d([kMB])$")
-
-
-def _rough_count(value: int) -> str:
-    """``compact_count`` without a decimal once the value is at least 10k."""
-    return _ROUGH_DECIMAL.sub(r"\1\2", compact_count(value))
+def _gutter_count(value: int) -> str:
+    """Compact gutter number: one decimal below 10k, rounded above it."""
+    return compact_count(value, decimal_threshold=10)
 
 
 def compact_token_usage(token_usage: Optional[str]) -> str:
     """Compact token usage while keeping cache reuse and new input distinct.
 
     ``Cache Read`` is shown before the ``+`` and ``Input`` plus ``Cache
-    Creation`` after it, so ``97k+20k 364`` means 97k reused tokens and 20k
-    new input tokens, with 364 output tokens. A leading ``+`` marks a turn
-    that created cache without reading any. The full breakdown stays
-    available as the gutter's tooltip.
+    Creation`` after it, so ``98k+20k · 364`` means about 98k reused tokens
+    and 20k new input tokens, with 364 output tokens. A leading ``+`` marks
+    a turn that created cache without reading any.
     """
     if not token_usage:
         return ""
@@ -280,15 +276,38 @@ def compact_token_usage(token_usage: Optional[str]) -> str:
     cache_creation = parts.get("cache creation", 0)
     new_input = parts.get("input", 0) + cache_creation
     total_out = parts.get("output", 0)
-    has_cache = "cache read" in parts or "cache creation" in parts
     if cache_read and new_input:
-        context = f"{_rough_count(cache_read)}+{_rough_count(new_input)}"
+        context = f"{_gutter_count(cache_read)}+{_gutter_count(new_input)}"
     elif new_input and cache_creation:
-        context = f"+{_rough_count(new_input)}"
+        context = f"+{_gutter_count(new_input)}"
     else:
-        context = _rough_count(cache_read + new_input)
-    separator = " " if has_cache else " · "
-    return f"{context}{separator}{compact_count(total_out)}"
+        context = _gutter_count(cache_read + new_input)
+    return f"{context} · {_gutter_count(total_out)}"
+
+
+def token_usage_tooltip(token_usage: Optional[str]) -> str:
+    """Explain the compact minimal gutter figures without changing classic."""
+    if not token_usage:
+        return ""
+    parts = _token_parts(token_usage)
+    if not parts:
+        return ""
+    cache_read = parts.get("cache read", 0)
+    cache_creation = parts.get("cache creation", 0)
+    uncached_input = parts.get("input", 0)
+    new_input = uncached_input + cache_creation
+    if cache_read or cache_creation:
+        context = f"Cache read {cache_read:,} + new {new_input:,}"
+        details: list[str] = []
+        if cache_creation:
+            details.append(f"cache write {cache_creation:,}")
+        details.append(f"uncached {uncached_input:,}")
+        context += f" ({', '.join(details)})"
+    else:
+        context = f"Input {uncached_input:,}"
+    if "output" in parts:
+        context += f" · output {parts['output']:,}"
+    return context
 
 
 def gutter_time(formatted_timestamp: Optional[str]) -> str:
