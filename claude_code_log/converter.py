@@ -7228,6 +7228,30 @@ def _write_recent_page(
         print(f"Warning: could not write {RECENT_PAGE}: {exc}")
 
 
+def _untouched_projects_line(
+    *, cached: int, outside_window: int, seconds: float
+) -> Optional[str]:
+    """The one progress line for the projects a pass had nothing to do for.
+
+    ``cached`` projects were current; ``outside_window`` ones had no
+    messages in a date-filtered run's window. None when there are neither.
+    """
+
+    def projects(n: int) -> str:
+        return f"{n} project{'' if n == 1 else 's'}"
+
+    parts: List[str] = []
+    if cached:
+        parts.append(f"{projects(cached)} cached")
+    if outside_window:
+        # "3 projects cached, 2 with no ..." -- the noun is said once.
+        count = str(outside_window) if cached else projects(outside_window)
+        parts.append(f"{count} with no messages in the window")
+    if not parts:
+        return None
+    return f"  {', '.join(parts)} ({seconds:.1f}s)"
+
+
 def _process_projects_hierarchy(
     projects_path: Path,
     from_date: Optional[str] = None,
@@ -7513,15 +7537,18 @@ def _process_projects_hierarchy(
     to_convert = [p for p in plans if p.needs_work and p.error is None]
     projects_with_updates = sum(1 for p in to_convert if p.stats.files_updated > 0)
 
-    # Cached (no-work) projects are reported first, in stable
-    # alphabetical order; regenerated projects follow as they finish.
-    for plan in plans:
-        if not plan.needs_work and plan.error is None:
-            state = "no messages in the window" if plan.outside_window else "cached"
-            print(
-                f"  {plan.project_dir.name}: {state}{_archived_suffix(plan)} "
-                f"({plan.stats.total_time:.1f}s)"
-            )
+    # Projects with nothing to do are rolled up into one line, reported
+    # first; regenerated projects follow, named, as they finish. On a real
+    # archive nearly every project is untouched on a given run, and a
+    # `watch --all-projects` printed the whole list on every tick.
+    untouched = [p for p in plans if not p.needs_work and p.error is None]
+    rollup = _untouched_projects_line(
+        cached=sum(1 for p in untouched if not p.outside_window),
+        outside_window=sum(1 for p in untouched if p.outside_window),
+        seconds=sum(p.stats.total_time for p in untouched),
+    )
+    if rollup is not None:
+        print(rollup)
 
     # ---- Phase 2 (execute): (re)generate stale projects. Rendering is
     # CPU-bound pure Python and projects are independent — each
