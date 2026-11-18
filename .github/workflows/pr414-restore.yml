@@ -41,12 +41,7 @@ jobs:
               path.write_bytes(data[:-1])
           PY
 
-          git add \
-            claude_code_log/html/templates/transcript.html \
-            test/__snapshots__/test_snapshot_html.ambr \
-            test/__snapshots__/1-test_snapshot_html.ambr \
-            test/__snapshots__/2-test_snapshot_html.ambr \
-            test/__snapshots__/3-test_snapshot_html.ambr
+          git add -A claude_code_log/html/templates/transcript.html test/__snapshots__
 
           if git diff --cached --quiet; then
             echo "Reviewed files already restored"
