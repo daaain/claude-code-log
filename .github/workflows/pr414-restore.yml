@@ -1,0 +1,57 @@
+name: Restore PR414 reviewed files
+
+on:
+  push:
+    branches:
+      - 405-compact-cache-token-usage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.ref == 'refs/heads/405-compact-cache-token-usage'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: 405-compact-cache-token-usage
+          fetch-depth: 0
+
+      - name: Restore reviewed files
+        run: |
+          set -euo pipefail
+          git config user.name "hchc00787"
+          git config user.email "346683525+hchc00787@users.noreply.github.com"
+
+          git show c1668e387757452a9b76f84f900273d331ba5a66:test/__snapshots__/2-test_snapshot_html.ambr > test/__snapshots__/test_snapshot_html.ambr
+          rm -f \
+            test/__snapshots__/1-test_snapshot_html.ambr \
+            test/__snapshots__/2-test_snapshot_html.ambr \
+            test/__snapshots__/3-test_snapshot_html.ambr
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("claude_code_log/html/templates/transcript.html")
+          data = path.read_bytes()
+          if data.endswith(b"\n"):
+              path.write_bytes(data[:-1])
+          PY
+
+          git add \
+            claude_code_log/html/templates/transcript.html \
+            test/__snapshots__/test_snapshot_html.ambr \
+            test/__snapshots__/1-test_snapshot_html.ambr \
+            test/__snapshots__/2-test_snapshot_html.ambr \
+            test/__snapshots__/3-test_snapshot_html.ambr
+
+          if git diff --cached --quiet; then
+            echo "Reviewed files already restored"
+            exit 0
+          fi
+
+          git commit -m "Restore PR414 reviewed files"
+          git push origin HEAD:405-compact-cache-token-usage
