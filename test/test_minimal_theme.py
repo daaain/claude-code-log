@@ -303,22 +303,68 @@ class TestCompactNumbers:
     def test_compact_count(self, value: int, text: str) -> None:
         assert minimal_theme.compact_count(value) == text
 
+    @pytest.mark.parametrize(
+        ("value", "text"),
+        [
+            (9400, "9.4k"),
+            (61234, "61k"),
+            (97940, "98k"),
+            (97951, "98k"),
+        ],
+    )
+    def test_compact_count_threshold(self, value: int, text: str) -> None:
+        assert minimal_theme.compact_count(value, decimal_threshold=10) == text
+
     def test_token_usage_distinguishes_cache_read_from_new_input(self) -> None:
         issue_example = (
             "Input: 2 | Output: 364 | Cache Creation: 20012 | Cache Read: 97521"
         )
-        assert minimal_theme.compact_token_usage(issue_example) == "97k+20k 364"
+        assert minimal_theme.compact_token_usage(issue_example) == "98k+20k · 364"
         assert (
             minimal_theme.compact_token_usage(
                 "Input: 3 | Output: 1400 | Cache Creation: 1000"
             )
-            == "+1k 1.4k"
+            == "+1k · 1.4k"
         )
         assert (
             minimal_theme.compact_token_usage("Input: 25 | Output: 120") == "25 · 120"
         )
         assert minimal_theme.compact_token_usage(None) == ""
         assert minimal_theme.compact_token_usage("no numbers") == ""
+
+    @pytest.mark.parametrize("cache_read", [97940, 97951])
+    def test_token_usage_rounds_near_compact_boundary(self, cache_read: int) -> None:
+        token_usage = (
+            f"Input: 2 | Output: 364 | Cache Creation: 20012 | Cache Read: {cache_read}"
+        )
+        assert minimal_theme.compact_token_usage(token_usage) == "98k+20k · 364"
+
+    def test_token_usage_uses_one_precision_rule_for_uncached_and_output(self) -> None:
+        assert (
+            minimal_theme.compact_token_usage("Input: 61234 | Output: 1400")
+            == "61k · 1.4k"
+        )
+        assert (
+            minimal_theme.compact_token_usage(
+                "Input: 2 | Output: 12345 | Cache Creation: 20012 | Cache Read: 97521"
+            )
+            == "98k+20k · 12k"
+        )
+
+    def test_token_usage_tooltip_explains_the_compact_figures(self) -> None:
+        issue_example = (
+            "Input: 2 | Output: 364 | Cache Creation: 20012 | Cache Read: 97521"
+        )
+        assert (
+            minimal_theme.token_usage_tooltip(issue_example)
+            == "Cache read 97,521 + new 20,014 (cache write 20,012, uncached 2) · output 364"
+        )
+        assert (
+            minimal_theme.token_usage_tooltip("Input: 25 | Output: 120")
+            == "Input 25 · output 120"
+        )
+        assert minimal_theme.token_usage_tooltip(None) == ""
+        assert minimal_theme.token_usage_tooltip("no numbers") == ""
 
     def test_gutter_time(self) -> None:
         assert minimal_theme.gutter_time("2025-07-03 15:50:07") == "15:50:07"
@@ -400,8 +446,7 @@ class TestMinimalPage:
         )
         assert "<span class='mn-time'>15:50:07</span>" in html
         assert (
-            "<span class='mn-tok' title='Input: 25 | Output: 120'>25 · 120</span>"
-            in html
+            "<span class='mn-tok' title='Input 25 · output 120'>25 · 120</span>" in html
         )
         assert "class='mn-title mn-generic'" in html
         # Call line: emoji and tool name hidden (kept for search), path shown.
