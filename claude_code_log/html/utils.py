@@ -1187,6 +1187,7 @@ def get_template_environment() -> Environment:
     globals_dict["mn_icon_sprite"] = minimal_icons.icon_sprite
     globals_dict["mn_is_generic_title"] = minimal_theme.is_generic_title
     globals_dict["mn_compact_tokens"] = minimal_theme.compact_token_usage
+    globals_dict["mn_token_tooltip"] = minimal_theme.token_usage_tooltip
     globals_dict["mn_gutter_time"] = minimal_theme.gutter_time
     globals_dict["mn_page_meta"] = minimal_theme.page_meta
     globals_dict["mn_call_title"] = minimal_theme.call_title
