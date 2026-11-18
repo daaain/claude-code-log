@@ -203,6 +203,7 @@ claude-code-log-cache.db
 
 # >>> foldyard (managed) — do not edit inside this block >>>
 # Box/host-generated files foldyard writes beside foldyard.toml; never commit.
+.claude/worktrees/
 .devbox-ca/
 .devbox-claude/
 .devbox-codex/
