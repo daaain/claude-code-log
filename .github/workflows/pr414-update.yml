@@ -1,0 +1,84 @@
+name: Update PR414 from upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr414-update-405-compact-cache-token-usage
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.ref == 'refs/heads/405-compact-cache-token-usage'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the reviewed startup commit
+        uses: actions/checkout@v4
+        with:
+          ref: 405-compact-cache-token-usage
+          fetch-depth: 0
+
+      - name: Merge upstream and apply the reviewed snapshot fix
+        env:
+          EXPECTED_PUBLIC_HEAD: 12faebf1577a700193514794ea961c87c9f1df9b
+          EXPECTED_UPSTREAM: 763365c942cad45b2648f9056f737167cef3234a
+          EXPECTED_FINAL_TREE: f4dd721baaecf97fbe4dae3c51236a1ed8956c8a
+          EXPECTED_SNAPSHOT_SHA256: 4f653b43077d443deb453532b4b9025c897e0110e1eda2ec5f30581842c529b3
+          WORKFLOW_PATH: .github/workflows/pr414-update.yml
+        run: |
+          set -euo pipefail
+          git config user.name "hchc00787"
+          git config user.email "346683525+hchc00787@users.noreply.github.com"
+
+          startup_head="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PUBLIC_HEAD"
+          test "$(git rev-list --count "$EXPECTED_PUBLIC_HEAD"..HEAD)" = "1"
+          test "$(git diff --name-status "$EXPECTED_PUBLIC_HEAD" HEAD | awk '{print $1}')" = "A"
+          test "$(git diff --name-only "$EXPECTED_PUBLIC_HEAD" HEAD)" = "$WORKFLOW_PATH"
+          test -z "$(git status --porcelain)"
+
+          git fetch https://github.com/daaain/claude-code-log.git main
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_UPSTREAM"
+
+          git merge --no-commit --no-ff FETCH_HEAD
+
+          rm "$WORKFLOW_PATH"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("test/__snapshots__/test_snapshot_html.ambr")
+          data = path.read_text(encoding="utf-8")
+          old = """         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
+      --rail: 18px;
+      --gut-nest: 60px;"""
+          new = """         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 96px;
+      --rail: 18px;
+      --gut-nest: 76px;"""
+          if data.count(old) != 1:
+              raise SystemExit("Expected exactly one stale project-index snapshot block")
+          path.write_text(data.replace(old, new, 1), encoding="utf-8")
+          PY
+
+          git add -A
+          git commit -m "Merge upstream main and refresh minimal index snapshot"
+
+          test "$(git rev-parse HEAD^1)" = "$startup_head"
+          test "$(git rev-parse HEAD^2)" = "$EXPECTED_UPSTREAM"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_FINAL_TREE"
+          test "$(sha256sum test/__snapshots__/test_snapshot_html.ambr | awk '{print $1}')" = "$EXPECTED_SNAPSHOT_SHA256"
+          test "$(git show -s --format='%an <%ae>%n%cn <%ce>' HEAD)" = "hchc00787 <346683525+hchc00787@users.noreply.github.com>
+          hchc00787 <346683525+hchc00787@users.noreply.github.com>"
+          test -z "$(git status --porcelain)"
+
+          git push origin HEAD:refs/heads/405-compact-cache-token-usage
