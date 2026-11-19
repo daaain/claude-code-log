@@ -16,109 +16,107 @@ from claude_code_log.cache import CacheManager, SessionCacheData
 from claude_code_log.tui import ProjectSelector, SessionBrowser, run_session_browser
 
 
+@pytest.fixture(autouse=True)
+def isolate_tui_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Ensure every test in test_tui uses an isolated cache database.
+
+    Prevents SessionBrowser and CacheManager instances from defaulting to
+    the shared system temp directory database (<tmp>/claude-code-log-cache.db).
+    """
+    db_path = tmp_path / "claude-code-log-cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+
+
 @pytest.fixture
-def temp_project_dir():
+def temp_project_dir(tmp_path: Path):
     """Create a temporary project directory with test JSONL files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        project_path = Path(temp_dir)
+    project_path = tmp_path / "project"
+    project_path.mkdir(exist_ok=True)
 
-        # Create sample JSONL files with test data
-        test_data = [
-            {
-                "type": "user",
-                "sessionId": "session-123",
-                "timestamp": "2025-01-01T10:00:00Z",
-                "uuid": "user-uuid-1",
-                "message": {
-                    "role": "user",
-                    "content": "Hello, this is my first message",
+    # Create sample JSONL files with test data
+    test_data = [
+        {
+            "type": "user",
+            "sessionId": "session-123",
+            "timestamp": "2025-01-01T10:00:00Z",
+            "uuid": "user-uuid-1",
+            "message": {
+                "role": "user",
+                "content": "Hello, this is my first message",
+            },
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/test",
+            "version": "1.0.0",
+            "isMeta": False,
+        },
+        {
+            "type": "assistant",
+            "sessionId": "session-123",
+            "timestamp": "2025-01-01T10:01:00Z",
+            "uuid": "assistant-uuid-1",
+            "message": {
+                "id": "msg-123",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-sonnet",
+                "content": [
+                    {"type": "text", "text": "Hello! How can I help you today?"}
+                ],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 15,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
                 },
-                "parentUuid": None,
-                "isSidechain": False,
-                "userType": "human",
-                "cwd": "/test",
-                "version": "1.0.0",
-                "isMeta": False,
             },
-            {
-                "type": "assistant",
-                "sessionId": "session-123",
-                "timestamp": "2025-01-01T10:01:00Z",
-                "uuid": "assistant-uuid-1",
-                "message": {
-                    "id": "msg-123",
-                    "type": "message",
-                    "role": "assistant",
-                    "model": "claude-3-sonnet",
-                    "content": [
-                        {"type": "text", "text": "Hello! How can I help you today?"}
-                    ],
-                    "usage": {
-                        "input_tokens": 10,
-                        "output_tokens": 15,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                    },
-                },
-                "parentUuid": "user-uuid-1",
-                "isSidechain": False,
-                "userType": "human",
-                "cwd": "/test",
-                "version": "1.0.0",
-                "requestId": "req-123",
-            },
-            {
-                "type": "user",
-                "sessionId": "session-456",
-                "timestamp": "2025-01-02T14:30:00Z",
-                "uuid": "user-uuid-2",
-                "message": {"role": "user", "content": "This is a different session"},
-                "parentUuid": None,
-                "isSidechain": False,
-                "userType": "human",
-                "cwd": "/test",
-                "version": "1.0.0",
-                "isMeta": False,
-            },
-            {
-                "type": "summary",
-                "summary": "User asked about session management",
-                "leafUuid": "user-uuid-2",
-            },
-        ]
+            "parentUuid": "user-uuid-1",
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/test",
+            "version": "1.0.0",
+            "requestId": "req-123",
+        },
+        {
+            "type": "user",
+            "sessionId": "session-456",
+            "timestamp": "2025-01-02T14:30:00Z",
+            "uuid": "user-uuid-2",
+            "message": {"role": "user", "content": "This is a different session"},
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/test",
+            "version": "1.0.0",
+            "isMeta": False,
+        },
+        {
+            "type": "summary",
+            "summary": "User asked about session management",
+            "leafUuid": "user-uuid-2",
+        },
+    ]
 
-        # Write test data to JSONL files - one per session (matching real-world usage)
-        # Session 123 entries
-        session_123_file = project_path / "session-123.jsonl"
-        with open(session_123_file, "w", encoding="utf-8") as f:
-            for entry in test_data:
-                if entry.get("sessionId") == "session-123":
-                    f.write(json.dumps(entry) + "\n")
+    # Write test data to JSONL files - one per session (matching real-world usage)
+    # Session 123 entries
+    session_123_file = project_path / "session-123.jsonl"
+    with open(session_123_file, "w", encoding="utf-8") as f:
+        for entry in test_data:
+            if entry.get("sessionId") == "session-123":
+                f.write(json.dumps(entry) + "\n")
 
-        # Session 456 entries (includes summary)
-        session_456_file = project_path / "session-456.jsonl"
-        with open(session_456_file, "w", encoding="utf-8") as f:
-            for entry in test_data:
-                if (
-                    entry.get("sessionId") == "session-456"
-                    or entry.get("type") == "summary"
-                ):
-                    f.write(json.dumps(entry) + "\n")
+    # Session 456 entries (includes summary)
+    session_456_file = project_path / "session-456.jsonl"
+    with open(session_456_file, "w", encoding="utf-8") as f:
+        for entry in test_data:
+            if (
+                entry.get("sessionId") == "session-456"
+                or entry.get("type") == "summary"
+            ):
+                f.write(json.dumps(entry) + "\n")
 
-        yield project_path
-
-
-@pytest.fixture
-def isolated_cache_manager(temp_project_dir):
-    """Create a cache manager with isolated database path."""
-    from claude_code_log.cache import CacheManager
-    from claude_code_log import get_library_version
-    
-    # Create a unique database path inside the temp project directory
-    db_path = temp_project_dir / "claude-code-log-cache.db"
-    
-    # Create cache manager with explicit db_path
-    return CacheManager(temp_project_dir, get_library_version(), db_path=db_path)
+    yield project_path
 
 
 @pytest.mark.tui
@@ -133,6 +131,13 @@ class TestSessionBrowser:
         assert isinstance(app.cache_manager, CacheManager)
         assert app.sessions == {}
         assert app.selected_session_id is None
+
+    def test_cache_database_is_isolated(self, temp_project_dir, tmp_path):
+        """Confirm that SessionBrowser creates its cache DB in an isolated path, not the system temp dir."""
+        app = SessionBrowser(temp_project_dir)
+        system_temp_cache = Path(tempfile.gettempdir()) / "claude-code-log-cache.db"
+        assert app.cache_manager.db_path != system_temp_cache
+        assert app.cache_manager.db_path == tmp_path / "claude-code-log-cache.db"
 
     @pytest.mark.asyncio
     async def test_load_sessions_from_cache(self, temp_project_dir):
