@@ -24158,13 +24158,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -30809,13 +30809,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -46586,13 +46586,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -59675,13 +59675,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -63770,13 +63770,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -67881,13 +67881,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -75263,13 +75263,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -80446,7 +80446,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:52:07.874907Z'>2025-07-03 15:52:07</span><span class='mn-time'>15:52:07</span>
                   </div>
                   
-                  <span class='token-usage'>Input: 25 | Output: 120</span><span class='mn-tok' title='Input: 25 | Output: 120'>25 · 120</span>
+                  <span class='token-usage'>Input: 25 | Output: 120</span><span class='mn-tok' title='Input 25 · output 120'>25 · 120</span>
                   
               </div>
           </div>
@@ -80577,7 +80577,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:00:07.874907Z'>2025-07-03 16:00:07</span><span class='mn-time'>16:00:07</span>
                   </div>
                   
-                  <span class='token-usage'>Input: 78 | Output: 95</span><span class='mn-tok' title='Input: 78 | Output: 95'>78 · 95</span>
+                  <span class='token-usage'>Input: 78 | Output: 95</span><span class='mn-tok' title='Input 78 · output 95'>78 · 95</span>
                   
               </div>
           </div>
@@ -80697,7 +80697,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:08:07.874907Z'>2025-07-03 16:08:07</span><span class='mn-time'>16:08:07</span>
                   </div>
                   
-                  <span class='token-usage'>Input: 45 | Output: 110</span><span class='mn-tok' title='Input: 45 | Output: 110'>45 · 110</span>
+                  <span class='token-usage'>Input: 45 | Output: 110</span><span class='mn-tok' title='Input 45 · output 110'>45 · 110</span>
                   
               </div>
           </div>
