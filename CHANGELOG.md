@@ -6,6 +6,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.8.0] - 2026-11-15
+
+### Security
+
+1.8.0 is the first release on PyPI with these fixes (1.7.1 was tagged but never
+published). Please upgrade; the advisories have the details.
+
+- **Markdown output no longer carries raw HTML or harmful links from transcripts**
+  ([GHSA-3jq4-r9jm-q682](https://github.com/daaain/claude-code-log/security/advisories/GHSA-3jq4-r9jm-q682)):
+  message text in `--format md` output could hold HTML or `javascript:` links that
+  run in a Markdown viewer which renders them.
+- **Transcript values are escaped in HTML attributes**
+  ([GHSA-3xqc-5553-2xpg](https://github.com/daaain/claude-code-log/security/advisories/GHSA-3xqc-5553-2xpg)):
+  a session id, project directory or TodoWrite status could break out of an
+  attribute in the generated pages and search results.
+- **Transcript ids are validated**
+  ([GHSA-53rg-36px-8vpj](https://github.com/daaain/claude-code-log/security/advisories/GHSA-53rg-36px-8vpj)):
+  an invalid `sessionId` or `agentId` is quarantined with a warning, so it can no
+  longer reach file paths, the `claude` command line when resuming from the TUI,
+  or terminal markup.
+
+### Changed
+
+- **Read the stored snapshots as UTF-8 in the version guard**
+- **Take the backtracking out of the Markdown gate's line regexes**
+- **Keep the version out of the minimal theme's stored snapshots**
+
+
+## [1.7.1] - 2026-11-15
+
+Tagged but not published to PyPI (CI failed on the release commit); everything
+below ships in 1.8.0, including the security fixes listed there.
+
+### Changed
+
+- **Make screenshot pick the right theme**
+- **Merge commit from fork**
+- **Merge commit from fork**
+- **Give the CI workflow a read-only token by default (#412)**
+- **Show clock times once the cache is cold, and the context size on the cache band (#411)**
+- **Pass the date window to the view tests as keyword arguments (#408)**
+- **(Claude) Make a date-filtered run a view of its window (#403)**
+- **(Claude) Leave a refresh's derived rows unwritten when another refresh moved a file under it (#402)**
+- **(Claude) Merge a spread refresh per file, and build a cold project without a spool (#400)**
+- **(Claude) Commit a project's cache refresh in one transaction (#390)**
+- **(Claude) Render what the cache refresh committed, and write no entry rows (#399)**
+- **(Claude) Read the page filter's toggles and counts from the timeline's map (#398)**
+- **(Claude) Let the live-update test's own read of the page survive a Windows file swap (#394)**
+- **(Claude) Let every CI cell finish when one fails (#393)**
+- **(Claude) Read the timeline's toggle map off the page in the browser tests' sync wait (#392)**
+- **(Claude) Scope footnote ids per message so a reference lands on its own note (#387)**
+- **(Claude) Convert the projects active in the window on a date-filtered --all-projects run (#389)**
+- **(Claude) Style footnotes in the minimal theme, and take wenmode 0.15.3 (#381)**
+- **(Claude) Wait for the state instead of sleeping in the heaviest browser tests (#385)**
+- **Mark the latency test as a browser test, and bound its click too (#388)**
+- **(Claude) Index around an undecodable cached blob instead of failing serve start (#383)**
+- **(Claude) Keep date-filtered runs out of the project-wide cache rows, and read the window the same way in cache and renderer (#384)**
+- **(Claude) Show the timeline as soon as it is built, not a second later (#386)**
+- **(Claude) Run the browser tests in their own CI job (#382)**
+- **(Claude) Render mixed JSON/text tool results as JSON, then text (#380)**
+- **(Claude) Align line numbers with their code in the minimal theme's Pygments blocks (#379)**
+- **(Claude) Run one pass at a time per cache file (#377)**
+- **(Claude) Maintain the search index after the pass, not under the write lock (#375)**
+- **(Claude) Upgrade Playwright to 1.64.1 so Chromium installs on Ubuntu 26.04 (#376)**
+- **(Claude) Survive cache lock contention, redo interrupted refreshes, exit non-zero on lost projects (#365)**
+- **Escape and allowlist embedded image data URLs to prevent stored XSS (#370)**
+- **Vendor vis-timeline locally instead of loading from unpkg CDN (#371)**
+- **Bump GitPython to 3.2.1 and certifi to 2026.10.19 (#372)**
+- **Update Supercut link in README**
+- **Recent sessions page (#367)**
+- **Read task notifications' XML usage block and Monitor events (#368)**
+- **Gate formatting in ci; ignore the oxfmt reformat in git blame (#358)**
+- **(Claude) Reformat JS, CSS, JSON and YAML with oxfmt (#357)**
+- **Add oxfmt for JS, CSS, JSON and YAML, with Jinja masking for templates (#356)**
+- **(Claude) Session previews: skip leading YAML front matter (#355)**
+- **(Claude) Render YAML front matter as data, not as a setext heading (#351)**
+- **(Claude) Render teammate data bodies with the params renderer; italic framing (#350)**
+- **(Claude) Zoom message images in a dialog on click; cap Markdown images in classic (#353)**
+- **(Claude) Minimal theme: hoverable role labels, matching expand-all controls, bounded images (#349)**
+- **(Claude) Retry the live server's file open past a Windows swap (#352)**
+- **(Claude) Lint the templates' JavaScript with oxlint, and fix what it found (#354)**
+- **Freshen up some outdated docs and skills (#348)**
+- **Add a `minimal` theme with DAG branch layout for sub-agents, forks and workflows (#339)**
+- **(Claude) Build timeline labels and tooltips from a message's readable text (#347)**
+- **Skip the dbstat and symlink tests where the platform lacks them (#342)**
+- **Build(deps-dev): bump mkdocs-material from 9.7.6 to 9.7.7 (#346)**
+- **Build(deps): bump urllib3 from 2.7.0 to 2.8.0 (#345)**
+- **Build(deps): bump pymdown-extensions from 10.21.3 to 11.0.1 (#344)**
+- **Build(deps): bump gitpython from 3.1.55 to 3.1.62 (#343)**
+
+
 ## [1.7.0] - 2026-10-05
 
 ### Changed

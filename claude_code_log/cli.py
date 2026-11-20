@@ -33,6 +33,7 @@ from .converter import (
     get_file_extension,
     get_index_filename,
     process_projects_hierarchy,
+    sweep_project_images,
 )
 from .cache import (
     CacheManager,
@@ -51,6 +52,7 @@ from .migrations.runner import (
     check_sqlite_version,
 )
 from .models import RenderingDepth
+from .transcript_ids import session_file_name
 from .render_pool import resolve_render_jobs
 from .search import (
     ENV_INDEX_FIELDS,
@@ -59,6 +61,7 @@ from .search import (
 )
 from .utils import (
     DEFAULT_THEME,
+    SHOW_TEMP_PROJECTS_ENV_VAR,
     THEME_CHOICES,
     THEME_ENV_VAR,
     normalize_theme,
@@ -83,6 +86,26 @@ def _theme_option(func: Any) -> Any:
         type=click.Choice(THEME_CHOICES, case_sensitive=False),
         default=None,
         help=THEME_HELP,
+    )(func)
+
+
+# `--show-temp-projects` is shared by `convert`, `serve` and `watch`, like
+# `--theme`: whichever runs the pass decides how the index and the recent
+# page treat projects worked on only from temp dirs.
+def _show_temp_projects_option(func: Any) -> Any:
+    return click.option(
+        "--show-temp-projects",
+        is_flag=True,
+        default=False,
+        envvar=SHOW_TEMP_PROJECTS_ENV_VAR,
+        help=(
+            "List projects worked on only from temporary directories (/tmp, "
+            "/var/folders, …: test suites, scratchpad agents, scripted runs) "
+            "with the rest. By default the index folds them into one "
+            "'Temporary directories' group at the end and the recent "
+            "sessions page leaves their sessions out. They are converted "
+            f"either way. Also ${SHOW_TEMP_PROJECTS_ENV_VAR}=1."
+        ),
     )(func)
 
 
@@ -207,6 +230,11 @@ def _render_provider_input_file(
     session_key = messages[0].sessionId or input_path.stem
     title = f"{provider_name.title()}: {session_key}"
 
+    # A stdout stream renders into a discarded temp dir: inline its images.
+    stream_images = image_export_mode or (
+        "embedded" if _is_stdout_target(output) else None
+    )
+
     def render(destination: Path) -> Path:
         return render_normalized_session_file(
             messages,
@@ -214,7 +242,7 @@ def _render_provider_input_file(
             destination,
             output_format,
             title,
-            image_export_mode,
+            stream_images,
             depth,
             compact,
             no_timestamps,
@@ -229,7 +257,7 @@ def _render_provider_input_file(
             lambda tmpdir: render(tmpdir / f"session.{extension}"),
         )
         return
-    filename = f"session-{session_key}.{extension}"
+    filename = session_file_name(session_key, f".{extension}")
     if output is None:
         destination = Path.cwd() / filename
     elif output_path_is_file(output):
@@ -292,6 +320,7 @@ def _run_provider_wholesale(
     expand_paths: bool,
     filter_path: "Optional[str]",
     theme: str = DEFAULT_THEME,
+    show_temp_projects: bool = False,
 ) -> None:
     """Render a whole provider sessions tree into a project hierarchy.
 
@@ -335,6 +364,7 @@ def _run_provider_wholesale(
         expand_paths=expand_paths,
         filter_path=filter_path,
         silent=False,
+        show_temp_projects=show_temp_projects,
     )
     if open_browser:
         click.launch(str(index_path))
@@ -752,26 +782,55 @@ def _clear_caches(input_path: Path, all_projects: bool) -> None:
         click.echo(f"Warning: Failed to clear cache: {e}")
 
 
-def _list_generated_outputs(directory: Path, file_ext: str) -> list[Path]:
+def _list_generated_outputs(
+    directory: Path, file_ext: str, *, strict: bool = False
+) -> list[Path]:
     """Return only files this tool generates, not every file with the extension.
 
     Safe for JSON in particular, where the project directory may contain
-    unrelated user `.json` files that must not be deleted.
+    unrelated user `.json` files that must not be deleted. ``strict``
+    applies the same naming rule to every format: for a directory
+    ``--output``, which may be a vault of the user's own pages.
     """
-    if file_ext == "json":
+    if file_ext == "json" or strict:
         return [
-            *directory.glob("combined_transcripts*.json"),
-            *directory.glob("session-*.json"),
+            *directory.glob(f"combined_transcripts*.{file_ext}"),
+            *directory.glob(f"session-*.{file_ext}"),
         ]
     return list(directory.glob(f"*.{file_ext}"))
 
 
+def _clear_unreferenced_images(directory: Path, file_ext: str) -> int:
+    """After a format's pages are cleared from ``directory``, remove the
+    exported images that no page left there shows (pages of another
+    format keep theirs)."""
+    if file_ext not in ("html", "md"):
+        return 0
+    from .image_export import prune_unreferenced_images
+
+    return prune_unreferenced_images(directory, grace_seconds=0) or 0
+
+
 def _clear_output_files(
-    input_path: Path, all_projects: bool, output_format: str
+    input_path: Path,
+    all_projects: bool,
+    output_format: str,
+    *,
+    output_dir: Optional[Path] = None,
 ) -> None:
-    """Clear generated output files (HTML/Markdown/JSON) for the specified path."""
+    """Clear generated output files (HTML/Markdown/JSON) for the specified path,
+    and the exported images only they showed. ``output_dir`` is a directory
+    ``--output`` for one project or file: its pages are cleared there."""
     file_ext = get_file_extension(output_format)
     ext_upper = file_ext.upper()
+    if output_dir is not None and not all_projects:
+        if input_path.is_file():
+            input_path = output_dir / input_path.name
+        elif output_dir.is_dir():
+            input_path = output_dir
+        else:
+            click.echo(f"No {ext_upper} files found to remove")
+            return
     try:
         if all_projects:
             # Clear output files for all project directories
@@ -790,10 +849,15 @@ def _clear_output_files(
                     for output_file in output_files:
                         output_file.unlink()
                         total_removed += 1
+                    images_removed = _clear_unreferenced_images(project_dir, file_ext)
 
                     if output_files:
                         click.echo(
                             f"  Removed {len(output_files)} {ext_upper} files from {project_dir.name}"
+                        )
+                    if images_removed:
+                        click.echo(
+                            f"  Removed {images_removed} images from {project_dir.name}"
                         )
                 except Exception as e:
                     click.echo(
@@ -817,14 +881,19 @@ def _clear_output_files(
         elif input_path.is_dir():
             # Clear output files for single directory
             click.echo(f"Clearing {ext_upper} files for {input_path}...")
-            output_files = _list_generated_outputs(input_path, file_ext)
+            output_files = _list_generated_outputs(
+                input_path, file_ext, strict=output_dir is not None
+            )
             for output_file in output_files:
                 output_file.unlink()
+            images_removed = _clear_unreferenced_images(input_path, file_ext)
 
             if output_files:
                 click.echo(f"Removed {len(output_files)} {ext_upper} files")
             else:
                 click.echo(f"No {ext_upper} files found to remove")
+            if images_removed:
+                click.echo(f"Removed {images_removed} images")
         else:
             # Single file - remove corresponding output file
             output_file = input_path.with_suffix(f".{file_ext}")
@@ -969,10 +1038,11 @@ def main() -> None:
         "Output destination. Use '-' (or /dev/stdout) to stream the "
         "rendered document to stdout (status goes to stderr) for piping. "
         "With a recognised file suffix (.html/.md/.markdown/.json) treated "
-        "as a single output file; otherwise treated as a directory root "
-        "(and now also honoured for --all-projects, where outputs land at "
-        "<output>/<project>/...). Pair with --expand-paths to project "
-        "back to the real on-disk tree."
+        "as a single output file (for a project directory, its combined "
+        "page; the session pages stay beside the transcripts); otherwise "
+        "treated as a directory that every page is written under (for "
+        "--all-projects, at <output>/<project>/...). Pair with "
+        "--expand-paths to project back to the real on-disk tree."
     ),
 )
 @click.option(
@@ -1070,7 +1140,11 @@ def main() -> None:
     "--clear-html",
     "clear_output",
     is_flag=True,
-    help="Clear generated output files (HTML or Markdown based on --format) and force regeneration",
+    help=(
+        "Clear generated output files (HTML or Markdown based on --format), "
+        "and the exported images no remaining page shows, and force "
+        "regeneration"
+    ),
 )
 @click.option(
     "--tui",
@@ -1097,7 +1171,7 @@ def main() -> None:
     "--image-export-mode",
     type=click.Choice(["placeholder", "embedded", "referenced"]),
     default=None,
-    help="Image export mode: placeholder (mark position), embedded (base64), referenced (PNG files). Default: embedded for HTML, referenced for Markdown.",
+    help="Image export mode: placeholder (mark position), embedded (base64), referenced (image files in images/ beside the output; for HTML, compressed to AVIF and capped at 2000px). Default: referenced.",
 )
 @click.option(
     "--page-size",
@@ -1208,6 +1282,7 @@ def main() -> None:
     ),
 )
 @_theme_option
+@_show_temp_projects_option
 @click.option(
     "--debug",
     is_flag=True,
@@ -1246,6 +1321,7 @@ def convert(
     no_timestamps: bool,
     no_recaps: bool,
     theme: Optional[str],
+    show_temp_projects: bool,
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -1602,6 +1678,7 @@ def convert(
                     expand_paths,
                     filter_path,
                     theme=resolved_theme,
+                    show_temp_projects=show_temp_projects,
                 )
                 return
 
@@ -1666,6 +1743,12 @@ def convert(
             messages = list(selected.load_session(matched_id))
             title = info.title or f"{provider.title()}: Session {matched_id[:8]}"
 
+            # A stdout stream renders into a discarded temp dir: inline
+            # its images.
+            stream_images = image_export_mode or (
+                "embedded" if _is_stdout_target(output) else None
+            )
+
             def render_provider(destination: Path) -> Path:
                 return render_normalized_session_file(
                     messages,
@@ -1673,7 +1756,7 @@ def convert(
                     destination,
                     output_format,
                     title,
-                    image_export_mode,
+                    stream_images,
                     depth_level,
                     compact,
                     no_timestamps,
@@ -1690,7 +1773,9 @@ def convert(
                 )
                 return
 
-            filename = f"session-{matched_id}.{get_file_extension(output_format)}"
+            filename = session_file_name(
+                matched_id, f".{get_file_extension(output_format)}"
+            )
             if output is None:
                 destination = Path.cwd() / filename
             elif _output_path_is_file(output):
@@ -1917,7 +2002,19 @@ def convert(
 
         # Handle output files clearing
         if clear_output:
-            _clear_output_files(input_path, all_projects, output_format)
+            # For one project or file, a directory --output is where its
+            # pages went (as for the conversion below), so it is what clears.
+            clear_dir = (
+                output
+                if output is not None
+                and not all_projects
+                and not _is_stdout_target(output)
+                and not _output_path_is_file(output)
+                else None
+            )
+            _clear_output_files(
+                input_path, all_projects, output_format, output_dir=clear_dir
+            )
             if clear_output and not (from_date or to_date or input_path.is_file()):
                 # If only clearing output files, exit after clearing
                 file_ext = get_file_extension(output_format)
@@ -1962,6 +2059,7 @@ def convert(
                 jobs=jobs,
                 failed_projects=failed_projects,
                 force=force,
+                show_temp_projects=show_temp_projects,
             )
 
             # Count processed projects
@@ -2029,6 +2127,7 @@ def convert(
                         expand_paths,
                         filter_path,
                         theme=resolved_theme,
+                        show_temp_projects=show_temp_projects,
                     )
                     return
                 _render_provider_input_file(
@@ -2110,11 +2209,15 @@ def convert(
         # print a success line on top of its own "is current, skipping
         # regeneration" line, and don't claim to have "combined" anything
         # when only session files were written.
+        # A suffix-less --output is a directory: every page goes under it,
+        # the session pages too, as it does for --all-projects. A file
+        # suffix names the combined page (or the single transcript's page).
+        output_is_dir = output is not None and not _output_path_is_file(output)
         report = RegenerationReport()
         output_path = convert_jsonl_to(
             output_format,
             input_path,
-            output,
+            None if output_is_dir else output,
             from_date,
             to_date,
             write_individual,
@@ -2126,19 +2229,21 @@ def convert(
             # User's `-o` path is a one-off export, not a cached artifact:
             # don't occupy a cache slot keyed by an arbitrary destination.
             update_cache=output is None,
+            output_root=output if output_is_dir else None,
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
             theme=resolved_theme,
-            # An explicit `-o` *file* always regenerates: the version-marker
-            # skip only knows the embedded version, not which source produced
-            # the file, so it would keep stale content at a user-chosen path
-            # (issue #221). Scoped to file destinations — directory exports
-            # keep the cache's per-source incremental skip (is_transcript_stale),
-            # which already tracks the source (a different transcript to the
-            # same dir still regenerates), and `--all-projects` calls this
-            # with output=None anyway, so its skip is never forced.
-            force_regenerate=output is not None and _output_path_is_file(output),
+            # An explicit `-o` always regenerates: the version-marker skip
+            # only knows the embedded version, not which source produced the
+            # file, so it would keep stale content at a user-chosen path
+            # (issue #221). A directory too: a single transcript's page is
+            # named after the file alone, and a project's combined page
+            # after nothing of the project, while the cache's skip
+            # (is_transcript_stale) checks the version and the message
+            # count, which another source can match. `--all-projects` calls
+            # this with output=None, so its skip is never forced.
+            force_regenerate=output is not None,
             report=report,
             # A single-project conversion has the whole machine to itself,
             # so `--jobs` is the cap for its render fan-out. Whether that
@@ -2150,6 +2255,13 @@ def convert(
                 min(jobs, resolve_render_jobs(None)) if jobs is not None else None
             ),
             force=force,
+        )
+        sweep_project_images(
+            input_path,
+            output if output_is_dir else None,
+            output_format,
+            from_date,
+            to_date,
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so
@@ -2285,6 +2397,7 @@ def convert(
     ),
 )
 @_theme_option
+@_show_temp_projects_option
 @click.option(
     "--jobs",
     "-j",
@@ -2307,6 +2420,7 @@ def serve(
     no_index: bool,
     watch_sources: bool,
     theme: Optional[str],
+    show_temp_projects: bool,
     jobs: Optional[int],
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
@@ -2351,7 +2465,11 @@ def serve(
         # are current. --no-convert skips it for a fast start.
         click.echo(f"Refreshing {projects_path}...")
         process_projects_hierarchy(
-            projects_path, silent=True, theme=resolved_theme, jobs=jobs
+            projects_path,
+            silent=True,
+            theme=resolved_theme,
+            jobs=jobs,
+            show_temp_projects=show_temp_projects,
         )
 
     db_path = get_cache_db_path(projects_path)
@@ -2412,6 +2530,7 @@ def serve(
                 entry_store=serve_store,
                 theme=resolved_theme,
                 jobs=jobs,
+                show_temp_projects=show_temp_projects,
             )
 
         def report(exc: BaseException) -> None:
@@ -2631,6 +2750,7 @@ def _build_search_index(
     ),
 )
 @_theme_option
+@_show_temp_projects_option
 @click.option("--debug", is_flag=True, default=False, help="Show full tracebacks.")
 def watch(
     input_path: Optional[Path],
@@ -2643,6 +2763,7 @@ def watch(
     quiet_period: float,
     max_latency: float,
     theme: Optional[str],
+    show_temp_projects: bool,
     debug: bool,
 ) -> None:
     """Re-convert transcripts as they change, until interrupted.
@@ -2716,6 +2837,7 @@ def watch(
                 projects_path,
                 memo=recent_memo,
                 session_pages=individual,
+                show_temp_projects=show_temp_projects,
             )
         except Exception as exc:
             click.echo(f"  recent sessions not refreshed: {exc!r}", err=True)
@@ -2731,6 +2853,7 @@ def watch(
                 write_combined=write_combined,
                 generate_individual_sessions=individual,
                 theme=resolved_theme,
+                show_temp_projects=show_temp_projects,
             )
         else:
             convert_jsonl_to(

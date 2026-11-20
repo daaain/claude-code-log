@@ -29,6 +29,10 @@ from claude_code_log import converter, render_cache, render_dispatch
 from claude_code_log import render_pool as render_pool_module
 from claude_code_log.converter import convert_jsonl_to
 from claude_code_log.render_pool import RenderPool, RenderUnit
+from test.conftest import run_in_both_themes
+
+# Each test runs in both themes: the claim these tests check holds in each.
+theme = run_in_both_themes("convert_jsonl_to")
 
 # Real project with 40 session files — enough for several combined pages
 # and a wide spread of message types.
@@ -67,6 +71,15 @@ def _convert_copy(tmp_path: Path, name: str, **kwargs: object) -> dict[str, byte
     }
     assert rendered, "conversion produced no HTML"
     return rendered
+
+
+def test_every_page_is_in_the_theme_under_test(tmp_path: Path, theme: str):
+    """Guards the both-themes sweep: if the theme never reached the
+    render, each equivalence below would compare classic with classic
+    twice and pass without checking the minimal theme at all."""
+    rendered = _convert_copy(tmp_path, "themed")
+    marked = {name for name, page in rendered.items() if b"theme-minimal" in page}
+    assert marked == (set(rendered) if theme == "minimal" else set())
 
 
 def _assert_same(

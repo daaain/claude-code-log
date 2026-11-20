@@ -4,9 +4,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, ClassVar, Union, Optional, Literal, cast
+from typing import Annotated, Any, ClassVar, Union, Optional, Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .json_depth import exceeds_depth
 
@@ -136,11 +136,29 @@ class TextContent(BaseModel):
 
 
 class ImageSource(BaseModel):
-    """Base64-encoded image source data."""
+    """Base64-encoded image source data, held inline.
+
+    What a transcript carries. Parsing swaps most images for an
+    `ImageRef` (`image_store`); a small one, or one whose source would
+    not round-trip exactly, stays inline.
+    """
 
     type: Literal["base64"]
     media_type: str
     data: str
+
+
+class ImageRef(BaseModel):
+    """An image held by reference: its bytes are found by ``digest``.
+
+    Read them through ``image_store.image_bytes`` (or ``image_base64``),
+    which take either kind of source, never from a field.
+    """
+
+    type: Literal["ref"]
+    # Hex only: it becomes part of an exported image's file name.
+    digest: str = Field(pattern=r"^[0-9a-f]{32}$")
+    media_type: str
 
 
 class ImageContent(BaseModel):
@@ -151,7 +169,7 @@ class ImageContent(BaseModel):
     """
 
     type: Literal["image"]
-    source: ImageSource
+    source: Annotated[Union[ImageSource, ImageRef], Field(discriminator="type")]
 
 
 class UsageInfo(BaseModel):
@@ -279,6 +297,33 @@ class UserTranscriptEntry(BaseTranscriptEntry):
     # carries the id of the originating tool_use so the renderer can fold
     # the skill body into that tool_use block. See issue #93.
     sourceToolUseID: Optional[str] = None
+
+    @field_validator("toolUseResult")
+    @classmethod
+    def _drop_read_image_copy(cls, value: Any) -> Any:
+        """Drop the second copy of a Read tool's image.
+
+        A Read of an image carries it twice: as an ``image`` block in the
+        tool_result (``message.content``), which is what renders, and again
+        as ``toolUseResult.file.base64``, which nothing reads — a Read's
+        structured result is used only for a text file's ``content``. The
+        copy was over 40% of the image bytes in a real 6GB archive, and
+        every entry is held in memory, carried to render workers and
+        written to the cache, so it goes at parse time; the source JSONL
+        keeps it. The file's other fields (type, size, dimensions) stay.
+        """
+        if not isinstance(value, dict):
+            return value
+        result = cast(dict[str, Any], value)
+        file_info: Any = result.get("file")
+        if not isinstance(file_info, dict) or "base64" not in file_info:
+            return result
+        kept: dict[str, Any] = {
+            key: item
+            for key, item in cast(dict[str, Any], file_info).items()
+            if key != "base64"
+        }
+        return {**result, "file": kept}
 
 
 class AssistantTranscriptEntry(BaseTranscriptEntry):

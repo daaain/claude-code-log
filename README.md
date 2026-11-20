@@ -145,7 +145,8 @@ claude-code-log transcript.jsonl
 # Specific directory
 claude-code-log /path/to/transcript/directory
 
-# Custom output location
+# Custom output location: a directory for every page, or a file for the combined page
+claude-code-log /path/to/directory -o ~/exports/my-project
 claude-code-log /path/to/directory -o combined_transcripts.html
 
 # Open in browser after conversion
@@ -160,9 +161,10 @@ A date-filtered run writes a view of its window: only the projects and
 sessions with messages in it, with the window's totals. It goes into a
 destination that holds none of the pages it writes, so over the pages of
 an earlier run it refuses to start: give it another `-o`, or `--force` to
-write over them (nothing is removed). For one directory, `-o` names the
-combined page alone and the session pages go into the directory, hence
-`--combined only` above. See [Viewing a date
+write over them (nothing is removed). For one directory, an `-o` file
+(`-o page.html`) names the combined page alone and the session pages go
+into the directory, hence `--combined only` above; an `-o` directory takes
+every page. See [Viewing a date
 window](https://daaain.github.io/claude-code-log/date-window/).
 
 ### Feeding Past Conversations to an LLM
@@ -223,7 +225,10 @@ claude-code-log --theme classic   # still classic
 
 Themes write the same files (`combined_transcripts.html`, `session-*.html`, …) rather than separate ones, and each page records the theme it was rendered in, so switching theme regenerates the whole archive (and switching back regenerates it again). `--theme` is HTML-only; with `--format md` it is ignored with a warning. An unknown `CLAUDE_CODE_LOG_THEME` value is an error. The [themes guide](https://daaain.github.io/claude-code-log/themes/) walks through the minimal theme's toolbar, branch modes and dark mode, with screenshots.
 
-![The minimal theme with two background agents folded to one line each](docs/assets/themes/main-light.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/themes/main-dark.png">
+  <img src="docs/assets/themes/main-light.png" alt="The minimal theme with two background agents folded to one line each">
+</picture>
 
 ## Project Hierarchy Output
 
@@ -249,6 +254,7 @@ When processing all projects, the tool generates:
 - **Session Navigation**: Expandable session list with summaries and quick access to individual session files
 - **Summary Statistics**: Total projects, transcript files, and message counts with token usage
 - **Recent Activity**: Projects sorted by last modification date
+- **Temporary directories folded away**: Projects worked on only from a temp dir (`/tmp`, `/var/folders`, …: test suites, scratchpad agents, scripted `claude -p` runs) sit in one collapsed group at the end, and projects with nothing to open are left out; `--show-temp-projects` lists them with the rest
 - **Quick Navigation**: One-click access to combined transcripts or individual sessions
 - **Clean URLs**: Readable project names converted from directory names
 
@@ -288,12 +294,12 @@ Markdown export provides a lightweight, portable alternative to HTML:
 - **Message Excerpts**: Section titles include message previews for quick navigation
 - **Code Preservation**: Syntax highlighting hints via fenced code blocks
 - **Embedded Viewer**: TUI includes built-in Markdown viewer with table of contents
-- **Image Support**: Configurable image handling (placeholder, embedded base64, or referenced files)
+- **Image Support**: Configurable image handling (placeholder, embedded base64, or referenced files — the default, which HTML compresses to AVIF)
 - **`--compact` Mode**: Merge consecutive same-type section headings — most useful with `--depth agent` or `assistant` where tool stripping creates runs of Assistant or User sections
 
 ## Installation
 
-Requires Python 3.10 or later, linked against **SQLite 3.35 or later** for the
+Requires Python 3.11 or later, linked against **SQLite 3.35 or later** for the
 cache (`python3 -c "import sqlite3; print(sqlite3.sqlite_version)"` prints the
 version yours uses). The Pythons `uv` installs bundle a recent SQLite; a
 distribution's system Python links the system's own, which can be older. With

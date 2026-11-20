@@ -36,7 +36,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | CSS class taxonomy | `html/templates/components/*.css` | [css-classes.md](css-classes.md) |
 | JSON export (#36) | [`json/`](../claude_code_log/json/) | inlined below (§ 2.5) |
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
-| Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
+| Image export | [`image_export.py`](../claude_code_log/image_export.py), [`image_store.py`](../claude_code_log/image_store.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
 | Markdown engine (wenmode) | [`markdown_plugins.py`](../claude_code_log/markdown_plugins.py), `html/utils.py`, `markdown/renderer.py` | inlined below (§ 2.17) |
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
@@ -127,10 +127,12 @@ reports `file_version_mismatch` on every path — single-file, paginated,
 streaming (§ 2.13), session-scoped (§ 2.12), render pool (§ 2.10), the
 all-projects plan, `watch`/`serve`. Cache rows (`html_cache`,
 `html_pages`) are shared between themes and need no theme column. One
-promotion keeps archives single-themed: a `--combined no` run whose
-combined output carries the other theme rewrites it once
-(`converter.combined_theme_mismatch`), because its session pages link
-back to it. The project index and the archive search page are rewritten
+promotion keeps archives single-themed and current: a `--combined no`
+run whose combined output carries the other theme, or another library
+version's stamp, rewrites it once (`converter.combined_output_outdated`),
+because its session pages link back to it. Without it, an upgrade would
+leave the combined pages in the old rendering for as long as only
+`watch` or `serve --watch` ran. The project index and the archive search page are rewritten
 on every run and decide nothing from their stamp; they are rendered in
 the run's theme on every path that writes them (the all-projects run and
 so `serve`, its `--watch` ticks and `watch --all-projects`, and the
@@ -159,12 +161,13 @@ not already hold. That check (`_window_view_files`: the index pages,
 each shown project's combined page and its window's session pages, not
 the vendored assets) runs before anything is written and raises
 `WindowOutputExists` unless the run is forced; nothing is ever removed.
-A project the window shows nothing of is not converted, is reported as
+A project the window shows nothing of is not converted, is counted as
 having no messages in the window and is left out of the index, which
 gives each listed project the window's totals; archived projects are
 left out too. Workers
-run silent; the parent prints one progress line per project as results
-arrive. All workers share the WAL-mode SQLite cache DB — each writes
+run silent; the parent prints one progress line per converted project
+as results arrive, after a single line counting the projects it had
+nothing to do for (cached, or with no messages in the window). All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
 transactions. Serialised is not the same as fair, though. SQLite does
 not queue writers: one that finds the lock taken polls with a growing
@@ -317,6 +320,40 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   conversion 11% faster — compressing rows is the largest item in a
   watch tick). Reading is level-agnostic, so rows written at any level
   still load.
+- Per-image (migration 017): each distinct image an entry carries
+  (a pasted image, a tool result's: mostly Read screenshots) is stored
+  once, as raw bytes, in `image_blobs`, keyed by a BLAKE2b-128 digest
+  ([`cache_images.py`](../claude_code_log/cache_images.py)). Entries
+  hold each image as a reference from the parse on (§ 2.7), so the
+  row's JSON holds `{"type": "ref", "digest": …, "media_type": …}` and
+  `messages.image_refs` lists the digests as a JSON array. Reading a row
+  leaves the reference as it is: `_entries_for_file` only checks, in one
+  query, that the cache still holds every blob the batch references, and
+  `export_session_to_jsonl`, whose lines leave the cache, puts the
+  base64 back. A source swaps only when it is exact: no other key,
+  base64 that re-encodes to the same text, and at least 2 KB of it; any
+  other stays inline. Blobs are written in the transaction of the rows
+  that reference them, from the bytes the process holds (a reference
+  whose bytes it no longer holds names a blob a cache already has), and
+  those bytes are released from memory once it commits. A refresh
+  spools them with its rows
+  (`refresh_spool.py` has its own `image_blobs`) and its merge copies each
+  file's blobs before its rows (`cache_images.MERGE_BLOBS`, through the
+  rows' own `image_refs` and `json_each`, which `check_json1` makes sure
+  of at migration), and the overlay a refresh reads through has an
+  `image_blobs` view too. Blobs outlive their rows when a file is
+  rewritten or deleted: at the end of an all-projects pass, under the
+  pass lock, `sweep_image_blobs` marks the blobs no row references,
+  unmarks those referenced again, and deletes those marked for over an
+  hour. A reader that still misses one (it would have to hold its rows
+  for that hour) reads the file as not cached and parses it again; the
+  render's snapshot read (`load_snapshot_entries`), which may not parse
+  again, and an archived session, with no transcript to parse, show a
+  placeholder for that image and keep the rest. Identical bytes under two
+  media types share a blob; each reference keeps its own media type.
+  On the archive measured in #416 this took the cache from 4.13 GB to
+  3.46 GB (3,881 distinct images, 1.03 GB raw, referenced from 5,980
+  rows); `_CONTENT_SCHEMA_SALT` 3 re-parses older caches once.
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.
@@ -654,6 +691,14 @@ the first connection has to read the whole log to recover it anyway, and
 the checkpoint costs about as much again (2 GB: 1.1 s + 1.1 s on a warm
 Linux page cache; the reporter's disk ran ~30 MB/s), so paying it up front
 spares every read and write of the pass. Otherwise it costs one `stat`.
+Before its checkpoint a pass also hands free pages back to the disk
+(`cache.compact_cache`): SQLite keeps the pages a write frees in the
+file for later writes, so a re-parse after a content-schema change
+(#416's left ~1.4 GB of a 5.57 GB cache free) never shrinks it. When at
+least a fifth of the file, and 64 MB, is free pages, it runs `VACUUM`,
+waiting at most 5 s for a writer and otherwise leaving it for the next
+pass; `CLAUDE_CODE_LOG_CACHE_COMPACT=0` turns it off. `VACUUM` writes the
+whole database through the WAL, which the checkpoint then truncates.
 Separately, `save_cached_entries` and
 `extend_cached_entries` serialise their entries (json + zlib, the part
 that scales with the session) *before* their first write, because
@@ -890,35 +935,123 @@ format-agnostic: HTML and Markdown both call into it. Three modes
 - `embedded` — base64-encode the image directly into the output as
   a data URL.
 - `referenced` — write the image to disk next to the output and
-  embed a `src=` reference.
+  embed a `src=` reference. The default for both formats.
+
+**Images are held by reference.** A transcript carries each image as
+base64 inside its entry, and an entry is held whole: in the master list,
+in every slice fed to a render worker, in the parsed-entry store across
+watch ticks. So the parser swaps each image's source for a reference
+before the models are built
+([`image_store.py`](../claude_code_log/image_store.py), `take_images`,
+on any line whose text holds `"base64"`): `ImageContent.source` is an
+`ImageRef` (`type: "ref"`, `digest`, `media_type`), and a tool result's
+image dict carries the same three keys. The swap is the cache's (§ 2.3):
+only an exact source of 2 KB or more, so a small or odd one stays an
+inline `ImageSource`, and every reader takes both, through
+`image_bytes` / `image_base64` / `image_digest`, never a field. The
+bytes are held in the process, once per distinct image, until a cache
+write that stores them commits (`image_store.release`, from
+`write_transaction` or the end of `atomic_refresh`); after that, and in
+any process that opened the cache (each `CacheManager` registers its
+database, a render worker's read-only one included), they are read back
+from `image_blobs`, one image at a time on a connection of its own, with
+the last 32 MB read kept for the next pass over the same page. A run
+with no cache (a single transcript, `--no-cache`) keeps them held until
+`convert_jsonl_to` returns. A render pool hands its workers the parent's
+caches and, should any be left, the images it still holds. JSON export
+(`JsonRenderer`) writes each image out whole, as the transcript had it.
+A transcript's own `ref` source is forged (Claude Code writes images
+inline), so the parser empties it, and an `ImageRef` digest must be 32
+hex characters: it becomes part of a file name. On the two most
+image-heavy projects of a real archive (43% of their transcript bytes is
+images), this took 17–31% off the time of every run but the first (which AVIF
+encoding dominates: 6–7%) and 41–50% off peak memory (30–37% on the
+first run), medians of three runs, with byte-identical pages
+([work/cache-image-store.md](../work/cache-image-store.md)).
+
+Referenced files land in `images/` beside the page, named
+`image_<digest><ext>`, from the source image's digest, so an image
+already exported is found from its reference alone: a warm render reads
+no image bytes at all. Markdown writes the source bytes under the first
+16 hex digits of that digest. HTML re-encodes through `export_compressed_image`
+(Pillow): AVIF at quality 50, speed 8, longest side capped at 2000px,
+full 4:4:4 chroma for non-JPEG sources (mostly screenshots, where
+subsampling smears coloured text), no EXIF in the output, and a PNG
+colour key (tRNS) turned into a real alpha channel, which AVIF needs to
+keep those pixels transparent. Its
+digest covers the source's digest *and* the encoder settings
+(`_encoding_tag`), so a file is found again — by any pass, run or
+worker — without decoding the source, and a settings change renames
+every file instead of leaving old encodings behind a current name. The
+source is written unchanged when re-encoding would not help (animated,
+no smaller than the source, Pillow without AVIF or WebP) or Pillow
+cannot read it. Each HTML `<img>` carries `loading="lazy"` and the
+displayed (EXIF-oriented, scaled) `width`/`height`, so lazy loading
+doesn't shift the layout; the sizes come from the encode or, for a
+file already on disk, from its header. A render with no output
+directory (an in-memory page) embeds instead, as does every stdout
+stream, whose temp directory is discarded. An image written into
+Markdown text as a `data:` URL (a fetched page, a pasted snippet) comes
+out of the Markdown render as an inline `<img>`; in referenced mode
+`HtmlRenderer._export_inline_data_images` moves it into a file the same
+way, on each formatted fragment, before the fragment store keeps it. Before this, an image-heavy
+session's page held each Read-tool screenshot as inline base64 — a
+real 350MB session page is 30MB plus 73MB of AVIF files.
 
 `embedded` and `referenced` both refuse an image unless
-`is_safe_image_source` passes: the media type must be PNG, JPEG, GIF
-or WebP (never the scriptable `image/svg+xml`) and the data strictly
-valid base64, otherwise the image degrades to the placeholder. The
+`is_safe_source` passes: the media type must be PNG, JPEG, GIF
+or WebP (never the scriptable `image/svg+xml`) and inline data strictly
+valid base64 (a reference's bytes passed that check when it was made),
+otherwise the image degrades to the placeholder, as does a reference
+whose bytes no cache holds any longer. The
 transcript's `media_type` and `data` are untrusted (an image can come
 back from a tool, an MCP server or a web page), and a crafted
 `media_type` used to break out of the `<img src>` attribute (issue
 #277); the HTML sinks also `escape_html` the final `src`. Tool-result
-images go through the same gate, and plugins get it from
+images go through the same gate and the same export mode
+(`HtmlRenderer._format_tool_result_image`,
+`MarkdownRenderer._tool_result_image`), and plugins get it from
 `claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
 
-Default is `embedded` for HTML (single self-contained file) and
-`referenced` for Markdown (keeps the `.md` text small and lets
-images live as separate PNGs alongside).
+Default is `referenced` for both: an HTML page or `.md` file then
+needs the `images/` directory beside it. `embedded` drops that
+requirement, but an HTML page is still not a single self-contained
+file: its timeline loads vis-timeline from the `assets/` directory
+beside it (below).
 
 Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
-from a BLAKE2b digest of the decoded bytes — so a given image maps to
+from the BLAKE2b digest of the decoded bytes (plus, for HTML's compressed
+exports, the encoder settings, as above) — so a given image maps to
 exactly one file no matter which render pass, run, or worker process
 exports it, and re-exporting is idempotent (an existing file is already
 the right bytes; writers go through a unique temp file + atomic
 `os.replace`, so concurrent exporters of the same image replace
-identical content). This replaced a per-render counter whose names
+identical content; on Windows, where one exporter's replace can be
+refused while another's lands, a refused replace counts as done once the
+file exists, and is otherwise retried briefly — the same treatment as the
+timeline assets below). This replaced a per-render counter whose names
 collided between the combined-page and per-session passes — each pass
 restarted at `image_0001` and assigned the same names to different
 images, so the last pass to run overwrote the other's files. Content
 addressing is also what lets referenced-mode renders use the fragment
 store (§ 2.9) and the render fan-out (§ 2.10).
+
+**Images no page shows are removed**, by
+`image_export.prune_unreferenced_images`: it reads every HTML and
+Markdown page in the directory for `images/image_<digest>.<ext>`
+references and deletes the exported images none of them makes. Files
+not named like an exported image, and any modified in the last hour, are
+left alone; an exporter that reuses a file touches it, so an image a
+concurrent run is about to reference survives. Reading the pages costs
+about what writing them did, so a conversion sweeps only once per
+library version per output directory (`sweep_images_once`, which leaves
+the version in `images/.swept`): the run after an upgrade, which
+re-renders the pages and may orphan a previous encoder's files.
+`converter.sweep_project_images` runs it after each project converts
+(inline, in a pool worker, or from the CLI for one project), never for
+a date window or a single transcript. `--clear-output` prunes with no
+grace period after deleting a format's pages, so pages of the other
+format keep their images.
 
 **The timeline library is a sidecar too.** vis-timeline ships in the
 package (`html/assets/vendor/`, pinned with checksums in its
@@ -933,7 +1066,13 @@ copy. A bare-string render (`generate_html()` without `output_dir`) gets
 empty paths, and its timeline reports the missing library rather than
 fetching one. File names carry the library version, so an upgrade adds
 files instead of overwriting them; writes are temp file + `os.replace`
-because the render fan-out's workers all ensure the folder at once. The
+because the render fan-out's workers all ensure the folder at once. On
+Windows one worker's replace can be refused (WinError 5) while another's
+is landing; a refused replace counts as done once the file is that
+build (same name, same size), and is otherwise retried briefly
+(`utils.retry_on_sharing_violation`) before the page renders without
+timeline sources — which a parallel render once did, differing from the
+serial one. The
 library used to come from unpkg, unpinned, the one network request a
 generated page made (issue #278).
 
@@ -1009,6 +1148,27 @@ store-less at its pre-store footprint instead of trading its last RAM
 for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
 valve; whenever the valve trips, the render pool's far higher memory
 bar has already declined, so a store-less conversion is always serial.
+
+**What "transcript bytes" means to every memory check** (this valve,
+the streaming valve of § 2.13, the render pool's worker cap of § 2.10
+and the all-projects plan that pre-sizes it, and the parsed-entry
+store of § 2.16): the trunk files' bytes less the image base64 a parse
+does not hold (`utils.resident_transcript_bytes`). A parse holds each
+image by reference and drops a Read result's second copy (§ 2.7), and
+counts per file the characters it took out that way
+(`image_store.take_images`; a resumed parse starts from its held
+prefix's count), which the cache records in `cached_files.image_bytes`
+(migration 018). The coefficients were calibrated on what a parsed
+entry costs per byte of its line, so the base64 never belonged in the
+count: on the two most image-heavy projects measured it is 64–67% of
+the trunk bytes (35–40% image blocks, 27–29% Read copies; 30% across a
+whole 146-project archive), and the checks overestimated those
+conversions about threefold. Counted out, the worker cap's estimate
+matches again: 2.29 GB for the heavier at 8 workers, 2.37 GB measured
+(before phase 2: 3.97 GB estimated, 4.06 GB measured). With 4 GB free
+those two projects now render on 8 workers instead of 3, and with 2 GB
+on 3 instead of 1. A file the cache has no count for yet is taken
+whole, which only overestimates.
 
 A fragment is *not* a pure function of its source entry, and the store
 carries three guards for the three ways the same message legitimately
@@ -1176,8 +1336,8 @@ starts if some batch clears `worth_dispatching` above.
 `image_export_mode="referenced"` used to decline too, when renders
 allocated `images/image_NNNN.png` names from a per-call counter that
 collided across passes and processes; referenced filenames are now
-content-addressed (`image_export.export_image` digests the decoded
-bytes and writes via temp-file + atomic replace), so any pass, run, or
+content-addressed (`image_export` digests the decoded bytes and
+writes via temp-file + atomic replace), so any pass, run, or
 worker exporting the same image converges on the same file and the
 mode fans out like any other.
 
@@ -1893,6 +2053,28 @@ allowlist would anticipate, and none of those can execute script.
 `test/test_xss_browser.py` and `test/test_markdown_rendering.py` pin
 it.
 
+**Attributes need their quotes escaped, and links a fixed start.**
+Transcript values and directory names also land inside attributes.
+Every link built from a project directory name or a session id goes
+through `utils.relative_href`: the index page's project, variant and
+session links (the `rel_href` Jinja filter), the recent page's payload,
+and `search.build_link` for `serve`'s archive search. It percent-encodes
+each path segment, so a quote can't close the `href`, and starts the
+link with `./`, so a directory named `javascript:alert(1)` can't read as
+a URL scheme. Leading empty segments are dropped, so no link is absolute
+or a `//host` network path, and a backslash is a separator only on
+Windows: anywhere else it is part of a directory name and is encoded,
+since a browser would read `\\evil.example\x` as `//evil.example/x`.
+The search pages write result rows as markup with
+`escapeHtml` (`components/search.html`, `archive_search.html`, whose
+helper `minimal/search_rows.js` shares), which escapes `& < > " '` by
+string replacement: the `textContent`/`innerHTML` idiom leaves quotes
+alone, and the index finder reads its links back with
+`getAttribute('href')`, which decodes `&#34;` to `"`. A CSS class taken
+from tool input passes an allow-list instead (TodoWrite's `status` and
+`priority`). `test/test_xss_attributes.py` and
+`test/test_xss_attributes_browser.py` pin it.
+
 **Front matter is data, and only at the top of a whole body.** Read as
 plain Markdown, the closing `---` of a YAML front-matter block is a
 setext underline, so the block became one heading. A whole body — a
@@ -1965,6 +2147,83 @@ guarantee and which wenmode's own Markdown renderer would not either
 (it backslash-escapes `_`, `[`, `|`, `*` in text: measured at 217 of
 531 real bodies touched).
 
+**Every Markdown body passes one gate.** `_render_message` runs each
+formatter's output — built-in or plugin `format_markdown` — through
+`_gate_body`, the body counterpart of the heading gate
+(`safe_markdown_inline`), so a formatter that interpolates transcript
+text without escaping it still cannot leave live markup in the `.md`
+(GHSA-3jq4-r9jm-q682: before the gate, escaping was a per-formatter
+choice that assistant text, thinking and most tool bodies never made).
+The renderer's own tags — `<details>`, `<summary>`, `<code>`, session
+anchors, table-cell `<br>` — are written through `_own_tag`, which hides
+them from the gate behind a marker carrying a random per-process token;
+transcript text cannot forge it. A formatter's return value is
+therefore only final after the gate. `test/test_xss_markdown_surfaces.py`
+taints every text field of every `test/test_data` fixture and asserts the
+rendered `.md` parses with no live payload tag.
+
+The gate judges each body alone, but the `.md` is read as one document,
+so the gate then seals the body (`_seal_body`): it is made to parse in
+the document exactly as it parsed alone. Two things would otherwise move
+a body's raw code into prose. A fence the body leaves open would be
+closed by the next body's opening fence, putting that body's fenced HTML
+outside it. An indented first line would continue a list item or
+footnote the previous body ended in (the TodoWrite checklist followed by
+its result is one such pair). So an open top-level fence is closed with
+its own character and length, and a body that starts indented gets a
+`<!-- -->` line first, the CommonMark idiom for ending a list. Any other
+body starts at column 0 after a blank line, and that closes every block
+the previous body could leave open (the gate leaves no HTML block open).
+The test file checks a matrix of open endings × code-holding starts with
+wenmode and markdown-it.
+
+**wenmode doesn't get the last word on what is code.** Everything above
+trusts the gate's parser to tell code from prose, and viewers' parsers
+disagree with it, inline code most of all: a GFM table splits a code
+span at a pipe, a bare-URL autolink (VS Code's preview) swallows its
+opening backtick, an image's alt text ends it early. So:
+
+- A **code span holding `<`** is rewritten as the renderer's own
+  `<code>` element with its text entity-encoded (`_code_span_as_html`):
+  it renders the same in GitHub, VS Code and Obsidian, and no transcript
+  `<` is left outside fenced or indented code for any parser to misread.
+  The exception is a line opening with three backticks, which the span's
+  backticks keep from being a fence opener: there the span stays, with
+  its `<` as `&lt;`.
+- A **multi-line HTML block** is opened rather than escaped whole
+  (`_open_html_blocks`): only the `<` that starts it is escaped and the
+  text parsed again, so a fence inside stays code, a code span inside
+  gets the rewrite above, and inner tags are escaped as tags. Its text
+  then reads as Markdown, as MDX-style content means it to.
+- **Line endings** are normalised first (`_normalize_breaks`): wenmode
+  ends lines on `\u2028`, `\x0b`, `\x85` and the like where CommonMark
+  doesn't. **Headings and labels** are kept to one line
+  (`safe_markdown_label`), link labels also get their brackets escaped
+  (`safe_markdown_link_label`), and a `<summary>` is HTML-escaped around
+  our own tags.
+- A **link or image with a harmful target** (the HTML renderer's scheme
+  denylist, `html.utils.is_harmful_url`) is rewritten as the literal text
+  it was written as, and a reference definition with one is broken where
+  it's written, since its use may sit in another body. WebSearch result
+  URLs go through `_markdown_safe_url`; index link targets start with
+  `./` and are percent-encoded (`_relative_md_target`).
+- A **second opinion** (`neutralise_foreign_html`): markdown-it in two
+  configurations (CommonMark with tables, and `gfm-like` with linkify
+  and footnotes) parses each gated body, each label and the finished
+  document. If either finds raw HTML that isn't one of our own tags
+  (`_OWN_HTML_RE`), or fails to parse, every tag-like `<` that doesn't
+  start one is escaped, code included. Over a 7.6 GB archive of real
+  transcripts it never fired.
+
+The sweep in `test/test_xss_markdown_surfaces.py` taints every field in
+fourteen shapes, each a known disagreement or link trick, and judges the
+`.md` with three viewer configurations (one with Obsidian-style plugins
+the gate doesn't use, with markdown-it's own link filter off). On the
+same archive, against `main`: no errors, and the visible text differs only
+where raw HTML is now shown as text, links and code that were broken now
+render, and fences inside HTML blocks render as code. Markdown export
+takes about twice the CPU.
+
 **The wenmode pin is deliberate.** `wenmode>=0.15.1,<0.16`: the
 extensions subclass wenmode rules and renderers, so a minor bump is a
 re-tested step, not a lockfile refresh. 0.15.1 fixed the five parser
@@ -1985,7 +2244,8 @@ to it (one line in each theme).
 
 **Data.** [`recent.build_recent_payload`](../claude_code_log/recent.py)
 runs one query over the shared cache — `sessions JOIN projects`,
-`hidden = 0`, newest `last_timestamp` first — then loads each listed
+`hidden = 0`, not run in a temp dir, newest `last_timestamp` first —
+then loads each listed
 session's entries from the cache (`CacheManager.load_session_entries`,
 read-only) and summarises them in `summarise_session`. No schema change:
 everything is derived from rows the cache already holds, so archived
@@ -2013,6 +2273,32 @@ pipeline (§ 2.17). Tool lines and errors stay plain `text`.
 
 These are **transcript states, not liveness**: nothing here can tell an
 agent that stopped from one waiting quietly.
+
+**Temp-dir sessions.** A session whose cwd is a temp dir
+(`utils.is_temp_session`: its cwd, else its project folder's decoded
+name, against the fixed roots in `utils._TEMP_ROOTS` plus Windows'
+`AppData\Local\Temp`; deliberately not `$TMPDIR`, which tools point at
+odd places) is test-suite, scratchpad-agent or scripted-run debris. The
+query leaves it out with `ccl_is_temp_session`, a Python function
+registered on the read-only connection (`recent._temp_filter`), so the
+filter runs *before* `LIMIT`: dropping rows afterwards would let a burst
+of them crowd real sessions off the page. A date window's candidates
+are keyed rather than queried, so they are matched against
+`_temp_session_keys` (one pass over the sessions table, the same
+classification) before their `MAX_SESSIONS` cut. `--show-temp-projects`
+(`CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS`) turns the filter off; it reaches
+the page through `process_projects_hierarchy` → `_write_recent_page`, and
+`watch`'s per-tick `write_recent_data`. The index's side is in
+`renderer.prepare_projects_index`: it drops projects with nothing to
+open (`has_nothing_to_open`: no message and no listable session) from
+the rows and the totals, and flags each remaining project
+`is_temporary` (`utils.is_temp_project`: every working dir a temp dir;
+with none recorded, the folder name decides). The HTML index (both
+themes, flat list or `--expand-paths` tree) renders the flagged ones
+after the list in one collapsed `<details class='temp-projects'>`, the
+Markdown index under a *Temporary directories* line at the end, and
+the JSON index lists every project as data. With no temp project the
+markup is byte-identical to before.
 
 **Background work.** [`background_work.BackgroundWork`](../claude_code_log/background_work.py)
 collects what a session ran in the background as `summarise_session`
@@ -2206,6 +2492,45 @@ Cache reads/writes happen *in parallel* with the main pipeline:
 `cache.py` is consulted before parsing (cache hit → skip parse), after
 rendering (write the rendered HTML), and during TUI navigation (the
 TUI never re-parses).
+
+**Ids are checked where entries are read.** A transcript's `sessionId`
+and `agentId` become file names (`session-<id>.html`, `<id>.jsonl`,
+`agent-<id>.jsonl`), the `claude --resume` argument, links and Textual
+markup, and they are as untrusted as the content. Claude Code writes
+UUIDs and short hex ids, so
+[`transcript_ids.py`](../claude_code_log/transcript_ids.py) holds them to
+`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`; a session id may also carry the
+loader's own `#agent-<id>` suffixes ([agents.md](agents.md)), which reach
+the cache. `sanitize_entry_ids` replaces an invalid `sessionId`,
+`agentId`, `spawnedAgentId` or `toolUseResult.agentId` with
+`quarantined-<hash>`: stable, so the bad session's entries still group
+and render, under a name nothing downstream can misread. It runs in the
+JSONL parse loop (which warns on stderr with the file and line, never
+the value) and in `create_transcript_entry`, which every cache row
+passes through on load; the Codex provider applies the same rule to a
+rollout's thread id. The sinks check again, because a cache built
+elsewhere never meets the parser: `session_path` and
+`session_file_name` refuse a non-plain id, agent-file lookups skip one,
+the TUI resumes with `claude --resume=<id>` (attached, so the id can't
+be read as another option), a cached page path is deleted only when it
+is a bare `combined_transcripts*` name, and `--expand-paths` drops `..`
+from a recorded `cwd` and skips a project that would still land outside
+`-o`. The parse loop's warning is printed even in a silent
+(`--all-projects`) run. Caches built before 1.7.1 are rebuilt once
+(§ 2.3), since their derived rows hold the original ids.
+
+The TUI never splices a transcript or path value into Textual markup:
+Rich's `escape` misses tags Textual's own parser accepts (`[ @click=…]`
+with a leading space, `[$var]`), and malformed markup raises. Labelled
+values go through `Content.from_markup("[bold]…[/bold] $value",
+value=…)`, and notifications and plain `Static`s that carry data use
+`markup=False`; only `DataTable` cells, which Rich parses, keep Rich's
+escaper. A quarantined session is listed as current while a file it
+came from (the cache's session-to-file map) exists, is shown by its
+hash with a `[QUARANTINED]` marker, and can't be resumed, archived or
+restored: it has no `<id>.jsonl` of its own. Table rows are keyed by
+the full session id, so selection never depends on the displayed
+prefix.
 
 ---
 

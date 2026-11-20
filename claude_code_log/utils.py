@@ -2,12 +2,13 @@
 """Utility functions for message filtering and processing."""
 
 import json
+import logging
 import os
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Callable, Optional, TypeVar
+from pathlib import Path, PureWindowsPath
+from typing import Callable, Iterable, Mapping, Optional, Sequence, TypeVar
 
 from .models import (
     ContentItem,
@@ -167,6 +168,35 @@ def variant_suffix(
     if no_timestamps and is_markdown:
         parts.append("no-timestamps")
     return "".join(f".{p}" for p in parts)
+
+
+def relative_href(path: str) -> str:
+    """A relative link to an output file, safe to put in an ``href``.
+
+    The path's pieces come from directory names and transcript session
+    ids, so each ``/``-separated segment is percent-encoded (a quote or a
+    space can't end a quoted attribute, a ``#`` or ``?`` can't cut the
+    path short), and the result starts with ``./``: a first segment with
+    a colon, such as a project directory named ``javascript:alert(1)``,
+    would otherwise read as a URL scheme. Only on Windows is a backslash a
+    separator (a ``rel_dest`` from ``os.path``); elsewhere it is part of a
+    directory name and is encoded like any other character, since a browser
+    would read it as ``/``. Leading empty segments are dropped, so the
+    result can never be an absolute path or a ``//host`` network path.
+    HTML-escaping the result is still the template's job.
+    """
+    from urllib.parse import quote
+
+    if not path:
+        return path
+    posix = path.replace("\\", "/") if os.sep == "\\" else path
+    segments = posix.split("/")
+    while len(segments) > 1 and segments[0] == "":
+        segments.pop(0)
+    quoted = "/".join(quote(segment, safe="") for segment in segments)
+    if quoted.startswith(("./", "../")):
+        return quoted
+    return "./" + quoted
 
 
 def format_timestamp(timestamp_str: str | None) -> str:
@@ -329,6 +359,91 @@ def _is_temp_path(path_str: str) -> bool:
         "/var/folders/",  # macOS temp (alternate)
     ]
     return any(pattern in path_str for pattern in temp_patterns)
+
+
+# The system temp roots a session run there is throwaway in: test suites'
+# tmp_path, scratchpad agents, scripted `claude -p` calls. Fixed rather than
+# read from $TMPDIR / tempfile.gettempdir(): tools set TMPDIR to unusual
+# places (Claude Code's sandbox points it into its own tree), and a TMPDIR
+# that happened to contain the user's workspace would fold every project.
+_TEMP_ROOTS = (
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "/var/folders",
+    "/private/var/folders",
+)
+# Windows' per-user temp dir (%TEMP%), matched anywhere below a drive.
+_WINDOWS_TEMP_SEGMENT = "/appdata/local/temp"
+# A project folder named after a Windows cwd starts with its drive: ``C--``.
+_ENCODED_WINDOWS_DRIVE = re.compile(r"[a-z]--")
+
+SHOW_TEMP_PROJECTS_ENV_VAR = "CLAUDE_CODE_LOG_SHOW_TEMP_PROJECTS"
+
+
+def is_temp_dir(path_str: str) -> bool:
+    """Whether ``path_str`` is a system temp directory or lies under one.
+
+    Unlike :func:`_is_temp_path` (which only steers display-name choice,
+    and matches ``/tmp/`` anywhere), this is anchored: ``~/tmp/notes`` is
+    a real project, ``/tmp/pytest-of-me/…`` is not.
+    """
+    if not path_str:
+        return False
+    path = path_str.replace("\\", "/").rstrip("/")
+    if PureWindowsPath(path_str).drive:
+        lowered = path.lower()
+        return f"{_WINDOWS_TEMP_SEGMENT}/" in lowered or lowered.endswith(
+            _WINDOWS_TEMP_SEGMENT
+        )
+    return any(path == root or path.startswith(root + "/") for root in _TEMP_ROOTS)
+
+
+def _decoded_project_dir_is_temp(project_dir_name: str) -> bool:
+    """Whether a project folder name decodes to a temp directory.
+
+    Claude Code names the folder after the cwd with every ``/`` (and
+    ``.``, ``_``) turned into ``-``, so the decode is lossy, but the temp
+    roots themselves contain no dashes, so their prefixes survive it.
+    """
+    lowered = project_dir_name.lower()
+    # A Windows cwd (``C:\Users\…``) is encoded ``C--Users-…``: only such a
+    # name can be under %TEMP%. On Unix, ~/AppData/Local/Temp is a folder
+    # like any other.
+    if _ENCODED_WINDOWS_DRIVE.match(lowered) and (
+        lowered.endswith("-appdata-local-temp") or "-appdata-local-temp-" in lowered
+    ):
+        return True
+    return any(
+        project_dir_name == root.replace("/", "-")
+        or project_dir_name.startswith(root.replace("/", "-") + "-")
+        for root in _TEMP_ROOTS
+    )
+
+
+def is_temp_project(
+    project_dir_name: str, working_directories: Optional[Sequence[str]] = None
+) -> bool:
+    """Whether a project was only ever worked on from temp directories.
+
+    True when every recorded working directory is a temp dir; with none
+    recorded (a transcript holding no message yet), the project folder's
+    decoded name decides.
+    """
+    dirs = [wd for wd in (working_directories or []) if wd]
+    if dirs:
+        return all(is_temp_dir(wd) for wd in dirs)
+    return _decoded_project_dir_is_temp(project_dir_name)
+
+
+def is_temp_session(cwd: Optional[str], project_path: Optional[str]) -> bool:
+    """Whether a session ran in a temp dir: its cwd, else its project folder."""
+    if cwd:
+        return is_temp_dir(cwd)
+    return bool(project_path) and _decoded_project_dir_is_temp(
+        Path(str(project_path)).name
+    )
 
 
 def best_working_dir(
@@ -637,6 +752,33 @@ def format_from_output_suffix(output: Path) -> Optional[str]:
     return _SUFFIX_TO_FORMAT.get(output.suffix.lower())
 
 
+def _join_inside(output_dir: Path, parts: Sequence[str]) -> Optional[Path]:
+    """Join a transcript-derived path under ``output_dir``, never above it.
+
+    The parts come from a transcript's ``cwd``, which is untrusted: ``..``
+    would climb out of ``--output``, and a part carrying the other OS's
+    separator would do the same once the host splits it. So each part is
+    split on both separators and ``.``/``..``/empty pieces are dropped. A
+    result that still isn't lexically inside ``output_dir`` (a drive-relative
+    ``C:x`` on Windows) is refused: the project is skipped with a warning.
+    """
+    clean = [
+        piece
+        for part in parts
+        for piece in re.split(r"[\\/]", part)
+        if piece not in ("", ".", "..")
+    ]
+    dest = output_dir.joinpath(*clean) if clean else output_dir
+    root = os.path.normpath(os.path.abspath(output_dir))
+    full = os.path.normpath(os.path.abspath(dest))
+    if full != root and not full.startswith(root.rstrip(os.sep) + os.sep):
+        logging.getLogger(__name__).warning(
+            "Skipping a project whose path would leave the output directory"
+        )
+        return None
+    return dest
+
+
 def project_destination(
     project_dir: Path,
     *,
@@ -702,14 +844,14 @@ def project_destination(
             except ValueError:
                 # Real path is not under filter prefix — skip.
                 return None
-            return output_dir.joinpath(*rel.parts)
+            return _join_inside(output_dir, rel.parts)
         # Real-path tree directly under output_dir. Decompose the
         # path string in a form-aware way: POSIX shapes drop the
         # leading '/', Windows shapes keep the drive letter as a
         # leading path component (so `C:\foo\bar` lands at
         # `<output>/C/foo/bar`).
         rel_parts = _split_real_path_for_join(real_str)
-        return output_dir.joinpath(*rel_parts) if rel_parts else output_dir
+        return _join_inside(output_dir, rel_parts)
 
     # No --expand-paths: filter against the flat dir name (per Q2),
     # destination keeps the flat name. Require an exact match OR a
@@ -972,6 +1114,30 @@ def project_transcript_bytes(directory: Path) -> int:
     return sum(f.stat().st_size for f in trunk_jsonl_files(directory))
 
 
+def resident_bytes(files: Iterable[Path], image_bytes: Mapping[str, int]) -> int:
+    """Bytes of ``files`` a parse keeps in memory: each file's size less
+    its images (``image_bytes``, by file name, from
+    ``CacheManager.image_bytes_by_file``).
+
+    A parse holds an image as a reference and drops a Read result's
+    second copy (`image_store.take_images`), so the base64 in a
+    transcript never reaches the memory the checks budget for. On
+    image-heavy projects that is most of the file. A file the cache has
+    no count for is taken whole, which only overestimates.
+    """
+    total = 0
+    for f in files:
+        size = f.stat().st_size
+        total += max(0, size - image_bytes.get(f.name, 0))
+    return total
+
+
+def resident_transcript_bytes(directory: Path, image_bytes: Mapping[str, int]) -> int:
+    """:func:`project_transcript_bytes` less the images a parse doesn't
+    hold (:func:`resident_bytes`): what the memory checks size from."""
+    return resident_bytes(trunk_jsonl_files(directory), image_bytes)
+
+
 def is_agent_session(session_id: str) -> bool:
     """Check if a session ID is a synthetic agent session.
 
@@ -1222,6 +1388,33 @@ def retry_on_sharing_violation(operation: Callable[[], _T]) -> _T:
 def _replace_with_retry(tmp_path: Path, path: Path) -> None:
     """`os.replace`, retried briefly past a concurrent reader on Windows."""
     retry_on_sharing_violation(lambda: os.replace(tmp_path, path))
+
+
+# C0 and C1 control characters except tab: a terminal acts on them (clear
+# the screen, set the title, OSC 52 clipboard writes).
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f]")
+
+
+def printable(value: object) -> str:
+    """``str(value)`` with control characters shown as escapes.
+
+    For transcript-derived text written to a terminal (warnings, logs):
+    ``\x1b]0;…\x07`` would otherwise retitle or clear it.
+    """
+    return _CONTROL_CHARS_RE.sub(
+        lambda m: m.group(0).encode("unicode_escape").decode("ascii"), str(value)
+    )
+
+
+class PrintableArgsFilter(logging.Filter):
+    """Escape control characters in a log record's arguments."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                printable(a) if isinstance(a, str) else a for a in record.args
+            )
+        return True
 
 
 def atomic_write_text(

@@ -19,6 +19,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -352,6 +353,125 @@ class TestConverterVariantPaths:
 # ---------------------------------------------------------------------------
 # Cache coexistence
 # ---------------------------------------------------------------------------
+
+
+class TestCliOutputDirectory:
+    """A suffix-less ``-o`` is a directory for one project or one file too,
+    not a file name: every page goes under it, and nothing beside the
+    transcripts."""
+
+    def test_one_project_writes_every_page_under_it(self, tmp_path: Path) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        _write_session(project / "sess2.jsonl", "sess2")
+        out = tmp_path / "out"
+        result = CliRunner().invoke(cli_main, [str(project), "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert (out / "combined_transcripts.html").is_file()
+        assert (out / "session-sess1.html").is_file()
+        assert (out / "session-sess2.html").is_file()
+        assert sorted(p.name for p in project.iterdir()) == [
+            "sess1.jsonl",
+            "sess2.jsonl",
+        ]
+
+    def test_one_file_lands_in_it_under_its_own_name(self, tmp_path: Path) -> None:
+        source = tmp_path / "sess1.jsonl"
+        _write_session(source, "sess1")
+        out = tmp_path / "out"
+        result = CliRunner().invoke(cli_main, [str(source), "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert (out / "sess1.html").is_file()
+        assert not (tmp_path / "sess1.html").exists()
+
+    def test_another_file_of_the_same_name_replaces_its_page(
+        self, tmp_path: Path
+    ) -> None:
+        """The page in the directory is named after the file alone, so a
+        second source of that name must not pass for the first's."""
+        out = tmp_path / "out"
+        for n, marker in ((1, "FIRST-SOURCE"), (2, "SECOND-SOURCE")):
+            source = tmp_path / f"src{n}" / "sess.jsonl"
+            source.parent.mkdir()
+            _write_session(source, "sess")
+            source.write_text(
+                source.read_text().replace("hi 0", marker), encoding="utf-8"
+            )
+            # Older than the page already there: only the source tells them apart.
+            os.utime(source, (1_000_000_000, 1_000_000_000))
+            result = CliRunner().invoke(cli_main, [str(source), "-o", str(out)])
+            assert result.exit_code == 0, result.output
+        page = (out / "sess.html").read_text(encoding="utf-8")
+        assert "SECOND-SOURCE" in page and "FIRST-SOURCE" not in page
+
+    def test_clear_output_clears_the_directory_it_wrote(self, tmp_path: Path) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        out = tmp_path / "out"
+        runner = CliRunner()
+        assert runner.invoke(cli_main, [str(project)]).exit_code == 0
+        assert runner.invoke(cli_main, [str(project), "-o", str(out)]).exit_code == 0
+
+        result = runner.invoke(
+            cli_main, [str(project), "-o", str(out), "--clear-output"]
+        )
+        assert result.exit_code == 0, result.output
+        assert not list(out.glob("*.html"))
+        assert (project / "combined_transcripts.html").exists()
+
+    def test_clear_output_leaves_the_directory_s_other_pages(
+        self, tmp_path: Path
+    ) -> None:
+        """A directory --output may be a vault: only pages named as this
+        tool names them are cleared there."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "notes.md").write_text("mine", encoding="utf-8")
+        runner = CliRunner()
+        args = [str(project), "-f", "md", "-o", str(vault)]
+        assert runner.invoke(cli_main, args).exit_code == 0
+        assert (vault / "session-sess1.md").exists()
+
+        result = runner.invoke(cli_main, [*args, "--clear-output"])
+        assert result.exit_code == 0, result.output
+        assert not (vault / "session-sess1.md").exists()
+        assert not list(vault.glob("combined_transcripts*.md"))
+        assert (vault / "notes.md").read_text(encoding="utf-8") == "mine"
+
+    def test_another_project_with_as_many_messages_replaces_the_page(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "out"
+        runner = CliRunner()
+        for name, marker in (("a", "FROM-PROJECT-A"), ("b", "FROM-PROJECT-B")):
+            project = tmp_path / name
+            project.mkdir()
+            _write_session(project / "sess.jsonl", "sess")
+            path = project / "sess.jsonl"
+            path.write_text(path.read_text().replace("hi 0", marker), encoding="utf-8")
+            os.utime(path, (1_000_000_000, 1_000_000_000))
+            # Rendered in place first, so the cache records its page as
+            # current at this message count.
+            assert runner.invoke(cli_main, [str(project)]).exit_code == 0
+            result = runner.invoke(cli_main, [str(project), "-o", str(out)])
+            assert result.exit_code == 0, result.output
+        page = (out / "combined_transcripts.html").read_text(encoding="utf-8")
+        assert "FROM-PROJECT-B" in page and "FROM-PROJECT-A" not in page
+
+    def test_a_file_suffix_still_names_the_combined_page(self, tmp_path: Path) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_session(project / "sess1.jsonl", "sess1")
+        page = tmp_path / "page.html"
+        result = CliRunner().invoke(cli_main, [str(project), "-o", str(page)])
+        assert result.exit_code == 0, result.output
+        assert page.is_file()
+        assert (project / "session-sess1.html").is_file()
 
 
 class TestCacheVariantCoexistence:

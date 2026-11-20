@@ -36,6 +36,23 @@
     margin: 10px 0;
 }
 
+/* Projects worked on only from temp dirs, folded into one group after the
+   list (index.html). */
+.temp-projects {
+    margin-top: 20px;
+}
+
+.temp-projects > summary {
+    cursor: pointer;
+    padding: 6px 0;
+    color: #666;
+    font-size: 0.95em;
+}
+
+.temp-projects > .project-list {
+    margin-top: 10px;
+}
+
 .project-card {
     background-color: #ffffff66;
     border-radius: 8px;

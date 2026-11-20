@@ -180,7 +180,6 @@ cython_debug/
 .examples
 test_output
 .DS_Store
-test/test_data/*.html
 .claude-trace
 .specstory
 
@@ -204,6 +203,7 @@ claude-code-log-cache.db
 
 # >>> foldyard (managed) — do not edit inside this block >>>
 # Box/host-generated files foldyard writes beside foldyard.toml; never commit.
+.claude/worktrees/
 .devbox-ca/
 .devbox-claude/
 .devbox-codex/
@@ -213,3 +213,5 @@ claude-code-log-cache.db
 # <<< foldyard (managed) <<<
 # Demo video recordings (scripts/demos/record.py)
 /.demos/
+# A copy of your real transcripts to experiment on (`just clone-real-transcripts`)
+/.ccl-data/

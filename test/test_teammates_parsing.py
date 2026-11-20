@@ -741,7 +741,7 @@ class TestTeammateToolOutputs:
         A malformed transcript with `|` in status or `\\n` in owner
         would previously split rows silently and shift subsequent cells.
         """
-        from claude_code_log.markdown.renderer import MarkdownRenderer
+        from claude_code_log.markdown.renderer import MarkdownRenderer, _gate_body
         from claude_code_log.models import (
             MessageMeta,
             TaskListItem,
@@ -777,7 +777,7 @@ class TestTeammateToolOutputs:
         template_msg = TemplateMessage(msg)
 
         renderer = MarkdownRenderer()
-        table = renderer.format_TaskListOutput(output, template_msg)
+        table = _gate_body(renderer.format_TaskListOutput(output, template_msg))
 
         # Pipes escaped in subject AND status
         assert r"A \| B" in table

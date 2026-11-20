@@ -112,6 +112,9 @@ class HeldPrefix:
     new sidecar can relink an entry that was parsed ticks ago.
 
     ``line_count`` continues the line numbering that parse warnings quote.
+    ``image_chars`` is how much of the prefix the entries do not hold
+    (`image_store.take_images`): what the parse resuming from it starts
+    its count at, and what the store does not charge for.
     """
 
     prefix_len: int
@@ -119,6 +122,12 @@ class HeldPrefix:
     entries: list["TranscriptEntry"] = field(default_factory=list["TranscriptEntry"])
     agent_ids: set[str] = field(default_factory=set[str])
     line_count: int = 0
+    image_chars: int = 0
+
+    @property
+    def resident_len(self) -> int:
+        """What the store charges for it: the prefix less its images."""
+        return max(0, self.prefix_len - self.image_chars)
 
 
 # Total source bytes the store will hold before evicting in insertion
@@ -211,7 +220,8 @@ class ParsedEntryStore:
 
     def __init__(self, budget_bytes: int = DEFAULT_BUDGET_BYTES) -> None:
         self._budget = budget_bytes
-        self._held: dict[str, tuple[FileStamp, list["TranscriptEntry"]]] = {}
+        # path -> (stamp, entries, bytes charged)
+        self._held: dict[str, tuple[FileStamp, list["TranscriptEntry"], int]] = {}
         self._prefixes: dict[str, HeldPrefix] = {}
         self._bytes = 0
         self.hits = 0
@@ -230,6 +240,8 @@ class ParsedEntryStore:
         entries: list["TranscriptEntry"],
         agent_ids: set[str],
         line_count: int,
+        *,
+        image_chars: int = 0,
     ) -> None:
         """Hold ``entries`` as the parse of ``path``'s first ``prefix_len`` bytes.
 
@@ -247,19 +259,22 @@ class ParsedEntryStore:
         """
         if prefix_len <= 0 or not entries:
             return
-        if prefix_len > self._budget or not self._has_memory_for(prefix_len):
+        held = HeldPrefix(
+            prefix_len=prefix_len,
+            digest=digest,
+            agent_ids=set(agent_ids),
+            line_count=line_count,
+            image_chars=image_chars,
+        )
+        size = held.resident_len
+        if size > self._budget or not self._has_memory_for(size):
             self.declines += 1
             self.drop_prefix(path)
             return
         self.drop_prefix(path)
-        self._bytes += prefix_len
-        self._prefixes[str(path)] = HeldPrefix(
-            prefix_len=prefix_len,
-            digest=digest,
-            entries=copy.deepcopy(entries),
-            agent_ids=set(agent_ids),
-            line_count=line_count,
-        )
+        held.entries = copy.deepcopy(entries)
+        self._bytes += size
+        self._prefixes[str(path)] = held
         self._evict_to_budget()
 
     def get_prefix(self, path: Path) -> Optional[HeldPrefix]:
@@ -279,28 +294,37 @@ class ParsedEntryStore:
             entries=copy.deepcopy(held.entries),
             agent_ids=set(held.agent_ids),
             line_count=held.line_count,
+            image_chars=held.image_chars,
         )
 
     def drop_prefix(self, path: Path) -> None:
         """Forget the held prefix — its file no longer starts with those bytes."""
         dropped = self._prefixes.pop(str(path), None)
         if dropped is not None:
-            self._bytes -= dropped.prefix_len
+            self._bytes -= dropped.resident_len
 
     # ---- writing ---------------------------------------------------------
 
     def put(
-        self, path: Path, stamp: Optional[FileStamp], entries: list["TranscriptEntry"]
+        self,
+        path: Path,
+        stamp: Optional[FileStamp],
+        entries: list["TranscriptEntry"],
+        *,
+        image_chars: int = 0,
     ) -> None:
         """Hold ``entries`` for ``path``, pinned to ``stamp``.
 
         ``stamp`` must be the file's identity as captured *before* the
         parse (see the module docstring); None — an unstattable file —
         declines, as does an empty list, since there is nothing to save.
+        ``image_chars`` is how much of the file the entries do not hold
+        (images, `image_store.take_images`), which the store does not
+        charge for.
         """
         if stamp is None or not entries:
             return
-        size = stamp[0]
+        size = max(0, stamp[0] - image_chars)
         if size > self._budget:
             self.declines += 1
             return
@@ -311,8 +335,8 @@ class ParsedEntryStore:
         key = str(path)
         existing = self._held.pop(key, None)
         if existing is not None:
-            self._bytes -= existing[0][0]
-        self._held[key] = (stamp, entries)
+            self._bytes -= existing[2]
+        self._held[key] = (stamp, entries, size)
         self._bytes += size
         self._evict_to_budget()
 
@@ -336,12 +360,12 @@ class ParsedEntryStore:
         file's whole history. Both are pure performance either way.
         """
         while self._bytes > self._budget and self._held:
-            _key, (stamp, _entries) = next(iter(self._held.items()))
+            _key, (_stamp, _entries, charged) = next(iter(self._held.items()))
             self._held.pop(_key)
-            self._bytes -= stamp[0]
+            self._bytes -= charged
         while self._bytes > self._budget and self._prefixes:
             key = next(iter(self._prefixes))
-            self._bytes -= self._prefixes.pop(key).prefix_len
+            self._bytes -= self._prefixes.pop(key).resident_len
 
     # ---- reading ---------------------------------------------------------
 
@@ -358,7 +382,7 @@ class ParsedEntryStore:
         if held is None:
             self.misses += 1
             return None
-        stamp, entries = held
+        stamp, entries, _charged = held
         from .cache import fingerprint_scope
 
         if stamp_file(path, fingerprint_scope(stamp[2])) != stamp:
@@ -372,7 +396,8 @@ class ParsedEntryStore:
 
     @property
     def held_bytes(self) -> int:
-        """Source bytes currently pinned (the residency this store adds)."""
+        """Source bytes currently pinned, less their images (the residency
+        this store adds)."""
         return self._bytes
 
     def stats_line(self) -> str:

@@ -28,7 +28,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 SPOOL_INFIX = ".spool-"
 
@@ -57,6 +57,7 @@ MESSAGE_COLUMNS = (
     ("_level", "TEXT"),
     ("_operation", "TEXT"),
     ("content", "BLOB NOT NULL"),
+    ("image_refs", "TEXT"),
 )
 MESSAGE_COLUMN_NAMES = tuple(name for name, _ in MESSAGE_COLUMNS)
 MESSAGE_COLUMN_LIST = ", ".join(MESSAGE_COLUMN_NAMES)
@@ -74,6 +75,7 @@ CREATE TABLE files (
     message_count INTEGER NOT NULL,
     subagents_fingerprint TEXT,
     content_version TEXT,
+    image_bytes INTEGER NOT NULL DEFAULT 0,
     content_bytes INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE messages (
@@ -82,6 +84,13 @@ CREATE TABLE messages (
     {", ".join(f"{name} {decl}" for name, decl in MESSAGE_COLUMNS)}
 );
 CREATE INDEX messages_file ON messages(file_id);
+-- The images the spooled rows reference (`cache_images`), copied into the
+-- cache's own table by the merge, before the rows.
+CREATE TABLE image_blobs (
+    digest TEXT PRIMARY KEY,
+    media_type TEXT NOT NULL,
+    data BLOB NOT NULL
+);
 -- The lookups the incremental refresh makes while the spool overlays the
 -- cache (`CacheManager.atomic_refresh`), so they search here as they do
 -- in the cache's own indexes.
@@ -178,7 +187,8 @@ class SpooledFile:
     ``expected_existing`` rows already in the cache). The remaining
     fields are the ``cached_files`` row as of the parse, which the merge
     writes verbatim, except ``content_bytes``: the size of the spooled
-    rows' content, which decides how the merge commits.
+    rows' content and of the images they brought, which decides how the
+    merge commits.
     """
 
     id: int
@@ -192,6 +202,7 @@ class SpooledFile:
     message_count: int
     subagents_fingerprint: Optional[str]
     content_version: Optional[str]
+    image_bytes: int
     content_bytes: int
 
 
@@ -209,6 +220,9 @@ class RefreshSpool:
         # file). Autocommit, so a file's rows are visible to the cache
         # connection that attaches it as soon as they are written.
         self._conn = sqlite3.connect(self.path, isolation_level=None)
+        # The images spooled so far, for `image_store.release` once the
+        # merge has committed them to the cache.
+        self.image_digests: Set[str] = set()
         try:
             self._conn.execute("PRAGMA journal_mode = MEMORY")
             self._conn.execute("PRAGMA synchronous = OFF")
@@ -252,23 +266,39 @@ class RefreshSpool:
                 """INSERT INTO files
                    (file_name, file_path, mode, expected_existing, source_mtime,
                     source_size, cached_mtime, message_count,
-                    subagents_fingerprint, content_version)
+                    subagents_fingerprint, content_version, image_bytes)
                    VALUES (:file_name, :file_path, :mode, :expected_existing,
                            :source_mtime, :source_size, :cached_mtime,
                            :message_count, :subagents_fingerprint,
-                           :content_version)""",
-                {**record, "mode": mode, "expected_existing": expected_existing},
+                           :content_version, :image_bytes)""",
+                {
+                    "image_bytes": 0,
+                    **record,
+                    "mode": mode,
+                    "expected_existing": expected_existing,
+                },
             )
             file_id = cursor.lastrowid or 0
             size = 0
+
+            blobs: Dict[str, Any] = {}
 
             def counted() -> Iterable[Dict[str, Any]]:
                 nonlocal size
                 for row in rows:
                     size += len(row["content"])
+                    for blob in row.get("_image_blobs") or ():
+                        if blob.digest not in blobs:
+                            blobs[blob.digest] = blob
+                            size += len(blob.data)
                     yield {**row, "file_id": file_id}
 
             self._conn.executemany(_INSERT_ROW, counted())
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO image_blobs (digest, media_type, data)"
+                " VALUES (?, ?, ?)",
+                [(b.digest, b.media_type, b.data) for b in blobs.values()],
+            )
             self._conn.execute(
                 "UPDATE files SET content_bytes = ? WHERE id = ?", (size, file_id)
             )
@@ -276,6 +306,7 @@ class RefreshSpool:
         except BaseException:
             self._conn.execute("ROLLBACK")
             raise
+        self.image_digests.update(blobs)
         return file_id
 
     def files(self) -> List[SpooledFile]:
@@ -283,7 +314,8 @@ class RefreshSpool:
         rows = self._conn.execute(
             """SELECT id, file_name, file_path, mode, expected_existing,
                       source_mtime, source_size, cached_mtime, message_count,
-                      subagents_fingerprint, content_version, content_bytes
+                      subagents_fingerprint, content_version, image_bytes,
+                      content_bytes
                FROM files ORDER BY id"""
         ).fetchall()
         return [SpooledFile(*row) for row in rows]

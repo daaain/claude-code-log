@@ -243,12 +243,15 @@ class TestMarkdown:
         assert "> After invalid." in md
 
     def test_values_are_escaped(self, md: str) -> None:
-        # The only raw tags left are short values, each inside a code span:
-        # the one carrying backticks gets a span wide enough to hold them.
-        assert "**note:** `<script>alert(1)</script>`" in md
-        assert md.count("<script>") == 1
-        assert f"**tick:** ``{XSS_TICK}``" in md
-        assert md.count("<img src=x") == 1
+        # No raw tags left: a code span holding ``<`` is written as our own
+        # ``<code>`` element with its contents encoded.
+        assert (
+            "**note:** <code>&#60;script&#62;alert&#40;1&#41;&#60;&#47;script&#62;</code>"
+            in md
+        )
+        assert md.count("<script>") == 0
+        assert "**tick:** <code>a&#96; &#60;img src&#61;x" in md
+        assert md.count("<img src=x") == 0
 
     def test_multiline_value_is_fenced(self, md: str) -> None:
         # A line break in a code span would let "# Not a heading" render as

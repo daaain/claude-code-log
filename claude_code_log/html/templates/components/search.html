@@ -861,11 +861,16 @@
     }
 
     // Escape text for interpolation into innerHTML-backed markup — the
-    // indexed content is arbitrary conversation text.
+    // indexed content is arbitrary conversation text, and links (session
+    // ids) go inside quoted attributes, so quotes are escaped too: the
+    // textContent/innerHTML idiom leaves them alone.
     function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text ?? '';
-        return div.innerHTML;
+        return String(text ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     // Highlight text in search results (always case-insensitive). Matches

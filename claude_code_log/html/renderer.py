@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple, cast
 
 if TYPE_CHECKING:
     from ..dag import SessionTree
@@ -104,6 +104,7 @@ from ..renderer import (
     TemplateMessage,
     generate_template_messages,
     prepare_projects_index,
+    split_temp_projects,
     title_for_projects_index,
 )
 from ..lanes import CrossLinks, annotate_lanes, teammate_links
@@ -339,6 +340,13 @@ def _build_html_project_tree(template_projects: list[Any]) -> dict[str, Any]:
     return root
 
 
+# A ``data:`` image as the Markdown render writes it (``<img src="…" alt``),
+# for the media types ``is_harmful_url`` lets through.
+_INLINE_DATA_IMAGE_RE = re.compile(
+    r'<img src="data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+=*)"'
+)
+
+
 class HtmlRenderer(Renderer):
     """HTML renderer for Claude Code transcripts."""
 
@@ -392,11 +400,13 @@ class HtmlRenderer(Renderer):
             return f'<div class="markdown">{render_markdown(md_source)}</div>'
         return super()._dispatch_format(obj, message)
 
-    def __init__(self, image_export_mode: str = "embedded"):
+    def __init__(self, image_export_mode: str = "referenced"):
         """Initialize the HTML renderer.
 
         Args:
-            image_export_mode: Image export mode - "placeholder", "embedded", or "referenced".
+            image_export_mode: Image export mode - "placeholder", "embedded", or
+                "referenced" (the default: compressed files beside the page,
+                embedded when the render has no output directory).
         """
         super().__init__()
         self.image_export_mode = image_export_mode
@@ -524,19 +534,102 @@ class HtmlRenderer(Renderer):
 
     def _format_image(self, image: ImageContent) -> str:
         """Format image based on export mode."""
-        from ..image_export import export_image
+        tag = self._image_tag(image.source, "image", "uploaded-image")
+        return "[Image]" if tag is None else tag
 
-        src = export_image(
-            image,
-            self.image_export_mode,
-            output_dir=self._output_dir,
-        )
-        if src is None:
+    def _format_tool_result_image(self, source: Mapping[str, Any]) -> Optional[str]:
+        """Tool-result images follow the export mode like any other image.
+
+        ``source`` is the image item's ``source`` dict, inline or a
+        reference (`image_store`). An image the mode can't emit is
+        dropped, as an unsafe one always was — except in placeholder
+        mode, which marks where it was.
+        """
+        tag = self._image_tag(source, "Tool result image", "tool-result-image")
+        if tag is None and self.image_export_mode == "placeholder":
             return "[Image]"
+        return tag
+
+    def _export_inline_data_images(self, html: str) -> str:
+        """Move ``data:`` images out of a formatted fragment, into files.
+
+        Markdown text can carry an image as a ``data:`` URL (a fetched
+        page, a pasted snippet), which the Markdown render keeps as an
+        inline ``<img>``. In referenced mode it is exported like any other
+        image; one Pillow can't read stays inline, as before.
+        """
+        if (
+            self.image_export_mode != "referenced"
+            or self._output_dir is None
+            or 'src="data:image/' not in html
+        ):
+            return html
+        from ..image_export import export_compressed_image
+
+        output_dir = self._output_dir
+
+        def swap(match: "re.Match[str]") -> str:
+            exported = export_compressed_image(
+                {
+                    "type": "base64",
+                    "media_type": match.group(1),
+                    "data": match.group(2),
+                },
+                output_dir,
+            )
+            if exported is None:
+                return match.group(0)
+            size = (
+                f' width="{exported.width}" height="{exported.height}"'
+                if exported.width and exported.height
+                else ""
+            )
+            return (
+                f'<img src="{escape_html(exported.src)}"{size} '
+                'loading="lazy" decoding="async"'
+            )
+
+        return _INLINE_DATA_IMAGE_RE.sub(swap, html)
+
+    def _image_tag(self, source: Any, alt: str, css_class: str) -> Optional[str]:
+        """The ``<img>`` for one image under the export mode, or None.
+
+        Referenced mode writes a compressed, content-addressed file beside
+        the page (``image_export.export_compressed_image``) and loads it
+        lazily, with its size reserved. Without an output directory to
+        write into (a page rendered in memory) it embeds instead.
+        """
+        from ..image_export import export_compressed_image, export_image
+
+        if self.image_export_mode == "referenced" and self._output_dir is not None:
+            exported = export_compressed_image(source, self._output_dir)
+            if exported is None:
+                return None
+            size = (
+                f' width="{exported.width}" height="{exported.height}"'
+                if exported.width and exported.height
+                else ""
+            )
+            return (
+                f'<img src="{escape_html(exported.src)}" alt="{alt}" '
+                f'class="{css_class}"{size} loading="lazy" decoding="async" />'
+            )
+        mode = (
+            "embedded"
+            if self.image_export_mode == "referenced"
+            else self.image_export_mode
+        )
+        try:
+            image = ImageContent.model_validate({"type": "image", "source": source})
+        except ValueError:  # pydantic's ValidationError is a ValueError
+            return None
+        src = export_image(image, mode, output_dir=self._output_dir)
+        if src is None:
+            return None
         # Escape the src: export_image allowlists the media type and
         # validates the base64, but the data: URL (embedded mode) still
         # must not be able to break out of the attribute (issue #277).
-        return f'<img src="{escape_html(src)}" alt="image" class="uploaded-image" />'
+        return f'<img src="{escape_html(src)}" alt="{alt}" class="{css_class}" />'
 
     # -------------------------------------------------------------------------
     # System Content Formatters
@@ -971,7 +1064,7 @@ class HtmlRenderer(Renderer):
         self, output: ToolResultContent, _: TemplateMessage
     ) -> str:
         """Format → <pre>raw content</pre> (fallback for unknown tools)."""
-        return format_tool_result_content_raw(output)
+        return format_tool_result_content_raw(output, self._format_tool_result_image)
 
     def format_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Format → prompt text if long, empty if shown in title."""
@@ -993,7 +1086,7 @@ class HtmlRenderer(Renderer):
         self, output: ToolExecutionOutput, _: TemplateMessage
     ) -> str:
         """Format execution status and labelled result emissions."""
-        return format_tool_execution_output(output)
+        return format_tool_execution_output(output, self._format_tool_result_image)
 
     def title_ToolExecutionInput(
         self, _input: ToolExecutionInput, message: TemplateMessage
@@ -1652,7 +1745,8 @@ class HtmlRenderer(Renderer):
         # filenames are content-addressed (see image_export.export_image),
         # so a stored fragment's <img src> is the same name any tree would
         # allocate, and a fragment can only exist because a prior pass this
-        # conversion already wrote (or placeholdered) that file.
+        # conversion already wrote (or placeholdered) that file — into the
+        # same output directory, which is part of the key.
         fragment_store = self.fragment_store
         from .utils import footnote_scope
 
@@ -1685,6 +1779,11 @@ class HtmlRenderer(Renderer):
                         msg.agent_depth,
                         msg.spawns_collapsed_transcript,
                         msg.in_workflow_sidechannel,
+                        # A fragment's referenced images were exported
+                        # beside the page it was formatted for: an
+                        # `-o page.html` combined page and the session
+                        # pages in the project are two destinations.
+                        str(self._output_dir),
                     )
             cached = (
                 fragment_store.get(fragment_key, msg.content)
@@ -1707,7 +1806,7 @@ class HtmlRenderer(Renderer):
                 )
                 with footnote_scope(scope):
                     title = self.title_content(msg)
-                    html = self.format_content(msg)
+                    html = self._export_inline_data_images(self.format_content(msg))
                 formatted_ts = format_timestamp(
                     msg.meta.timestamp if msg.meta else None
                 )
@@ -2018,6 +2117,7 @@ class HtmlRenderer(Renderer):
         to_date: Optional[str] = None,
         expand_paths_tree: bool = False,
         provider_label: Optional[str] = None,
+        show_temp_projects: bool = False,
     ) -> str:
         """Generate an HTML projects index page.
 
@@ -2029,11 +2129,16 @@ class HtmlRenderer(Renderer):
                 mirrors the projected directory tree, instead of a flat
                 grid of cards.
             provider_label: Provider name for the title (None → Claude).
+            show_temp_projects: List temp-dir projects with the rest
+                instead of folding them into one group at the end.
         """
         title = title_for_projects_index(
             project_summaries, from_date, to_date, provider_label
         )
-        template_projects, template_summary = prepare_projects_index(project_summaries)
+        template_projects, template_summary = prepare_projects_index(
+            project_summaries, show_temp_projects=show_temp_projects
+        )
+        template_projects, temp_projects = split_temp_projects(template_projects)
 
         project_tree: Optional[dict[str, Any]] = None
         if expand_paths_tree:
@@ -2045,6 +2150,7 @@ class HtmlRenderer(Renderer):
             template.render(
                 title=title,
                 projects=template_projects,
+                temp_projects=temp_projects,
                 project_tree=project_tree,
                 summary=template_summary,
                 library_version=get_library_version(),

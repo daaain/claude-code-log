@@ -65,6 +65,20 @@ def test_serves_a_session_page_in_a_project_dir(server: ArchiveServer) -> None:
     assert b"session" in body
 
 
+def test_serves_referenced_avif_images_as_images(
+    server: ArchiveServer, archive: Path
+) -> None:
+    # Python's mimetypes only knows .avif from 3.11; the handler maps it.
+    images = archive / "-Users-someone-project" / "images"
+    images.mkdir()
+    (images / "image_0123456789abcdef.avif").write_bytes(b"\x00\x00\x00\x1cftypavif")
+    status, _, headers = _get(
+        f"{server.url}/-Users-someone-project/images/image_0123456789abcdef.avif"
+    )
+    assert status == 200
+    assert headers["Content-type"] == "image/avif"
+
+
 def test_query_string_on_a_static_path_is_ignored(server: ArchiveServer) -> None:
     """Deep links carry ?uuid=&q= — the file must still resolve."""
     status, body, _ = _get(
@@ -370,3 +384,20 @@ def test_server_reports_its_bound_port(archive: Path) -> None:
     with ArchiveServer(archive, port=0) as srv:
         assert srv.port > 0
         assert srv.url == f"http://127.0.0.1:{srv.port}"
+
+
+def test_api_500_does_not_echo_the_exception(
+    archive: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """An exception's text can carry local paths; it goes to stderr only."""
+
+    def boom(_params: dict[str, str]) -> Any:
+        raise RuntimeError("/home/someone/private/path")
+
+    with ArchiveServer(archive, port=0, api_routes={"/api/boom": boom}) as srv:
+        status, body, _ = _get(f"{srv.url}/api/boom")
+    assert status == 500
+    assert b"private" not in body
+    err = capfd.readouterr().err
+    assert "RuntimeError: /home/someone/private/path" in err
+    assert "Traceback" in err

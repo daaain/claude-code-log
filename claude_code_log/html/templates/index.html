@@ -82,7 +82,7 @@
             {% if project.combined_suppressed %}
             <span class="project-name-text">{{ project.display_name }}</span>
             {% else %}
-            <a href='{{ project.html_file }}'>{{ project.display_name }}</a>
+            <a href='{{ project.html_file|rel_href }}'>{{ project.display_name }}</a>
             {% endif %}
             {% if project.is_archived %}
             <span class="archived-badge">Archived</span>
@@ -94,7 +94,7 @@
         <div class='project-variants'>
             <span class="variant-hint">Variants:</span>
             {% for variant in project.html_variants %}
-            <a class='variant-link' href='{{ variant.file }}'>{{ variant.label }}</a>
+            <a class='variant-link' href='{{ variant.file|rel_href }}'>{{ variant.label }}</a>
             {% endfor %}
         </div>
         {% endif %}
@@ -164,7 +164,19 @@
         {% if minimal %}{{ mn_project_row(project) }}{% else %}{{ render_project_card(project) }}{% endif %}
         {% endfor %}
         {% endif %}
-    </div>
+    </div>{% if temp_projects %}{#- Projects worked on only from temp dirs (test suites, scratchpad
+        agents, scripted runs), folded into one group so they don't bury
+        the real ones; --show-temp-projects lists them with the rest. The
+        page finder still finds them: it indexes every .project-card,
+        folded or not, and lists hits in its own results panel. #}
+    <details class='temp-projects{% if minimal %} mn-temp-projects{% endif %}'>
+        <summary class='temp-projects-summary' title='Projects whose sessions all ran in a temporary directory (/tmp, /var/folders, …). List them with the others with --show-temp-projects.'>Temporary directories ({{ temp_projects|length }})</summary>
+        <div class='project-list temp-project-list{% if minimal %} mn-projects{% endif %}'>
+            {% for project in temp_projects %}
+            {% if minimal %}{{ mn_project_row(project) }}{% else %}{{ render_project_card(project) }}{% endif %}
+            {% endfor %}
+        </div>
+    </details>{% endif %}
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {

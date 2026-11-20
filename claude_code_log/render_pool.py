@@ -146,6 +146,12 @@ class _WorkerSetup:
     # HTML theme (utils.THEME_CHOICES). Defaulted only so the field can
     # follow `session_tree`; make_render_pool always passes it.
     theme: str = "default"
+    # Where the units' images are (`image_store`): the parent's caches,
+    # and any image the parent holds that no cache has stored yet (none,
+    # once the refresh that parsed it has committed). Filled as the pool
+    # starts, after the refresh.
+    image_caches: Optional[List[str]] = None
+    held_images: Optional[Dict[str, bytes]] = None
 
 
 RENDER_JOBS_ENV = "CLAUDE_CODE_LOG_RENDER_JOBS"
@@ -460,8 +466,13 @@ def _init_render_worker(setup: _WorkerSetup) -> None:
     """
     global _worker_setup, _worker_cache_manager
 
+    from . import image_store
     from .cache import CacheManager
 
+    for db_path in reversed(setup.image_caches or []):
+        image_store.register_cache(Path(db_path))
+    for digest, data in (setup.held_images or {}).items():
+        image_store.hold(digest, data)
     _worker_setup = setup
     _worker_cache_manager = CacheManager(
         Path(setup.project_dir), setup.library_version, read_only=True
@@ -615,7 +626,16 @@ class RenderPool:
             # uses it: fork is unsafe with threads and inherits arbitrary
             # parent state — including, here, the parent's open SQLite
             # connections.
+            from dataclasses import replace
+
+            from . import image_store
+
             ctx = multiprocessing.get_context("spawn")
+            self._setup = replace(
+                self._setup,
+                image_caches=[str(p) for p in image_store.registered_caches()],
+                held_images=image_store.held_images() or None,
+            )
             self._executor = ProcessPoolExecutor(
                 max_workers=self._max_workers,
                 mp_context=ctx,

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import functools
 import html as _html
 import json
 import re
+import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from wenmode.nodes import Html, Text
+from wenmode.nodes import Code, Html, Image, InlineCode, Link, Text
 
 from ..cache import get_library_version
 from ..html.utils import (
@@ -17,6 +19,7 @@ from ..html.utils import (
     memory_short_path,
     render_user_markdown,
 )
+from ..html.utils import is_harmful_url
 from ..utils import (
     ARTIFACT_FAVICON_TEXT_MAX,
     format_timestamp,
@@ -123,10 +126,13 @@ from ..renderer import (
     branch_short_uuid,
     generate_template_messages,
     prepare_projects_index,
+    split_temp_projects,
     title_for_projects_index,
 )
 
 if TYPE_CHECKING:
+    from markdown_it import MarkdownIt
+
     from ..cache import CacheManager
     from ..dag import SessionTree
 
@@ -215,7 +221,7 @@ def _table_cell(value: Any) -> str:
     preserve line intent with `<br>` rather than stripping the newline.
     None is rendered as an empty cell.
     """
-    return str(value or "").replace("\n", "<br>").replace("|", r"\|")
+    return str(value or "").replace("\n", _own_tag("<br>")).replace("|", r"\|")
 
 
 def _session_anchor(session_or_id: "SessionHeaderMessage | str") -> str:
@@ -278,13 +284,40 @@ def _protect_html_tags(text: str) -> str:
         return text
     from ..markdown_plugins import walk_nodes, position_parser
 
+    text = _break_harmful_definitions(text)
+    text, _ = _open_html_blocks(text)
+
     edits: list[tuple[int, int, str]] = []
     for node in walk_nodes(position_parser().parse(text)):
         if node.position is None:
             continue
         start, end = node.position.start, node.position.end
         if isinstance(node, Html):
-            edits.append((start, end, _html.escape(text[start:end])))
+            raw = text[start:end]
+            # After ``_open_html_blocks`` an HTML node is normally a single
+            # tag; a block still spanning lines (one that wouldn't open
+            # within the bound) is escaped line by line, keeping its
+            # container prefixes.
+            multiline = "\n" in raw.rstrip("\n")
+            escaped = _escape_html_range(raw) if multiline else _html.escape(raw)
+            edits.append((start, end, escaped))
+        elif isinstance(node, InlineCode) and "<" in node.value:
+            if _BACKTICK_RUN_LINE_RE.match(text, text.rfind("\n", 0, start) + 1):
+                # A line that starts with three backticks is kept from
+                # being a fence opener only by the backticks of the spans
+                # after them; rewriting a span as <code> would remove those
+                # and turn the rest of the text into code. Keep the span,
+                # with its `<` as an entity (shown as written, inert).
+                edits.append((start, end, text[start:end].replace("<", "&lt;")))
+            else:
+                edits.append((start, end, _code_span_as_html(node.value)))
+        elif isinstance(node, (Link, Image)) and is_harmful_url(node.url):
+            # A ``javascript:`` (or other harmful) target: the whole link
+            # is shown as the text it was written as, never as a link. The
+            # range is widened to whole markers (a gate run twice sees the
+            # first run's ``_own_tag`` markers as plain text).
+            start, end = _widen_to_markers(text, start, end)
+            edits.append((start, end, _inert_literal(text[start:end])))
         elif isinstance(node, Text):
             for m in _TAG_LIKE_LT_RE.finditer(text, start, end):
                 edits.append((m.start(), m.end(), "&lt;"))
@@ -308,6 +341,269 @@ _THEMATIC_BREAK_RE = re.compile(r"(?:([-*_])[ \t]*)(?:\1[ \t]*){2,}")
 # A ``<`` that a lax HTML parser could take as a tag start: letter, ``/``,
 # ``!`` or ``?`` next. ``x < 3`` and ``<=`` are left alone.
 _TAG_LIKE_LT_RE = re.compile(r"<(?=[A-Za-z/!?])")
+
+
+# Characters some parsers end a line on and others don't. wenmode splits
+# lines on all of them (like ``str.splitlines``); CommonMark ends a line
+# only on ``\n``, ``\r`` or ``\r\n``. Where they disagree, a blank line
+# and an indented "code block" to the gate can be a paragraph holding a
+# live tag to a viewer, so every body and label is normalised first.
+_LINE_ENDINGS_RE = re.compile(r"\r\n?")
+_ODD_BREAKS_RE = re.compile("[\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+
+# A container prefix (blockquote markers, indentation) at the start of an
+# HTML node's continuation line: kept raw so the block stays quoted.
+_CONTAINER_PREFIX_RE = re.compile(r"[ \t>]*")
+
+
+def _normalize_breaks(text: str) -> str:
+    """``\r\n``/``\r`` become ``\n``; other line-ish characters a space."""
+    return _ODD_BREAKS_RE.sub(" ", _LINE_ENDINGS_RE.sub("\n", text))
+
+
+def _single_line(text: str) -> str:
+    """A heading, link label or summary: every line break becomes a space.
+
+    A newline in one would end it, and whatever follows (a tag, a fence
+    opener) would be read as a block of its own, outside the gate's view
+    of the fragment, and a fence left open turns every later fence in the
+    document inside out.
+    """
+    return _normalize_breaks(text).replace("\n", " ")
+
+
+# The container prefix a line may open with: blockquote markers, list
+# markers and indentation. Each list marker is followed by one blank and
+# then any run of blanks and ``>``: written as ``[ \t]+[ \t>]*``, a run of
+# blanks could split between the two in many ways, and each further marker
+# multiplied them, so a line of ``-  -  -  …`` that then failed to match
+# backtracked exponentially. Here every character has one place to go.
+_CONTAINER_PREFIX = r"[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t][ \t>]*)*"
+
+# A link reference definition: ``[label]: target`` at the start of a line.
+# Any container prefix may come first: a definition is valid inside a quote
+# or a list item. The target may sit on the next line (``(?:[ \t]*\n)?``,
+# the same strings as ``[ \t]*\n?[ \t>]*`` without its quadratic split).
+_DEFINITION_RE = re.compile(
+    rf"(?m)^({_CONTAINER_PREFIX})"
+    r"\[([^\]\n]{1,999})\]:(?:[ \t]*\n)?[ \t>]*<?([^\s>]+)"
+)
+
+
+def _break_harmful_definitions(text: str) -> str:
+    """Turn a reference definition with a harmful target into plain text.
+
+    A definition in one body can serve a ``[label]`` in another body or in
+    a heading, which no per-body check sees as a link. So the definition
+    itself is broken: its ``[`` is escaped, which a viewer reads as text.
+    """
+    from ..html.utils import is_harmful_url
+
+    def fix(m: "re.Match[str]") -> str:
+        if not is_harmful_url(_html.unescape(m.group(3))):
+            return m.group(0)
+        return m.group(0).replace("[", "\\[", 1)
+
+    return _DEFINITION_RE.sub(fix, text) if "]:" in text else text
+
+
+def _widen_to_markers(text: str, start: int, end: int) -> tuple[int, int]:
+    """Extend ``[start, end)`` so it doesn't cut an ``_own_tag`` marker."""
+    if _OWN_TAG_OPEN[0] not in text:
+        return start, end
+    for m in _OWN_TAG_RE.finditer(text):
+        if m.start() < start < m.end():
+            start = m.start()
+        if m.start() < end < m.end():
+            end = m.end()
+    return start, end
+
+
+# An entity already in the text (from the transcript, or from an earlier
+# pass of the gate): left as it is, or a viewer would show it literally.
+_ENTITY_RE = re.compile(
+    r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});"
+)
+
+
+def _encode_punctuation(source: str, *, keep_entities: bool) -> str:
+    """Encode every ASCII punctuation character as a numeric entity.
+
+    ``_own_tag`` markers are never touched (a gate run twice meets the
+    first run's markers as plain text). ``keep_entities`` also leaves
+    entities already in the text as they are, for text a viewer decodes.
+    """
+
+    def plain(part: str) -> str:
+        return "".join(
+            f"&#{ord(ch)};" if ch in _ASCII_PUNCTUATION else ch for ch in part
+        )
+
+    def text(part: str) -> str:
+        if not keep_entities:
+            return plain(part)
+        out: list[str] = []
+        last = 0
+        for m in _ENTITY_RE.finditer(part):
+            out.append(plain(part[last : m.start()]))
+            out.append(m.group(0))
+            last = m.end()
+        out.append(plain(part[last:]))
+        return "".join(out)
+
+    out: list[str] = []
+    last = 0
+    for m in _OWN_TAG_RE.finditer(source):
+        out.append(text(source[last : m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(text(source[last:]))
+    return "".join(out)
+
+
+def _inert_literal(source: str) -> str:
+    """``source`` as plain text: every ASCII punctuation character encoded,
+    our markers and existing entities kept."""
+    return _encode_punctuation(source, keep_entities=True)
+
+
+# A line opening with a run of three or more backticks, after any container
+# prefix (blockquote markers, list markers, indentation).
+_BACKTICK_RUN_LINE_RE = re.compile(rf"{_CONTAINER_PREFIX}`{{3,}}")
+
+
+def _code_span_as_html(value: str) -> str:
+    """A code span holding ``<``, rewritten as our own ``<code>`` element.
+
+    Parsers disagree most about inline code: a GFM table cell splits a span
+    at a pipe, an autolinked URL swallows its opening backtick, an image's
+    alt text ends it early. Each disagreement turned a span the gate left
+    raw into a live tag. Written as ``<code>…</code>`` with every ``<``
+    entity-encoded, it renders the same in GitHub, VS Code and Obsidian and
+    leaves no transcript ``<`` for any parser to misread. The text between
+    the tags is ordinary Markdown inline content, so every ASCII
+    punctuation character is encoded too (no emphasis, links, escapes or
+    table pipes), and line endings become spaces, as in a code span.
+    """
+    # In a code span an entity is literal text, so it is encoded too.
+    encoded = _encode_punctuation(
+        value.replace("\r\n", " ").replace("\n", " "), keep_entities=False
+    )
+    return f"{_own_tag('<code>')}{encoded}{_own_tag('</code>')}"
+
+
+_ASCII_PUNCTUATION = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+
+
+# A line whose first thing, after any container prefix, is a tag.
+_TAG_LINE_START_RE = re.compile(rf"(?m)^{_CONTAINER_PREFIX}<[A-Za-z/!?]")
+
+
+def _open_html_blocks(text: str, rounds: int = 64) -> tuple[str, bool]:
+    """Turn every multi-line HTML block into ordinary Markdown text.
+
+    In a viewer an HTML block's lines are raw HTML. Escaping the whole
+    block would turn it into a paragraph whose fenced code and code spans
+    then show the entities literally (``&amp;&amp;`` in a shell command).
+    Instead only the ``<`` that opens the block is escaped, so the block
+    can't start there, and the text is parsed again: inside, a fence stays
+    code, a code span is rewritten as ``<code>`` like any other, a tag is
+    escaped as a tag, and a nested block is opened in the next round.
+    Returns the text and whether a block was still left after ``rounds``
+    (the caller then escapes such blocks whole).
+    """
+    from ..markdown_plugins import walk_nodes, position_parser
+
+    for _ in range(rounds):
+        # A multi-line HTML block starts a line with a tag; text with no such
+        # line needs no extra parse.
+        if not _TAG_LINE_START_RE.search(text):
+            return text, False
+        starts: list[int] = []
+        for node in walk_nodes(position_parser().parse(text)):
+            if not isinstance(node, Html) or node.position is None:
+                continue
+            start, end = node.position.start, node.position.end
+            if "\n" not in text[start:end].rstrip("\n"):
+                continue
+            # A block can start at its indentation (an indented block in a
+            # quote or list item); its first `<` is what opens it.
+            lead = len(text[start:end]) - len(text[start:end].lstrip(" \t"))
+            if text.startswith("<", start + lead):
+                starts.append(start + lead)
+        if not starts:
+            return text, False
+        for start in sorted(starts, reverse=True):
+            text = text[:start] + "&lt;" + text[start + 1 :]
+    return text, True
+
+
+def _escape_html_range(raw: str) -> str:
+    """Entity-escape a raw-HTML node, keeping each line's container prefix.
+
+    Once its tags are escaped, a multi-line HTML block becomes a paragraph
+    and its text is read as Markdown, which is what MDX/JSX-style content
+    in transcripts means anyway (code spans and emphasis inside components
+    render). A backslash there is nearly always literal (a Windows path, a
+    regex), though, and Markdown would eat it as an escape, so it is
+    encoded. A block inside a blockquote spans the ``> `` markers of its
+    continuation lines; those are kept raw (spaces, tabs and ``>`` can't
+    open a tag).
+    """
+
+    def escape(part: str) -> str:
+        return _html.escape(part).replace("\\", "&#92;")
+
+    lines = raw.split("\n")
+    out = [escape(lines[0])]
+    for line in lines[1:]:
+        prefix = _CONTAINER_PREFIX_RE.match(line)
+        cut = prefix.end() if prefix else 0
+        out.append(line[:cut] + escape(line[cut:]))
+    return "\n".join(out)
+
+
+def safe_markdown_label(text: str) -> str:
+    """``safe_markdown_inline`` for a fragment that must stay on one line.
+
+    For headings and list items. A link label needs more: use
+    ``safe_markdown_link_label``.
+    """
+    return safe_markdown_inline(_single_line(text))
+
+
+def safe_markdown_link_label(text: str) -> str:
+    """``safe_markdown_label`` for the text inside ``[…](target)``.
+
+    Brackets are escaped as well: a label ``x](javascript:…) [y`` would
+    otherwise close the link it sits in and open one of its own.
+    """
+    return _escape_label_brackets(safe_markdown_label(text))
+
+
+def _escape_label_brackets(text: str) -> str:
+    """Backslash-escape ``[`` and ``]`` in a label, outside code spans."""
+    if "[" not in text and "]" not in text:
+        return text
+    from ..markdown_plugins import walk_nodes, position_parser
+
+    spans = [
+        (n.position.start, n.position.end)
+        for n in walk_nodes(position_parser().parse(text))
+        if isinstance(n, InlineCode) and n.position is not None
+    ]
+    out: list[str] = []
+    for i, ch in enumerate(text):
+        if ch in "[]" and not any(a <= i < b for a, b in spans):
+            if not (i and text[i - 1] == "\\"):
+                out.append("\\")
+        out.append(ch)
+    return "".join(out)
+
+
+# Text that may hold a link or a reference definition: these are checked
+# for harmful targets even when there is no ``<`` to escape.
+_MAY_HOLD_LINK_RE = re.compile(r"\]\(|\]:|\]\[")
 
 
 def safe_markdown_inline(text: str) -> str:
@@ -338,7 +634,219 @@ def safe_markdown_inline(text: str) -> str:
     (entity-escape the tag, preserve markdown) — distinct from the HTML path,
     which escapes per-field via ``escape_html`` in the ``HtmlRenderer``.
     """
-    return _protect_html_tags(text) if "<" in text else text
+    if "<" not in text and not _MAY_HOLD_LINK_RE.search(text):
+        return text
+    # wenmode decided what is code; a viewer's parser gets the last word
+    # (an image's alt text can turn a "code span" back into a live tag).
+    return neutralise_foreign_html(_protect_html_tags(text))
+
+
+# The renderer's own HTML in a message body (``<details>``, ``<summary>``,
+# ``<code>``, anchors, table ``<br>``) is written through ``_own_tag``, which
+# hides it from ``_gate_body`` behind a marker. The marker carries a random
+# per-process token, so transcript text cannot forge one and smuggle a tag
+# past the gate.
+_OWN_TAG_OPEN = "\ue000" + secrets.token_hex(8) + ":"
+_OWN_TAG_CLOSE = "\ue001"
+_OWN_TAG_RE = re.compile(
+    re.escape(_OWN_TAG_OPEN) + "([^<>\ue001]*)" + re.escape(_OWN_TAG_CLOSE)
+)
+
+
+def _own_tag(tag: str) -> str:
+    """Mark ``<tag …>`` as the renderer's own markup, kept by ``_gate_body``.
+
+    Attribute values must already be escaped by the caller.
+    """
+    return f"{_OWN_TAG_OPEN}{tag[1:-1]}{_OWN_TAG_CLOSE}"
+
+
+# Every tag the renderer writes itself (``_own_tag``), the ``<!-- -->``
+# seal and the generator comment. Anything else a viewer would parse as
+# HTML came from the transcript.
+_OWN_HTML_RE = re.compile(
+    r"</?(?:details|summary|code)>|<br>|</a>|<a id=\"[^\"<>\n]*\">"
+    r"|<!--(?:(?!-->)[^<>])*-->"
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _viewer_parsers() -> "tuple[MarkdownIt, ...]":
+    """Second parsers, standing in for the viewers that render the ``.md``.
+
+    The gate trusts wenmode's view of what is code; where a viewer's parser
+    disagrees, these decide. Two markdown-it configurations: CommonMark
+    with GFM tables and strikethrough, and the ``gfm-like`` preset with
+    bare-URL linkify (VS Code's preview default) plus footnotes (GitHub,
+    Obsidian), which change how text and blocks group.
+    """
+    from markdown_it import MarkdownIt
+    from mdit_py_plugins.footnote import footnote_plugin
+
+    return (
+        MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"]),
+        MarkdownIt("gfm-like", {"html": True, "linkify": True}).use(footnote_plugin),
+    )
+
+
+def _has_foreign_html(text: str) -> bool:
+    """Whether a viewer would see raw HTML in ``text`` that isn't ours."""
+    # Only a ``<`` outside our own tags can be foreign: most bodies have
+    # none left after the gate, and need no second parse.
+    if not _TAG_LIKE_LT_RE.search(_OWN_HTML_RE.sub("", text)):
+        return False
+    for parser in _viewer_parsers():
+        try:
+            # A trailing newline sidesteps a markdown-it-py IndexError on a
+            # quoted table that ends the text; any other parser failure is
+            # treated as a disagreement rather than failing the export.
+            pending = list(parser.parse(text + "\n"))
+        except Exception:
+            return True
+        while pending:
+            token = pending.pop()
+            if token.children:
+                pending.extend(token.children)
+            if token.type in (
+                "html_block",
+                "html_inline",
+            ) and _TAG_LIKE_LT_RE.search(_OWN_HTML_RE.sub("", token.content)):
+                return True
+    return False
+
+
+def _escape_foreign_tags(text: str) -> str:
+    """Entity-escape every tag-like ``<`` that doesn't start one of our tags.
+
+    Code included: this is the fallback for text the two parsers disagree
+    about, so nothing is trusted to be code. Code shown there gains
+    visible ``&lt;`` entities, which only crafted input should ever hit.
+    """
+    return _TAG_LIKE_LT_RE.sub(
+        lambda m: "<" if _OWN_HTML_RE.match(m.string, m.start()) else "&lt;", text
+    )
+
+
+def neutralise_foreign_html(text: str) -> str:
+    """Final pass over a whole ``.md`` document (and each gated body).
+
+    If the viewer's parser finds raw HTML that isn't the renderer's own,
+    every such ``<`` is escaped. A body is checked on its own in
+    ``_gate_body``; the document is checked again because bodies, labels
+    and headings are read together there.
+    """
+    return _escape_foreign_tags(text) if _has_foreign_html(text) else text
+
+
+def _escape_around_own_tags(text: str) -> str:
+    """HTML-escape ``text`` except the ``_own_tag`` markers in it."""
+    out: list[str] = []
+    last = 0
+    for m in _OWN_TAG_RE.finditer(text):
+        out.append(_html.escape(text[last : m.start()], quote=False))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_html.escape(text[last:], quote=False))
+    return "".join(out)
+
+
+def _restore_own_tags(text: str) -> str:
+    return _OWN_TAG_RE.sub(lambda m: f"<{m.group(1)}>", text)
+
+
+def _finish_document(text: str) -> str:
+    """The last step for every ``.md``: our own tags, then the final check.
+
+    Headings and labels can hold ``_own_tag`` markers (a code span with a
+    ``<`` in a title); bodies had theirs restored by ``_gate_body``.
+    """
+    return neutralise_foreign_html(_restore_own_tags(text))
+
+
+def _gate_body(text: str) -> str:
+    """Neutralise raw HTML in a formatted message body (GHSA-3jq4-r9jm-q682).
+
+    The body counterpart of the heading gate: ``_render_message`` passes
+    every formatter's output through here, so a formatter (built-in or
+    plugin) that interpolates transcript text without escaping it still
+    cannot put live markup in the ``.md``. Every tag-like ``<`` in the body
+    is entity-escaped (code spans and fences survive byte for byte, see
+    ``_protect_html_tags``), then the renderer's own tags, hidden from the
+    parser by ``_own_tag``, are put back.
+
+    Escaping judges each body on its own, but the ``.md`` is read as one
+    document, so the body is then sealed (``_seal_body``) to parse in the
+    document exactly as it parsed alone.
+
+    The gate trusts wenmode's view of what is code, and a viewer's parser
+    can disagree (a GFM table cell splits a code span at a pipe; wenmode
+    ends lines on characters CommonMark doesn't). So line endings are
+    normalised first, and the sealed body is checked with a second parser
+    (``neutralise_foreign_html``): if it finds raw HTML that isn't ours,
+    every tag-like ``<`` in the body is escaped, code included.
+    """
+    text = _normalize_breaks(text)
+    gated = _restore_own_tags(safe_markdown_inline(text))
+    return neutralise_foreign_html(_seal_body(gated))
+
+
+# A fenced code block's opening line: up to three spaces, then three or
+# more backticks or tildes.
+_FENCE_OPENER_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+# A blank line, then ``<!-- -->`` at column 0: the CommonMark idiom for
+# ending a list (or footnote) before an indented block.
+_BODY_SEAL = "<!-- -->\n\n"
+
+
+def _seal_body(text: str) -> str:
+    """Make a gated body parse in the document as it parsed alone.
+
+    ``_render_message`` joins bodies with a blank line, so whatever block
+    one body leaves open, the next one is read inside it. The gate left
+    code raw, so two ways to land a body's code in the wrong context
+    would turn it into live HTML:
+
+    - **A fence left open at the end.** It runs on into the next body,
+      where the renderer's next opening fence closes it instead. The raw
+      HTML that next fence held is then outside any fence. The fence is
+      closed here, with its own character and length.
+    - **An indented first line.** After a body that ends in a list item
+      or a footnote, an indented line continues that block. Indented code
+      becomes ordinary text, and an indented fence ends at the first
+      unindented line it holds, which leaves that line outside the fence.
+      Such a body is prefixed with ``<!-- -->`` at column 0, which ends
+      the block first.
+
+    A body that starts unindented and leaves no fence open closes every
+    block the previous one left: blockquotes, lists and paragraphs end at
+    the blank line before it, and the gate leaves no HTML block open.
+    """
+    if not text.strip():
+        return text
+    first_line = text.lstrip("\r\n").split("\n", 1)[0]
+    if first_line[:1] in (" ", "\t"):
+        text = _BODY_SEAL + text
+    if "```" not in text and "~~~" not in text:
+        return text
+    from ..markdown_plugins import position_parser
+
+    blocks = position_parser().parse(text).children
+    # A fence left open runs to the end of the text, so it can only be the
+    # last top-level block. One inside a blockquote or list item ends with
+    # that block.
+    last = blocks[-1] if blocks else None
+    if not isinstance(last, Code) or last.position is None:
+        return text
+    lines = text[last.position.start : last.position.end].rstrip("\n").split("\n")
+    opener = _FENCE_OPENER_RE.match(lines[0])
+    if opener is None:
+        return text  # an indented code block, which has no fence to close
+    fence = opener.group(1)
+    closer = re.compile(rf" {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*")
+    if len(lines) > 1 and closer.fullmatch(lines[-1]):
+        return text
+    return f"{text.rstrip(chr(10))}\n{fence}"
 
 
 _MARKDOWN_TARGET_ENCODINGS = (
@@ -376,6 +884,23 @@ def safe_markdown_link_target(url: str) -> str:
     )
 
 
+def _relative_md_target(path: str) -> str:
+    """A link target for an output file, from directory names and ids.
+
+    Encoded against destination breakout (``safe_markdown_link_target``),
+    and started with ``./`` so a directory named ``javascript:x`` can't
+    read as a URL scheme. A backslash is a separator only on Windows; in a
+    directory name elsewhere it is encoded, since a viewer would read it
+    as ``/`` (``\\\\host\\x`` as a network path). Leading slashes are
+    dropped for the same reason.
+    """
+    import os
+
+    path = path.replace("\\", "/") if os.sep == "\\" else path.replace("\\", "%5C")
+    target = safe_markdown_link_target(path.lstrip("/"))
+    return target if target.startswith(("./", "../")) else "./" + target
+
+
 def _markdown_safe_url(url: str, text: Optional[str] = None) -> str:
     """Render a transcript-derived URL as a Markdown link, or inline code.
 
@@ -389,7 +914,7 @@ def _markdown_safe_url(url: str, text: Optional[str] = None) -> str:
     than hidden behind a label.
     """
     if is_safe_web_url(url):
-        return f"[{safe_markdown_inline(text if text else url)}]({safe_markdown_link_target(url)})"
+        return f"[{safe_markdown_link_label(text if text else url)}]({safe_markdown_link_target(url)})"
     return _inline_code(url)
 
 
@@ -467,7 +992,9 @@ def _render_expand_paths_tree(template_projects: list[Any]) -> list[str]:
             _emit(node[name], depth + 1)
         for label, url, ts in node.get("_links", []):
             ts_suffix = f" — *{ts}*" if ts else ""
-            lines.append(f"{indent}- [{safe_markdown_inline(label)}]({url}){ts_suffix}")
+            lines.append(
+                f"{indent}- [{safe_markdown_link_label(label)}]({_relative_md_target(url)}){ts_suffix}"
+            )
 
     _emit(root, 0)
     return lines
@@ -575,6 +1102,9 @@ class MarkdownRenderer(Renderer):
 
         Also escapes <summary> tags that would interfere with <details> rendering.
         """
+        # A `\r` or other line break the gate normalises later would start a
+        # line with no `> ` prefix, so normalise before quoting.
+        text = _normalize_breaks(text)
         # Escape <summary> and </summary> tags on their own lines
         text = re.sub(r"^(</?summary>)$", r"\\\1", text, flags=re.MULTILINE)
         return "\n".join(f"> {line}" for line in text.split("\n"))
@@ -642,12 +1172,20 @@ class MarkdownRenderer(Renderer):
         return text
 
     def _collapsible(self, summary: str, content: str) -> str:
-        """Wrap content in a collapsible <details> block."""
-        # Escape closing tags that would break the structure
-        safe_summary = self._escape_html_tag(summary, "summary")
-        safe_summary = self._escape_html_tag(safe_summary, "details")
+        """Wrap content in a collapsible <details> block.
+
+        The ``<summary>`` line sits inside the HTML block ``<details>``
+        opens, where a viewer reads raw HTML and Markdown (code spans
+        included) means nothing. So the summary is HTML-escaped around the
+        renderer's own tags and kept on one line: a blank line in it would
+        end the HTML block early.
+        """
+        safe_summary = _escape_around_own_tags(_single_line(summary))
         safe_content = self._escape_html_tag(content, "details")
-        return f"<details>\n<summary>{safe_summary}</summary>\n\n{safe_content}\n</details>"
+        return (
+            f"{_own_tag('<details>')}\n{_own_tag('<summary>')}{safe_summary}"
+            f"{_own_tag('</summary>')}\n\n{safe_content}\n{_own_tag('</details>')}"
+        )
 
     def _format_image(self, image: ImageContent) -> str:
         """Format image based on export mode."""
@@ -661,6 +1199,24 @@ class MarkdownRenderer(Renderer):
         if src is None:
             return "[Image]"
         return f"![image]({src})"
+
+    def _tool_result_image(self, item: dict[str, Any]) -> Optional[str]:
+        """A tool result's ``image`` item as an image, like any other.
+
+        A Read of an image returns one. ``None`` when the item is not an
+        image (inline or a reference), so the caller keeps it as
+        structured content.
+        """
+        if item.get("type") != "image":
+            return None
+        source = item.get("source")
+        if not isinstance(source, dict):
+            return None
+        try:
+            image = ImageContent.model_validate({"type": "image", "source": source})
+        except ValueError:  # pydantic's ValidationError is a ValueError
+            return None
+        return self._format_image(image)
 
     def _lang_from_path(self, path: str) -> str:
         """Get language hint from file extension."""
@@ -871,7 +1427,8 @@ class MarkdownRenderer(Renderer):
         # session_id starts with the trunk's uuid, so ``session_id[:8]``
         # collides across branches and the TOC could only land on the
         # first matching heading.
-        return f'<a id="{_session_anchor(content)}"></a>'
+        anchor = _html.escape(_session_anchor(content), quote=True)
+        return _own_tag(f'<a id="{anchor}">') + _own_tag("</a>")
 
     def title_SessionHeaderMessage(
         self, content: SessionHeaderMessage, message: TemplateMessage
@@ -1197,7 +1754,7 @@ class MarkdownRenderer(Renderer):
 
     def format_WriteInput(self, input: WriteInput, _: TemplateMessage) -> str:
         """Format → collapsible with file path + fenced content."""
-        summary = f"<code>{input.file_path}</code>"
+        summary = _own_tag("<code>") + input.file_path + _own_tag("</code>")
         content = self._code_fence(input.content, self._lang_from_path(input.file_path))
         return self._collapsible(summary, content)
 
@@ -1272,7 +1829,7 @@ class MarkdownRenderer(Renderer):
         queries = split_websearch_queries(input.query)
         if len(queries) == 1:
             return ""
-        return "\n".join(f"- {safe_markdown_inline(query)}" for query in queries)
+        return "\n".join(f"- {safe_markdown_label(query)}" for query in queries)
 
     def format_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Format → '' (url in title, prompt if long)."""
@@ -1291,7 +1848,7 @@ class MarkdownRenderer(Renderer):
         """
         parts: list[str] = []
         if input.description:
-            parts.append(f"*{safe_markdown_inline(input.description)}*")
+            parts.append(f"*{safe_markdown_label(input.description)}*")
         meta_parts: list[str] = []
         if input.url:
             meta_parts.append(
@@ -1401,6 +1958,8 @@ class MarkdownRenderer(Renderer):
                             json.dumps(decoded, indent=2, ensure_ascii=False), "json"
                         )
                     )
+            elif (image := self._tool_result_image(item)) is not None:
+                parts.append(image)
             else:
                 parts.append(
                     self._code_fence(
@@ -1790,7 +2349,11 @@ class MarkdownRenderer(Renderer):
 
     def format_ReadOutput(self, output: ReadOutput, _: TemplateMessage) -> str:
         """Format → collapsible with file path + syntax-highlighted content."""
-        summary = f"<code>{output.file_path}</code>" if output.file_path else "Content"
+        summary = (
+            _own_tag("<code>") + output.file_path + _own_tag("</code>")
+            if output.file_path
+            else "Content"
+        )
         lang = self._lang_from_path(output.file_path or "")
         content = self._code_fence(output.content, lang)
         return self._collapsible(summary, content)
@@ -1807,7 +2370,9 @@ class MarkdownRenderer(Renderer):
         """Format → collapsible with result or '✓ Edited'."""
         if msg := output.message:
             content = self._code_fence(msg, self._lang_from_path(output.file_path))
-            return self._collapsible(f"<code>{output.file_path}</code>", content)
+            return self._collapsible(
+                _own_tag("<code>") + output.file_path + _own_tag("</code>"), content
+            )
         return "✓ Edited"
 
     def format_BashOutput(self, output: BashOutput, _: TemplateMessage) -> str:
@@ -1907,7 +2472,9 @@ class MarkdownRenderer(Renderer):
                 parts.append("---")
                 parts.append("")
             for link in output.links:
-                parts.append(f"- [{safe_markdown_inline(link.title)}]({link.url})")
+                # A result URL is transcript data: only http(s) becomes a
+                # link, with its target encoded (``_markdown_safe_url``).
+                parts.append(f"- {_markdown_safe_url(link.url, text=link.title)}")
         elif not output.summary:
             # Only show "no results" if there's also no summary
             parts.append("*No results found*")
@@ -2098,11 +2665,14 @@ class MarkdownRenderer(Renderer):
         self, output: ToolResultContent, message: TemplateMessage
     ) -> str:
         """Fallback for unknown tool outputs."""
-        # TodoWrite success message - render as plain text, not code fence
+        # TodoWrite success message - render as plain text, not code fence.
+        # Unfenced, so it goes through the raw-HTML gate: the tool name comes
+        # from the paired tool_use, so any result text can land here
+        # (GHSA-3jq4-r9jm-q682).
         content = message.content
         if isinstance(content, ToolResultMessage) and content.tool_name == "TodoWrite":
             if isinstance(output.content, str):
-                return output.content
+                return safe_markdown_inline(output.content)
             return ""
         # Default: code fence — a JSON-headed result (see
         # ``_json_headed_fences``) gets its document fenced as JSON.
@@ -2115,22 +2685,28 @@ class MarkdownRenderer(Renderer):
         # block, instead of dumping the whole list verbatim (issue #227).
         text_parts: list[str] = []
         structured_items: list[dict[str, Any]] = []
+        images: list[str] = []
         for item in output.content:
             if item.get("type") == "text":
                 text_parts.append(str(item.get("text", "")))
+            elif (image := self._tool_result_image(item)) is not None:
+                images.append(image)
             else:
                 structured_items.append(item)
         parts: list[str] = []
         text = strip_error_tags("\n".join(text_parts)).strip()
         if text:
             fenced = None if output.is_error else self._json_headed_fences(text)
-            parts.append(fenced if fenced is not None else text)
+            # The text items go out unfenced, so gate them like any other
+            # inline transcript text (GHSA-3jq4-r9jm-q682).
+            parts.append(fenced if fenced is not None else safe_markdown_inline(text))
         if structured_items:
             parts.append(
                 self._code_fence(
                     json.dumps(structured_items, indent=2, ensure_ascii=False), "json"
                 )
             )
+        parts.extend(images)
         return "\n\n".join(parts)
 
     # -------------------------------------------------------------------------
@@ -2419,7 +2995,7 @@ class MarkdownRenderer(Renderer):
                     if summary
                     else f"Session `{session_short}`"
                 )
-            lines.append(f"- [{safe_markdown_inline(label)}](#{anchor})")
+            lines.append(f"- [{safe_markdown_link_label(label)}](#{anchor})")
         lines.append("")
         return "\n".join(lines)
 
@@ -2462,7 +3038,7 @@ class MarkdownRenderer(Renderer):
         parts: list[str] = []
 
         # Format content - for session headers, anchor goes before heading
-        content = self.format_content(msg)
+        content = _gate_body(self.format_content(msg))
         is_session_header = isinstance(msg.content, SessionHeaderMessage)
         if is_session_header and content:
             parts.append(content)
@@ -2499,7 +3075,7 @@ class MarkdownRenderer(Renderer):
                 heading_level = min(level, 6)  # Markdown max is h6
                 # Neutralise raw HTML in the title via the single heading gate
                 # (#245 XSS) — see ``safe_markdown_inline``.
-                parts.append(f"{'#' * heading_level} {safe_markdown_inline(title)}")
+                parts.append(f"{'#' * heading_level} {safe_markdown_label(title)}")
                 # Per-message timestamp line (issue #160). Skip for
                 # session headers (they have no meaningful per-msg time)
                 # and when the heading was suppressed by `compact` mode
@@ -2528,7 +3104,7 @@ class MarkdownRenderer(Renderer):
                     continue
                 if partner := self._ctx.get(partner_idx):
                     pair_partners.append(partner)
-                    if pair_content := self.format_content(partner):
+                    if pair_content := _gate_body(self.format_content(partner)):
                         parts.append(pair_content)
 
         # Render children at next level (from this message and any paired members)
@@ -2596,7 +3172,7 @@ class MarkdownRenderer(Renderer):
         }
 
         parts = [f"<!-- Generated by claude-code-log v{get_library_version()} -->", ""]
-        parts.append(f"# {safe_markdown_inline(title)}")
+        parts.append(f"# {safe_markdown_label(title)}")
 
         # Table of Contents
         if session_nav:
@@ -2612,7 +3188,8 @@ class MarkdownRenderer(Renderer):
             if rendered := self._render_message(root, level=1):
                 parts.append(rendered)
 
-        return "\n\n".join(parts)
+        # Each body was checked alone; the document is read as a whole.
+        return _finish_document("\n\n".join(parts))
 
     def generate_session(
         self,
@@ -2663,6 +3240,7 @@ class MarkdownRenderer(Renderer):
         to_date: Optional[str] = None,
         expand_paths_tree: bool = False,
         provider_label: Optional[str] = None,
+        show_temp_projects: bool = False,
     ) -> str:
         """Generate a Markdown projects index page.
 
@@ -2676,14 +3254,27 @@ class MarkdownRenderer(Renderer):
                 with sessions as nested leaf bullets. Falls back to the
                 flat per-project layout otherwise.
             provider_label: Provider name for the title (None → Claude).
+            show_temp_projects: List temp-dir projects with the rest
+                instead of in a section of their own at the end.
         """
         title = title_for_projects_index(
             project_summaries, from_date, to_date, provider_label
         )
-        template_projects, template_summary = prepare_projects_index(project_summaries)
+        template_projects, template_summary = prepare_projects_index(
+            project_summaries, show_temp_projects=show_temp_projects
+        )
+        regular, temp = split_temp_projects(template_projects)
+        temp_header = [
+            "---",
+            "",
+            f"**Temporary directories ({len(temp)})**: projects whose sessions "
+            "all ran in a temporary directory (`--show-temp-projects` lists "
+            "them with the rest).",
+            "",
+        ]
 
         parts = [f"<!-- Generated by claude-code-log v{get_library_version()} -->", ""]
-        parts.append(f"# {safe_markdown_inline(title)}")
+        parts.append(f"# {safe_markdown_label(title)}")
 
         # Summary stats
         parts.append(
@@ -2699,25 +3290,33 @@ class MarkdownRenderer(Renderer):
         # The flat per-project listing remains the default for HTML and
         # for non-expand-paths Markdown.
         if expand_paths_tree:
-            tree_lines = _render_expand_paths_tree(template_projects)
-            if tree_lines:
+            tree_lines = _render_expand_paths_tree(regular)
+            temp_lines = _render_expand_paths_tree(temp) if temp else []
+            if tree_lines or temp_lines:
                 parts.extend(tree_lines)
-                return "\n".join(parts)
+                if temp_lines:
+                    if tree_lines:
+                        parts.append("")
+                    parts.extend(temp_header)
+                    parts.extend(temp_lines)
+                return _finish_document("\n".join(parts))
 
-        # Project list
-        for project in template_projects:
+        # Project list; temp-dir projects last, under their own header.
+        for project in regular + temp:
+            if temp and project is temp[0]:
+                parts.extend(temp_header)
             if project.combined_suppressed:
                 # `--combined no` mode: header is a plain heading (no
                 # link to the non-existent combined file); per-session
                 # bullets link directly to `session-{id}.md` files.
-                parts.append(f"## {safe_markdown_inline(project.display_name)}")
+                parts.append(f"## {safe_markdown_label(project.display_name)}")
             else:
                 # Derive markdown link from html_file path. Neutralise only the
                 # display_name fragment (transcript-reachable via cwd) so the
                 # link target is preserved.
                 md_link = project.html_file.replace(".html", ".md")
                 parts.append(
-                    f"## [{safe_markdown_inline(project.display_name)}]({md_link})"
+                    f"## [{safe_markdown_link_label(project.display_name)}]({_relative_md_target(md_link)})"
                 )
             # Use actual session count (filtered) like HTML does
             session_count = (
@@ -2747,11 +3346,11 @@ class MarkdownRenderer(Renderer):
                         f" — *{timestamp_range}*" if timestamp_range else ""
                     )
                     parts.append(
-                        f"- [{safe_markdown_inline(label)}]({file_link}){timestamp_suffix}"
+                        f"- [{safe_markdown_link_label(label)}]({_relative_md_target(file_link)}){timestamp_suffix}"
                     )
             parts.append("")
 
-        return "\n".join(parts)
+        return _finish_document("\n".join(parts))
 
     def is_outdated(self, file_path: Path) -> bool:
         """Check if a Markdown file is outdated based on version comment."""

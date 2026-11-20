@@ -35,8 +35,10 @@ import http.server
 import json
 import os
 import stat
+import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Optional
 
@@ -73,6 +75,12 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     allowed_hosts: frozenset[str] = frozenset()
     server_version = f"claude-code-log/{get_library_version()}"
     sys_version = ""
+    # HTML's referenced images are AVIF, which Python's mimetypes only
+    # learned in 3.11.
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".avif": "image/avif",
+    }
 
     # Digest of the file this request is answering with, computed in
     # `send_head` and emitted by `end_headers`. `None` for everything
@@ -241,8 +249,13 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError as exc:
                 # Bad user input (unparseable filter, malformed query).
                 self._send_json({"error": str(exc)}, status=400)
-            except Exception as exc:  # pragma: no cover - defensive
-                self._send_json({"error": repr(exc)}, status=500)
+            except Exception:
+                # The detail goes to the server's stderr, not the response:
+                # an exception's text can carry local paths. Written
+                # directly, since this handler silences log_message (and
+                # log_error with it).
+                sys.stderr.write(f"API error on {path}:\n{traceback.format_exc()}")
+                self._send_json({"error": "internal error"}, status=500)
             return
 
         super().do_GET()

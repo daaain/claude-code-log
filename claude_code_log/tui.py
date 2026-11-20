@@ -20,8 +20,10 @@ from textual.widgets import (
     Static,
     Tree,
 )
+from textual.content import Content
 from textual.reactive import reactive
-from rich.markup import escape as escape_markup
+from rich.markup import escape as escape_rich_markup
+from rich.text import Text
 
 from .cache import (
     CacheManager,
@@ -38,6 +40,12 @@ from .converter import (
 from .renderer import get_renderer
 from .utils import DEFAULT_THEME, normalize_theme
 from .utils import atomic_write_text, get_project_display_name
+from .transcript_ids import (
+    QUARANTINE_PREFIX,
+    is_plain_id,
+    is_quarantined,
+    session_path,
+)
 
 
 class ProjectSelector(App[Path]):
@@ -148,7 +156,7 @@ class ProjectSelector(App[Path]):
                 )
 
                 # Create project display - just use the directory name
-                project_display = f"  {project_path.name}"
+                project_display = f"  {escape_rich_markup(project_path.name)}"
 
                 # Add indicator if matches current directory
                 if project_path in self.matching_projects:
@@ -164,7 +172,7 @@ class ProjectSelector(App[Path]):
                 )
             except Exception:
                 # If we can't read cache, show basic info
-                project_display = f"  {project_path.name}"
+                project_display = f"  {escape_rich_markup(project_path.name)}"
                 if project_path in self.matching_projects:
                     project_display = f"→ {project_display[2:]}"
                 if is_archived:
@@ -311,9 +319,10 @@ class ProjectSelector(App[Path]):
                 f"Archive incomplete: {len(succeeded)}/{total} sessions deleted. "
                 f"Failed: {failed_names}",
                 severity="error",
+                markup=False,
             )
         else:
-            self.notify(f"Archived {len(succeeded)} sessions")
+            self.notify(f"Archived {len(succeeded)} sessions", markup=False)
 
         # Only mark as fully archived if ALL files were deleted
         if not failed and succeeded:
@@ -373,6 +382,7 @@ class ProjectSelector(App[Path]):
                         f"Cache deleted but {len(failed)}/{len(jsonl_files)} "
                         f"session files failed to delete: {failed_names}",
                         severity="error",
+                        markup=False,
                     )
 
         # Remove from projects list
@@ -384,7 +394,7 @@ class ProjectSelector(App[Path]):
             self.archived_projects.discard(project_path)
 
         if not file_delete_failed:
-            self.notify(f"Deleted project: {project_path.name}")
+            self.notify(f"Deleted project: {project_path.name}", markup=False)
         self.selected_project_path = None
         self.populate_table()
 
@@ -424,7 +434,9 @@ class ProjectSelector(App[Path]):
         sessions_to_restore = [
             session_id
             for session_id in project_cache.sessions
-            if not (project_path / f"{session_id}.jsonl").exists()
+            if not is_quarantined(session_id)
+            and (path := session_path(project_path, session_id)) is not None
+            and not path.exists()
         ]
 
         if not sessions_to_restore:
@@ -436,7 +448,8 @@ class ProjectSelector(App[Path]):
         failed: list[tuple[str, str]] = []  # (session_id, error message)
 
         for session_id in sessions_to_restore:
-            jsonl_path = project_path / f"{session_id}.jsonl"
+            jsonl_path = session_path(project_path, session_id)
+            assert jsonl_path is not None  # filtered above
             try:
                 messages = cache_manager.export_session_to_jsonl(session_id)
                 if messages:
@@ -460,9 +473,10 @@ class ProjectSelector(App[Path]):
                 f"Restore incomplete: {len(succeeded)}/{total} sessions restored. "
                 f"Failed: {failed_ids}",
                 severity="error",
+                markup=False,
             )
         else:
-            self.notify(f"Restored {len(succeeded)} sessions")
+            self.notify(f"Restored {len(succeeded)} sessions", markup=False)
 
         # Only mark as fully restored if ALL sessions were restored
         if not failed and succeeded:
@@ -504,7 +518,7 @@ class SafeMarkdownViewer(MarkdownViewer):
         elif location_str.startswith(("http://", "https://")):
             # External URL - open in browser
             webbrowser.open(location_str)
-            self.notify(f"Opening in browser: {location_str[:50]}...")
+            self.notify(f"Opening in browser: {location_str[:50]}...", markup=False)
         else:
             # Relative file link - not supported in embedded viewer
             self.notify(
@@ -638,12 +652,13 @@ class MarkdownViewerScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container(id="md-container"):
-            yield Static(self.md_title, id="md-header")
+            yield Static(self.md_title, id="md-header", markup=False)
             if self._is_paginated:
                 yield Static(
                     f"Page {self._current_page + 1}/{len(self._pages)} | "
                     "← or p: prev | → or n: next",
                     id="pagination-controls",
+                    markup=False,
                 )
             yield SafeMarkdownViewer(
                 self._pages[self._current_page],
@@ -654,7 +669,7 @@ class MarkdownViewerScreen(ModalScreen[None]):
             footer_text = "Press ESC or q to close | t: toggle ToC"
             if self._is_paginated:
                 footer_text += " | n/p: navigate pages"
-            yield Static(footer_text, id="md-footer")
+            yield Static(footer_text, id="md-footer", markup=False)
 
     def on_mount(self) -> None:
         """Customize ToC tree after mount."""
@@ -710,7 +725,9 @@ class MarkdownViewerScreen(ModalScreen[None]):
         # Simplify "Task (details): " to "Task: " (details are redundant)
         label = re.sub(r"Task \([^)]+\): ", "Task: ", label)
 
-        node.set_label(label)
+        # A heading's text comes from the transcript; a str label would be
+        # parsed as markup, where `[@click=app.…]` runs an app action.
+        node.set_label(Text(label))
         for child in node.children:
             self._clean_toc_labels(child)
 
@@ -782,7 +799,11 @@ class MarkdownViewerScreen(ModalScreen[None]):
                 # Currently in document, switch to TOC tree
                 tree.focus(scroll_visible=False)
         except Exception as e:
-            self.notify(f"Focus switch error: {e}", severity="warning")
+            self.notify(
+                f"Focus switch error: {str(e)}",
+                severity="warning",
+                markup=False,
+            )
             self._focus_viewer_content(viewer)
 
     def action_next_page(self) -> None:
@@ -822,7 +843,11 @@ class MarkdownViewerScreen(ModalScreen[None]):
             # Re-customize ToC after content loads
             self.call_later(self._customize_toc_tree)
         except Exception as e:
-            self.notify(f"Error updating page: {e}", severity="error")
+            self.notify(
+                f"Error updating page: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
 
 class ArchiveConfirmScreen(ModalScreen[bool]):
@@ -880,6 +905,7 @@ class ArchiveConfirmScreen(ModalScreen[bool]):
             yield Static(
                 f"Session: {self.session_id[:8]}...",
                 id="archive-message",
+                markup=False,
             )
             yield Static(
                 "This will delete the JSONL file.\n"
@@ -953,6 +979,7 @@ class DeleteConfirmScreen(ModalScreen[Optional[str]]):
             yield Static(
                 f"Session: {self.session_id[:8]}...",
                 id="delete-message",
+                markup=False,
             )
             if self.is_archived:
                 yield Static(
@@ -1043,6 +1070,7 @@ class ArchiveProjectConfirmScreen(ModalScreen[bool]):
             yield Static(
                 f"Project: {self.project_name}\nSessions: {self.session_count}",
                 id="archive-project-message",
+                markup=False,
             )
             yield Static(
                 "This will delete ALL JSONL files in the project.\n"
@@ -1119,6 +1147,7 @@ class DeleteProjectConfirmScreen(ModalScreen[Optional[str]]):
             yield Static(
                 f"Project: {self.project_name}\nSessions: {self.session_count}",
                 id="delete-project-message",
+                markup=False,
             )
             if self.is_archived:
                 yield Static(
@@ -1210,6 +1239,7 @@ class RestoreProjectConfirmScreen(ModalScreen[bool]):
                 f"Project: {self.project_name}\n"
                 f"Archived sessions: {self.session_count}",
                 id="restore-project-message",
+                markup=False,
             )
             yield Static(
                 "This will restore ALL archived sessions by writing JSONL files.\n"
@@ -1357,7 +1387,7 @@ class SessionBrowser(App[Optional[str]]):
                 self.update_stats()
             except Exception as e:
                 # UI components may not be mounted yet during initialization
-                self.log.debug(f"Skipped UI update for archived project: {e}")
+                self.log.debug(f"Skipped UI update for archived project: {str(e)}")
             return
 
         # Check if we need to rebuild cache by checking for modified files
@@ -1391,8 +1421,18 @@ class SessionBrowser(App[Optional[str]]):
 
             except Exception as e:
                 # Don't show notification during startup - log and return
-                self.log.debug(f"Cache building failed during startup: {e}")
+                self.log.debug(f"Cache building failed during startup: {str(e)}")
                 return
+
+        # A quarantined session (transcript_ids.py) has no `<id>.jsonl` of
+        # its own: it is current while any file it came from still exists.
+        quarantined = [sid for sid in self.sessions if is_quarantined(sid)]
+        if quarantined and valid_session_ids:
+            file_map = self.cache_manager.get_session_file_map()
+            present = {f.name for f in jsonl_files}
+            valid_session_ids |= {
+                sid for sid in quarantined if file_map.get(sid, set()) & present
+            }
 
         # Only compute archived sessions if there are JSONL files to compare against
         # (in test environments, there may be cached sessions but no JSONL files)
@@ -1418,7 +1458,7 @@ class SessionBrowser(App[Optional[str]]):
             self.update_stats()
         except Exception as e:
             # UI components may not be mounted yet during initialization
-            self.log.debug(f"Skipped UI update after session load: {e}")
+            self.log.debug(f"Skipped UI update after session load: {str(e)}")
 
     def populate_table(self) -> None:
         """Populate the sessions table with session data."""
@@ -1484,7 +1524,7 @@ class SessionBrowser(App[Optional[str]]):
             # wins over summary, then first user message preview.
             # Escape Rich markup to prevent MarkupError from square brackets
             # in paths like [/Users/foo/bar] being parsed as closing tags.
-            preview = escape_markup(
+            preview = escape_rich_markup(
                 session_data.ai_title
                 or session_data.summary
                 or session_data.first_user_message
@@ -1493,14 +1533,23 @@ class SessionBrowser(App[Optional[str]]):
             # Add [ARCHIVED] indicator for archived sessions
             if is_archived:
                 preview = f"\\[ARCHIVED] {preview}"
+            # Quarantined ids share their prefix: show the hash instead.
+            if is_quarantined(session_id):
+                preview = f"\\[QUARANTINED] {preview}"
+                id_display = session_id.removeprefix(QUARANTINE_PREFIX)[:8]
+            else:
+                id_display = session_id[:8]
 
             table.add_row(
-                session_id[:8],
+                # A cached id built elsewhere could hold Rich markup (cells
+                # are parsed by Rich, so Rich's escaper is the right one).
+                escape_rich_markup(id_display),
                 preview,
                 start_time,
                 end_time,
                 str(session_data.message_count),
                 token_display,
+                key=session_id,
             )
 
     def update_stats(self) -> None:
@@ -1559,9 +1608,8 @@ class SessionBrowser(App[Optional[str]]):
             mode_indicator = ""
 
         # Project section (left aligned)
-        project_section = (
-            f"[bold]Project:[/bold] {project_name} {mode_indicator}".strip()
-        )
+        # The project name comes from a transcript cwd: a variable, not markup.
+        project_section = f"[bold]Project:[/bold] $project {mode_indicator}".strip()
 
         # Sessions info section (center)
         sessions_section = f"[bold]Sessions:[/bold] {total_sessions:,} | [bold]Messages:[/bold] {total_messages:,} | [bold]Tokens:[/bold] {total_tokens:,}"
@@ -1573,7 +1621,9 @@ class SessionBrowser(App[Optional[str]]):
             # Wide terminal: single row with proper spacing
             # Calculate spacing to distribute sections across width
             project_len = len(
-                project_section.replace("[bold]", "").replace("[/bold]", "")
+                project_section.replace("[bold]", "")
+                .replace("[/bold]", "")
+                .replace("$project", project_name)
             )
             sessions_len = len(
                 sessions_section.replace("[bold]", "").replace("[/bold]", "")
@@ -1598,7 +1648,7 @@ class SessionBrowser(App[Optional[str]]):
             stats_text = f"{project_section}\n{sessions_section}\n{date_section}"
 
         stats_label = self.query_one("#stats", Label)
-        stats_label.update(stats_text)
+        stats_label.update(Content.from_markup(stats_text, project=project_name))
 
     def format_timestamp(
         self, timestamp: str, date_only: bool = False, short_format: bool = False
@@ -1627,6 +1677,15 @@ class SessionBrowser(App[Optional[str]]):
         """Update the selected session based on the current cursor position."""
         try:
             table = cast(DataTable[str], self.query_one("#sessions-table", DataTable))
+            # Rows are keyed by the full session id; the displayed prefix
+            # is ambiguous (every quarantined id starts the same way).
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            if (
+                row_key.value in self.sessions
+                or row_key.value in self.archived_sessions
+            ):
+                self.selected_session_id = row_key.value
+                return
             row_data = table.get_row_at(table.cursor_row)
             if row_data:
                 # Extract session ID from the first column (now just first 8 chars)
@@ -1661,7 +1720,11 @@ class SessionBrowser(App[Optional[str]]):
                 self.selected_session_id, format, force=force
             )
             if session_file is None:
-                self.notify(f"Failed to generate {format_name} file", severity="error")
+                self.notify(
+                    f"Failed to generate {format_name} file",
+                    severity="error",
+                    markup=False,
+                )
                 return
 
             webbrowser.open(f"file://{session_file}")
@@ -1670,10 +1733,14 @@ class SessionBrowser(App[Optional[str]]):
                 if force
                 else f"Opened: {session_file.name}"
             )
-            self.notify(msg)
+            self.notify(msg, markup=False)
 
         except Exception as e:
-            self.notify(f"Error with {format_name}: {e}", severity="error")
+            self.notify(
+                f"Error with {format_name}: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
     def _view_markdown_embedded(self, *, force: bool = False) -> None:
         """View session Markdown in embedded viewer.
@@ -1697,10 +1764,14 @@ class SessionBrowser(App[Optional[str]]):
             title = f"Session: {self.selected_session_id[:8]}..."
             self.push_screen(MarkdownViewerScreen(content, title))
             if force:
-                self.notify(f"Regenerated: {session_file.name}")
+                self.notify(f"Regenerated: {session_file.name}", markup=False)
 
         except Exception as e:
-            self.notify(f"Error viewing Markdown: {e}", severity="error")
+            self.notify(
+                f"Error viewing Markdown: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
     def action_export_selected(self) -> None:
         """Export the selected session to HTML and open in browser."""
@@ -1732,6 +1803,19 @@ class SessionBrowser(App[Optional[str]]):
             self.notify("No session selected", severity="warning")
             return
 
+        # The id comes from a transcript: `-r <id>` would let an id starting
+        # with `-` be parsed as another option (`--settings` runs commands).
+        # A plain id, attached with `=`, can only ever be the resume value.
+        if not is_plain_id(self.selected_session_id):
+            self.notify("Invalid session id; not resuming", severity="error")
+            return
+        if is_quarantined(self.selected_session_id):
+            self.notify(
+                "This session's id was invalid, so it can't be resumed",
+                severity="error",
+            )
+            return
+
         try:
             # Get the session's working directory if available
             session_data = self.sessions.get(self.selected_session_id)
@@ -1744,20 +1828,25 @@ class SessionBrowser(App[Optional[str]]):
                     self.notify(
                         f"Warning: Session working directory not found: {session_data.cwd}",
                         severity="warning",
+                        markup=False,
                     )
 
             # Use Textual's suspend context manager for proper terminal cleanup
             with self.suspend():
                 # Terminal is properly restored here by Textual
-                # Replace the current process with claude -r <sessionId>
-                os.execvp("claude", ["claude", "-r", self.selected_session_id])
+                # Replace the current process with claude --resume=<sessionId>
+                os.execvp("claude", ["claude", f"--resume={self.selected_session_id}"])
         except FileNotFoundError:
             self.notify(
                 "Claude Code CLI not found. Make sure 'claude' is in your PATH.",
                 severity="error",
             )
         except Exception as e:
-            self.notify(f"Error resuming session: {e}", severity="error")
+            self.notify(
+                f"Error resuming session: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
     def _update_expanded_content(self) -> None:
         """Update the expanded content for the currently selected session."""
@@ -1773,35 +1862,28 @@ class SessionBrowser(App[Optional[str]]):
 
         expanded_content = self.query_one("#expanded-content", Static)
 
-        # Build expanded content
-        content_parts: list[str] = []
+        # Build expanded content. Every value but the token counts comes
+        # from the transcript, so it is passed to Textual as a variable,
+        # never spliced into the markup (an escaper misses tags such as
+        # `[ @click=...]`, which Textual still parses).
+        def labelled(label: str, value: str) -> Content:
+            return Content.from_markup(f"[bold]{label}:[/bold] $value", value=value)
 
-        # Session ID (safe - UUID format)
-        content_parts.append(f"[bold]Session ID:[/bold] {self.selected_session_id}")
-
-        # AI title (Claude Code's curated short title) - escape markup
+        content_parts: list[Content] = [
+            labelled("Session ID", self.selected_session_id)
+        ]
         if session_data.ai_title:
-            escaped_title = escape_markup(session_data.ai_title)
-            content_parts.append(f"\n[bold]Title:[/bold] {escaped_title}")
-
-        # Summary (if available) - escape markup
+            content_parts.append(labelled("Title", session_data.ai_title))
         if session_data.summary:
-            escaped_summary = escape_markup(session_data.summary)
-            content_parts.append(f"\n[bold]Summary:[/bold] {escaped_summary}")
-
-        # First user message - escape markup
+            content_parts.append(labelled("Summary", session_data.summary))
         if session_data.first_user_message:
-            escaped_message = escape_markup(session_data.first_user_message)
             content_parts.append(
-                f"\n[bold]First User Message:[/bold] {escaped_message}"
+                labelled("First User Message", session_data.first_user_message)
             )
-
-        # Working directory (if available) - escape markup
         if session_data.cwd:
-            escaped_cwd = escape_markup(session_data.cwd)
-            content_parts.append(f"\n[bold]Working Directory:[/bold] {escaped_cwd}")
+            content_parts.append(labelled("Working Directory", session_data.cwd))
 
-        # Token usage (safe - numeric data)
+        # Token usage (numeric)
         total_tokens = (
             session_data.total_input_tokens + session_data.total_output_tokens
         )
@@ -1815,9 +1897,9 @@ class SessionBrowser(App[Optional[str]]):
                 token_details += (
                     f" | Cache Read: {session_data.total_cache_read_tokens:,}"
                 )
-            content_parts.append(f"\n[bold]Token Usage:[/bold] {token_details}")
+            content_parts.append(labelled("Token Usage", token_details))
 
-        expanded_content.update("\n".join(content_parts))
+        expanded_content.update(Content("\n\n").join(content_parts))
 
     def _ensure_session_file(
         self, session_id: str, format: str, *, force: bool = False
@@ -1835,15 +1917,25 @@ class SessionBrowser(App[Optional[str]]):
             Path to the file if successful, None if regeneration failed.
         """
         ext = get_file_extension(format)
-        session_file = self.project_path / f"session-{session_id}.{ext}"
+        session_file = session_path(
+            self.project_path, session_id, f"session-{{}}.{ext}"
+        )
+        if session_file is None:
+            return None
         # The HTML theme shares filenames with every other theme; the
         # renderer's is_outdated() reads the theme from the file's stamp, so
         # a page left by a run in another theme is regenerated here.
         renderer = get_renderer(format, theme=self.html_theme)
 
-        # Check if we need to regenerate
+        # Check if we need to regenerate. The version stamp alone isn't
+        # enough: a file shipped in an archive can carry one, and opening
+        # it would skip every gate the renderer applies. So a file counts
+        # as ours only if the cache recorded rendering it.
         needs_regeneration = (
-            force or not session_file.exists() or renderer.is_outdated(session_file)
+            force
+            or not session_file.exists()
+            or renderer.is_outdated(session_file)
+            or self.cache_manager.get_html_cache(session_file.name) is None
         )
 
         if not needs_regeneration:
@@ -1894,6 +1986,12 @@ class SessionBrowser(App[Optional[str]]):
                 # which is how #139 surfaced in the first place).
                 scrubbed = scrub_surrogates(session_content) or session_content
                 atomic_write_text(session_file, scrubbed)
+                # Record it, so the next view trusts the file it wrote.
+                self.cache_manager.update_html_cache(
+                    session_file.name,
+                    session_id,
+                    session_data.message_count if session_data else 0,
+                )
                 return session_file
         except Exception:
             return None
@@ -1977,6 +2075,13 @@ class SessionBrowser(App[Optional[str]]):
             )
             return
 
+        if is_quarantined(self.selected_session_id):
+            self.notify(
+                "This session's id was invalid; it has no file of its own to restore",
+                severity="error",
+            )
+            return
+
         try:
             # Export messages from cache
             messages = self.cache_manager.export_session_to_jsonl(
@@ -1990,7 +2095,10 @@ class SessionBrowser(App[Optional[str]]):
             self.project_path.mkdir(parents=True, exist_ok=True)
 
             # Write to JSONL file
-            output_path = self.project_path / f"{self.selected_session_id}.jsonl"
+            output_path = session_path(self.project_path, self.selected_session_id)
+            if output_path is None:
+                self.notify("Invalid session id; not restored", severity="error")
+                return
             with open(output_path, "w", encoding="utf-8") as f:
                 for msg in messages:
                     f.write(msg + "\n")
@@ -1998,13 +2106,18 @@ class SessionBrowser(App[Optional[str]]):
             self.notify(
                 f"Restored {len(messages)} messages to {output_path.name}",
                 severity="information",
+                markup=False,
             )
 
             # Refresh to show the restored session as current
             self._refresh_after_restore()
 
         except Exception as e:
-            self.notify(f"Error restoring session: {e}", severity="error")
+            self.notify(
+                f"Error restoring session: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
     def _refresh_after_restore(self) -> None:
         """Refresh sessions after restoring an archived session."""
@@ -2025,6 +2138,13 @@ class SessionBrowser(App[Optional[str]]):
         """Archive the selected session (delete JSONL file, keep in cache)."""
         if not self.selected_session_id:
             self.notify("No session selected", severity="warning")
+            return
+
+        if is_quarantined(self.selected_session_id):
+            self.notify(
+                "This session's id was invalid; it has no file of its own to archive",
+                severity="error",
+            )
             return
 
         # Archive only works for current sessions (those with JSONL files)
@@ -2048,19 +2168,24 @@ class SessionBrowser(App[Optional[str]]):
 
         try:
             # Delete the JSONL file
-            jsonl_path = self.project_path / f"{self.selected_session_id}.jsonl"
-            if jsonl_path.exists():
+            jsonl_path = session_path(self.project_path, self.selected_session_id)
+            if jsonl_path is not None and jsonl_path.exists():
                 jsonl_path.unlink()
                 self.notify(
                     f"Session {self.selected_session_id[:8]} archived",
                     severity="information",
+                    markup=False,
                 )
                 # Reload sessions - this will move the session to archived
                 self.load_sessions()
             else:
                 self.notify("JSONL file not found", severity="error")
         except Exception as e:
-            self.notify(f"Error archiving session: {e}", severity="error")
+            self.notify(
+                f"Error archiving session: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
     def action_delete_session(self) -> None:
         """Delete the selected session with smart options."""
@@ -2098,8 +2223,8 @@ class SessionBrowser(App[Optional[str]]):
 
             # Delete JSONL file if requested
             if delete_option == "both":
-                jsonl_path = self.project_path / f"{self.selected_session_id}.jsonl"
-                if jsonl_path.exists():
+                jsonl_path = session_path(self.project_path, self.selected_session_id)
+                if jsonl_path is not None and jsonl_path.exists():
                     jsonl_path.unlink()
                     deleted_what.append("JSONL file")
 
@@ -2112,6 +2237,7 @@ class SessionBrowser(App[Optional[str]]):
                 self.notify(
                     f"Session {self.selected_session_id[:8]} deleted ({', '.join(deleted_what)})",
                     severity="information",
+                    markup=False,
                 )
                 # Clear selection and reload
                 self.selected_session_id = None
@@ -2119,7 +2245,11 @@ class SessionBrowser(App[Optional[str]]):
             else:
                 self.notify("Failed to delete session", severity="error")
         except Exception as e:
-            self.notify(f"Error deleting session: {e}", severity="error")
+            self.notify(
+                f"Error deleting session: {str(e)}",
+                severity="error",
+                markup=False,
+            )
 
     def action_back_to_projects(self) -> None:
         """Navigate to the project selector."""

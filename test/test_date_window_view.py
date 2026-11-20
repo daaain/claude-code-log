@@ -94,6 +94,7 @@ def _window(
     fmt: str = "html",
     force: bool = False,
     jobs: int = 1,
+    show_temp_projects: bool = False,
 ) -> Path:
     return process_projects_hierarchy(
         projects,
@@ -103,6 +104,7 @@ def _window(
         force=force,
         from_date=DAY,
         to_date=DAY,
+        show_temp_projects=show_temp_projects,
     )
 
 
@@ -140,8 +142,13 @@ def _hrefs(text: str) -> Set[str]:
     """The relative page links in an index page or the recent-data script."""
     found = re.findall(r"""href=['"]([^'"#?]+)""", text)
     found += re.findall(r'"href":\s*"([^"#?]+)"', text)
-    # Not the search script's template literals, nor absolute links.
-    return {link for link in found if not link.startswith(("http", "/", "$"))}
+    # Not the search script's template literals, nor absolute links; the
+    # pages write their relative links as `./…` (`utils.relative_href`).
+    return {
+        link.removeprefix("./")
+        for link in found
+        if not link.startswith(("http", "/", "$"))
+    }
 
 
 def _session_ids(names: Set[str]) -> Set[str]:
@@ -296,7 +303,9 @@ def test_the_recent_page_lists_the_window_s_sessions_with_its_counts(
     session's, as on the index."""
     _full(projects)
     view = tmp_path / "view"
-    _window(projects, view)
+    # The fixture's sessions ran in /tmp, which the page leaves out by
+    # default (test_recent.py pins that under a window too).
+    _window(projects, view, show_temp_projects=True)
     payload = _recent_payload(view)
     sessions = {s["id"]: s for s in payload["sessions"]}
     assert set(sessions) == INSIDE
@@ -578,9 +587,9 @@ def test_the_refusal_names_the_file_and_both_ways_out(projects: Path) -> None:
 def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
     projects: Path,
 ) -> None:
-    """For a project, ``--output`` names the combined page only: its
-    session pages are written into the project whatever it names, so a
-    refusal there offers the combined page alone instead."""
+    """For a project, an ``--output`` *file* names the combined page only:
+    its session pages are written into the project, so a refusal there
+    offers an output directory, or the combined page alone."""
     _full(projects)
     result = CliRunner().invoke(
         main,
@@ -598,6 +607,7 @@ def test_the_refusal_for_one_project_offers_what_can_move_its_pages(
     assert str(projects / "-mixed" / "session-s-day2.html") in result.output
     assert "--force" in result.output
     assert "--combined only" in result.output
+    assert "--output directory" in result.output
     assert "another --output" not in result.output
 
 
@@ -605,7 +615,8 @@ def test_the_refusal_for_one_project_s_session_pages_alone_offers_force(
     projects: Path,
 ) -> None:
     """With ``--combined no`` there is no combined page to send elsewhere,
-    and the session pages go into the project: only --force is left."""
+    and the session pages go into the project unless an output directory
+    is given: --force or such a directory are left."""
     _full(projects)
     result = CliRunner().invoke(
         main,
@@ -622,8 +633,37 @@ def test_the_refusal_for_one_project_s_session_pages_alone_offers_force(
     assert result.exit_code == 1, result.output
     assert str(projects / "-mixed" / "session-s-day2.html") in result.output
     assert "--force" in result.output
+    assert "--output directory" in result.output
     assert "--combined only" not in result.output
     assert "another --output" not in result.output
+
+
+def test_an_output_directory_takes_one_project_s_whole_view(
+    projects: Path, tmp_path: Path
+) -> None:
+    """A suffix-less ``--output`` is a directory for one project as it is
+    for --all-projects: the view's session pages go there with its combined
+    page, so the full view in the project is neither refused nor touched."""
+    mixed = projects / "-mixed"
+    _full(projects)
+    before = {p.name: p.stat().st_mtime_ns for p in mixed.glob("*.html")}
+    view = tmp_path / "view"
+    result = CliRunner().invoke(
+        main,
+        [
+            str(mixed),
+            "-o",
+            str(view),
+            "--from-date",
+            "2026-01-02",
+            "--to-date",
+            "2026-01-02",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (view / "combined_transcripts.html").exists()
+    assert _session_ids(set(_pages(view))) == INSIDE
+    assert {p.name: p.stat().st_mtime_ns for p in mixed.glob("*.html")} == before
 
 
 def test_force_is_accepted_with_a_window_only(projects: Path) -> None:

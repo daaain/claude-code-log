@@ -375,6 +375,58 @@
     color: var(--muted);
 }
 
+/* Temp-dir projects, folded into one group after the list (index.html):
+   a dim row with the project rows' chevron. */
+.mn-index .mn-temp-projects {
+    margin-top: 18px;
+}
+
+.mn-index .mn-temp-projects > summary {
+    position: relative;
+    padding: 7px 4px 7px 20px;
+    border-bottom: 1px solid var(--rule);
+    list-style: none;
+    cursor: pointer;
+    font: 0.78em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.mn-index .mn-temp-projects > summary::-webkit-details-marker {
+    display: none;
+}
+
+.mn-index .mn-temp-projects > summary:hover {
+    background: var(--code);
+    color: var(--fg);
+}
+
+.mn-index .mn-temp-projects > summary:focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: -2px;
+}
+
+.mn-index .mn-temp-projects > summary::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: calc(7px + 0.55em);
+    width: 5px;
+    height: 5px;
+    border-right: 1.5px solid var(--muted);
+    border-bottom: 1.5px solid var(--muted);
+    transform: rotate(-45deg);
+}
+
+.mn-index .mn-temp-projects[open] > summary::before {
+    transform: rotate(45deg);
+    top: calc(7px + 0.4em);
+}
+
+.mn-index .mn-temp-projects > .mn-projects {
+    margin-top: 0;
+    opacity: 0.85;
+}
+
 .mn-index .mn-pextra {
     flex: 1 1 100%;
     margin: 0;

@@ -1281,9 +1281,14 @@ def build_link(
     """
     from urllib.parse import quote
 
+    from .utils import relative_href
+
+    # Both ids come from the archive (a directory name, a transcript's
+    # sessionId), so the path is quoted and kept relative: the search
+    # page writes it into an href.
     if not session_id:
-        return f"{project_slug}/"
-    base = f"{project_slug}/session-{session_id}.html"
+        return relative_href(f"{project_slug}/")
+    base = relative_href(f"{project_slug}/session-{session_id}.html")
     params: list[str] = []
     if message_uuid and message_type not in SESSION_ONLY_TYPES:
         params.append(f"uuid={quote(message_uuid)}")

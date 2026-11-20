@@ -44,7 +44,8 @@ if TYPE_CHECKING:
         render_markdown,
         render_markdown_collapsible,
     )
-    from .image_export import is_safe_image_source
+    from .image_export import is_safe_image_source, is_safe_source
+    from .image_store import image_base64, image_bytes
     from .markdown.renderer import safe_markdown_inline, safe_markdown_link_target
     from .utils import is_safe_web_url
 
@@ -378,6 +379,13 @@ _PUBLIC_HELPERS: frozenset[str] = frozenset(
         # ``data`` are untrusted; a plugin building a ``data:`` URL needs the
         # same allowlist (no SVG) + strict base64 check as the core sinks.
         "is_safe_image_source",
+        # An image's source is inline base64 or, for most images, a
+        # reference whose bytes are found by digest (`image_store`): read
+        # either through these, never from a field. ``is_safe_source`` is
+        # the image gate for either kind.
+        "is_safe_source",
+        "image_bytes",
+        "image_base64",
     }
 )
 
@@ -396,9 +404,15 @@ def __getattr__(name: str) -> Any:  # PEP 562
         elif name == "is_safe_web_url":
             # Format-neutral (shared by both renderers) → top-level utils.
             from .utils import is_safe_web_url as resolved
-        elif name == "is_safe_image_source":
-            # Format-neutral image gate → ``image_export.py``.
-            from .image_export import is_safe_image_source as resolved
+        elif name in ("is_safe_image_source", "is_safe_source"):
+            # Format-neutral image gates → ``image_export.py``.
+            from . import image_export
+
+            resolved = getattr(image_export, name)
+        elif name in ("image_bytes", "image_base64"):
+            from . import image_store
+
+            resolved = getattr(image_store, name)
         else:
             from .html import utils as _utils
 
@@ -413,7 +427,10 @@ __all__ = [
     "MessageTransformer",
     "apply_transformers",
     "escape_html",
+    "image_base64",
+    "image_bytes",
     "is_safe_image_source",
+    "is_safe_source",
     "is_safe_web_url",
     "load_transformers",
     "render_markdown",

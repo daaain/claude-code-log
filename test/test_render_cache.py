@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 
 from claude_code_log import converter, render_cache, render_dispatch
 from claude_code_log.models import DEFAULT_DEPTH
@@ -246,7 +247,8 @@ class TestRenderPoolCreation:
             format="html",
             input_path=project,
             effective_output_dir=project,
-            cache_manager=object(),
+            # Only asked for its files' image counts (none here).
+            cache_manager=SimpleNamespace(image_bytes_by_file=dict),
             message_count=1_000_000,
             from_date=None,
             to_date=None,

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 from collections.abc import Iterator
@@ -476,6 +477,23 @@ _GOOD_DATA_PREFIXES = (
 )
 
 
+def is_harmful_url(value: str) -> bool:
+    """Whether a link or image target from a transcript must not stay live.
+
+    The one scheme policy for both outputs: the HTML renderer drops such a
+    target, and the Markdown gate turns such a link into literal text.
+    Unparseable targets count as harmful.
+    """
+    try:
+        normalized = _normalize_url_for_scheme_check(value)
+        scheme = urlsplit(normalized).scheme.lower()
+    except ValueError:
+        return True
+    return scheme in _HARMFUL_URL_SCHEMES and not normalized.lower().startswith(
+        _GOOD_DATA_PREFIXES
+    )
+
+
 class _TranscriptHTMLRenderer(HTMLRenderer):
     """wenmode's HTML renderer with a denylist URL policy.
 
@@ -488,16 +506,7 @@ class _TranscriptHTMLRenderer(HTMLRenderer):
     """
 
     def sanitize_url(self, value: str) -> Optional[str]:
-        try:
-            normalized = _normalize_url_for_scheme_check(value)
-            scheme = urlsplit(normalized).scheme.lower()
-        except ValueError:
-            return None
-        if scheme in _HARMFUL_URL_SCHEMES and not normalized.lower().startswith(
-            _GOOD_DATA_PREFIXES
-        ):
-            return None
-        return value
+        return None if is_harmful_url(value) else value
 
 
 class _TranscriptHtmlHandlers:
@@ -1177,6 +1186,10 @@ def get_template_environment() -> Environment:
     # Cast to Any to bypass Jinja2's overly strict globals type
     globals_dict: Any = env.globals
     globals_dict["starts_with_emoji"] = starts_with_emoji
+    # Links built from directory names and session ids (the index page).
+    from ..utils import relative_href
+
+    env.filters["rel_href"] = relative_href
     # Minimal-theme gutter/meta helpers — called only from the template's
     # `{% if minimal %}` branches, so classic output never touches them.
     from . import minimal_icons, minimal_theme
@@ -1230,6 +1243,39 @@ def _vendor_source_dir() -> Path:
     return Path(__file__).parent / "assets" / "vendor"
 
 
+def _is_installed(dest: Path, src_size: int) -> bool:
+    """Whether ``dest`` is already this build: same versioned name, same size.
+
+    A file another process is swapping in can refuse even a stat on
+    Windows; that reads as not installed (yet).
+    """
+    try:
+        return dest.is_file() and dest.stat().st_size == src_size
+    except OSError:
+        return False
+
+
+def _install_vendor_file(tmp: Path, dest: Path, src_size: int) -> None:
+    """``os.replace(tmp, dest)``, allowing for a concurrent installer.
+
+    On Windows a replace onto a file another worker is replacing at that
+    moment raises PermissionError (WinError 5). Whoever got there first
+    installed the same build, so once ``dest`` is that build the job is
+    done; until then the replace is retried briefly
+    (`retry_on_sharing_violation`), and its last error propagates.
+    """
+    from ..utils import retry_on_sharing_violation
+
+    def replace() -> None:
+        try:
+            os.replace(tmp, dest)
+        except PermissionError:
+            if not _is_installed(dest, src_size):
+                raise
+
+    retry_on_sharing_violation(replace)
+
+
 def ensure_vendor_assets(output_dir: Path) -> bool:
     """Copy the vendored front-end assets into ``output_dir/assets``.
 
@@ -1237,9 +1283,11 @@ def ensure_vendor_assets(output_dir: Path) -> bool:
     output directory, so it is cheap when there is nothing to do: a file
     already present at the source's size is left alone (the versioned
     name means same name + same size is the same build). Writes go through
-    a pid-named temp file and ``os.replace``, because render-pool workers
-    rendering one project's pages all call this at once, and a plain copy
-    could let one worker's page load another's half-written bundle.
+    a temp file unique to the process and thread, and ``os.replace``,
+    because render-pool workers rendering one project's pages all call
+    this at once, and a plain copy could let one worker's page load
+    another's half-written bundle. On Windows those workers' replaces can
+    refuse each other; see `_install_vendor_file`.
 
     Returns False instead of raising when the directory can't be written:
     the page still renders, and its timeline reports the missing library
@@ -1252,12 +1300,13 @@ def ensure_vendor_assets(output_dir: Path) -> bool:
         for name in _VENDOR_ASSET_FILES:
             src = src_dir / name
             dest = dest_dir / name
-            if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+            src_size = src.stat().st_size
+            if _is_installed(dest, src_size):
                 continue
-            tmp = dest_dir / f".{name}.{os.getpid()}.tmp"
+            tmp = dest_dir / f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"
             try:
                 shutil.copyfile(src, tmp)
-                os.replace(tmp, dest)
+                _install_vendor_file(tmp, dest, src_size)
             finally:
                 tmp.unlink(missing_ok=True)
     except OSError as exc:

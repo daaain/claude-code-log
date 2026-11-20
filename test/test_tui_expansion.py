@@ -77,7 +77,7 @@ def test_row_expansion_functionality():
             assert browser.is_expanded
 
             # Check the content
-            content = updated_content
+            content = str(updated_content)
 
             # Should contain session ID
             assert "Session ID:" in content
@@ -113,7 +113,7 @@ def test_row_expansion_functionality():
             assert not browser.is_expanded
 
             # Content should be cleared
-            content = updated_content
+            content = str(updated_content)
             assert content == ""
 
 
@@ -178,7 +178,7 @@ def test_row_expansion_with_missing_data():
             assert browser.is_expanded
 
             # Check the content
-            content = updated_content
+            content = str(updated_content)
 
             # Should contain session ID
             assert "Session ID:" in content
@@ -239,5 +239,5 @@ def test_row_expansion_with_no_selected_session():
             assert not browser.is_expanded
 
             # Content should be empty (method returns early, so update isn't called)
-            content = updated_content
+            content = str(updated_content)
             assert content == ""

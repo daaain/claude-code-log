@@ -8,7 +8,6 @@ shapes for which it has useful semantics.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from fnmatch import fnmatch
 import json
@@ -19,11 +18,12 @@ from pathlib import Path
 import re
 from typing import Any, Iterator, Optional, TypeAlias, cast
 
+from claude_code_log.image_store import hold_image
 from claude_code_log.models import (
     AssistantTranscriptEntry,
     ContentItem,
     ImageContent,
-    ImageSource,
+    ImageRef,
     TextContent,
     ToolResultContent,
     ToolUseResult,
@@ -48,6 +48,7 @@ from .codex_tools import AdaptedToolCall, adapt_codex_tool_batch, adapt_codex_to
 from .codex_quickjs import analyze_javascript_tools
 from .codex_messages import format_codex_user_message, parse_codex_user_shell_command
 from .codex_web import normalize_codex_web_result
+from ..transcript_ids import is_plain_id, quarantined_id
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,11 @@ _IMAGE_MEDIA_TYPES = {
     ".webp": "image/webp",
 }
 _MAX_JSON_NESTING = 512
+
+
+def _plain_or_none(value: Optional[str]) -> Optional[str]:
+    """A parent/fork thread id only links when it is a valid id."""
+    return value if value is not None and is_plain_id(value) else None
 
 
 @dataclass(frozen=True)
@@ -888,6 +894,11 @@ class CodexProvider(BaseProvider):
                 continue
             payload = record.payload
             thread_id = self._nonempty_string(payload.get("id")) or fallback_id
+            # The thread id becomes a session id (file names, links), so a
+            # value outside the id charset gets the same stand-in the Claude
+            # loader gives an invalid sessionId (transcript_ids.py).
+            if not is_plain_id(thread_id):
+                thread_id = quarantined_id(thread_id)
             cwd_text = self._nonempty_string(payload.get("cwd"))
             source = payload.get("source")
             source_dict = (
@@ -906,18 +917,23 @@ class CodexProvider(BaseProvider):
                     or self._nonempty_string(payload.get("version"))
                     or ""
                 ),
-                parent_thread_id=(
+                parent_thread_id=_plain_or_none(
                     self._nonempty_string(payload.get("parent_thread_id"))
                     or self._source_string(source_dict, "parent_thread_id")
                 ),
-                forked_from_id=(
+                forked_from_id=_plain_or_none(
                     self._nonempty_string(payload.get("forked_from_id"))
                     or self._source_string(source_dict, "forked_from_id")
                 ),
                 source_kind=source_kind,
                 spawn_call_id=spawn_call_id,
             )
-        return CodexSessionIdentity(thread_id=fallback_id, path=path)
+        return CodexSessionIdentity(
+            thread_id=fallback_id
+            if is_plain_id(fallback_id)
+            else quarantined_id(fallback_id),
+            path=path,
+        )
 
     def _filename_thread_id(self, path: Path) -> str:
         match = _FILENAME_UUID_RE.search(path.stem)
@@ -2381,13 +2397,9 @@ class CodexProvider(BaseProvider):
             data = path.read_bytes()
         except OSError:
             return None
+        # Held by reference like a parsed transcript's images (`image_store`).
         return ImageContent(
-            type="image",
-            source=ImageSource(
-                type="base64",
-                media_type=media_type,
-                data=base64.b64encode(data).decode("ascii"),
-            ),
+            type="image", source=ImageRef.model_validate(hold_image(data, media_type))
         )
 
     def _event_message_fingerprint(

@@ -27,6 +27,7 @@ from .models import (
     PassthroughTranscriptEntry,
     SystemTranscriptEntry,
 )
+from .utils import PrintableArgsFilter
 
 # Tool names whose ``tool_use`` block spawns a subagent thread. Used by
 # ``_collect_agent_anchors`` to keep nested-Agent assistant entries from
@@ -47,6 +48,8 @@ _StructuralEntry: tuple[type, ...] = (
 )
 
 logger = logging.getLogger(__name__)
+# Node and session ids in these warnings come from transcripts.
+logger.addFilter(PrintableArgsFilter())
 
 
 # =============================================================================

@@ -270,3 +270,34 @@ def test_assistant_message_with_multiple_images():
     assert html.count("<img src=") == 2
     assert f"data:image/png;base64,{image_data_1}" in html
     assert f"data:image/jpeg;base64,{image_data_2}" in html
+
+
+def test_tool_result_image_held_by_reference():
+    """A parsed tool result's image is a reference (`image_store`): it
+    renders from the held bytes, and is left out, like an unsafe one, when
+    its bytes can't be found."""
+    import base64
+
+    from claude_code_log import image_store
+
+    raw = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    )
+    ref = image_store.hold_image(raw, "image/png")
+    missing = {**ref, "digest": "f" * 32}
+    tool_result = ToolResultContent(
+        type="tool_result",
+        tool_use_id="read_1",
+        content=[
+            {"type": "text", "text": "Read it"},
+            {"type": "image", "source": ref},
+            {"type": "image", "source": missing},
+        ],
+        is_error=False,
+    )
+
+    html = format_tool_result_content_raw(tool_result)
+
+    data_url = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    assert html.count("<img src=") == 1
+    assert data_url in html

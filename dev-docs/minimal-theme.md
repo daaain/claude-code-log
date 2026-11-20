@@ -851,7 +851,10 @@ its hooks (`.project-card`, `.project-name a`, `.project-stats`,
 in a sticky bar with the *Search all transcripts* link, and its results
 open under the bar, scrolling inside it. *Search only visible* (a
 transcript filter option) is hidden. `--expand-paths` keeps its folder
-tree, one hairline per level.
+tree, one hairline per level. Temp-dir projects follow the list (or the
+tree) in a collapsed `.mn-temp-projects` group whose summary borrows the
+rows' chevron; its rows are ordinary `mn_project_row`s, so the finder
+indexes them (application_model.md § 2.18 has the classification).
 
 **Search page.** The header carries the toggle (the query form is hidden
 until the server answers, and the setup panel shown from `file://` needs

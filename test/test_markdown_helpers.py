@@ -5,7 +5,11 @@ Tests for the private utility methods that handle content escaping and formattin
 
 import pytest
 
-from claude_code_log.markdown.renderer import MarkdownRenderer, _protect_html_tags
+from claude_code_log.markdown.renderer import (
+    MarkdownRenderer,
+    _gate_body,
+    _protect_html_tags,
+)
 from claude_code_log.utils import strip_error_tags
 
 
@@ -139,8 +143,8 @@ class TestCollapsible:
     """Tests for the _collapsible() method."""
 
     def test_basic_collapsible(self, renderer):
-        """Basic collapsible block structure."""
-        result = renderer._collapsible("Click me", "Hidden content")
+        """Basic collapsible block structure, as the body gate emits it."""
+        result = _gate_body(renderer._collapsible("Click me", "Hidden content"))
         expected = (
             "<details>\n<summary>Click me</summary>\n\nHidden content\n</details>"
         )
@@ -155,13 +159,13 @@ class TestCollapsible:
     def test_escapes_summary_in_summary(self, renderer):
         """Summary with </summary> is escaped."""
         result = renderer._collapsible("Title </summary> here", "Content")
-        assert "&lt;/summary>" in result
+        assert "&lt;/summary&gt;" in result
         assert "</summary> here" not in result
 
     def test_escapes_details_in_summary(self, renderer):
         """Summary with </details> is also escaped."""
         result = renderer._collapsible("Bad </details> title", "Content")
-        assert "&lt;/details>" in result
+        assert "&lt;/details&gt;" in result
 
     def test_preserves_other_html(self, renderer):
         """Other HTML tags are not escaped."""
@@ -365,12 +369,18 @@ class TestProtectHtmlTags:
     # -- The user's key concern: already-quoted HTML must survive --------
 
     def test_inline_code_already_wrapped(self):
-        """A tag already inside inline code isn't re-written.
+        """A tag inside inline code keeps its text, as our own ``<code>``.
 
-        This is the user-flagged concern from the coderabbit review:
-        ``use `x <br> y` here`` must not be corrupted.
+        The user-flagged concern from the coderabbit review was that
+        ``use `x <br> y` here`` must not be corrupted. It isn't: the span
+        becomes a ``<code>`` element (a marker until the gate restores it)
+        with the same text, entity-encoded, so it renders identically.
         """
-        assert _protect_html_tags("use `x <br> y` here") == "use `x <br> y` here"
+        from claude_code_log.markdown.renderer import _restore_own_tags
+
+        assert _restore_own_tags(_protect_html_tags("use `x <br> y` here")) == (
+            "use <code>x &#60;br&#62; y</code> here"
+        )
 
     # -- Edge cases that used to leak with adaptive-backtick delimiters --
 

@@ -1,12 +1,12 @@
 # Restoring Archived Sessions
 
-When you run `claude-code-log`, you may see output like:
+When you run `claude-code-log`, its output may end with a note like:
 
 ```sh
-project-name: cached, 3 archived (0.0s)
+Note: 3 archived session(s) found (cleanupPeriodDays: 30 default).
 ```
 
-This indicates that 3 sessions exist in the cache whose source JSONL files have been deleted.
+This indicates that 3 sessions exist in the cache whose source JSONL files have been deleted. A project converted on that run also counts its own on its progress line (`project-name: 2 sessions, 3 archived (1.2s)`); the TUI shows the count for the project it's opened on.
 
 ## What Are Archived Sessions?
 

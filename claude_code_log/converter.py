@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import os
 import re
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator
@@ -44,7 +45,9 @@ from .utils import (
     get_project_display_name,
     is_agent_session,
     parse_date_bounds,
-    project_transcript_bytes,
+    relative_href,
+    resident_bytes,
+    resident_transcript_bytes,
     should_use_as_session_starter,
     create_session_preview,
     get_warmup_session_ids,
@@ -62,6 +65,8 @@ from .cache import (
     SessionCacheData,
     catch_up_search_index,
     checkpoint_wal,
+    compact_cache,
+    sweep_image_blobs,
     connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
@@ -71,6 +76,13 @@ from .cache import (
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
+from .image_store import BASE64_MARK, REF_MARK, releases_what_it_parses, take_images
+from .transcript_ids import (
+    is_plain_id,
+    sanitize_entry_ids,
+    session_file_name,
+    session_path,
+)
 from .factories.teammate_factory import find_team_lead_body
 from .models import (
     AiTitleTranscriptEntry,
@@ -318,6 +330,9 @@ class _ByteParse:
     start_line: int
     resumed: bool
     held_count: int
+    # Characters of the held prefix's lines the parse did not keep
+    # (`image_store.take_images`); the parse adds its own lines'.
+    held_image_chars: int = 0
     # What the parse had produced when it reached the first line past the
     # prefix cut — i.e. the products of complete lines only. None until
     # that line is reached, which for a newline-terminated tail is the
@@ -325,6 +340,7 @@ class _ByteParse:
     # everything. See :meth:`mark_incomplete` and :meth:`commit`.
     complete_count: Optional[int] = None
     complete_agent_ids: Optional[set[str]] = None
+    complete_image_chars: Optional[int] = None
 
     @property
     def mark_line(self) -> int:
@@ -334,12 +350,13 @@ class _ByteParse:
         )
 
     def mark_incomplete(
-        self, messages: list[TranscriptEntry], agent_ids: set[str]
+        self, messages: list[TranscriptEntry], agent_ids: set[str], image_chars: int
     ) -> None:
         """Snapshot what complete lines produced, before the trailing fragment."""
         if self.complete_count is None:
             self.complete_count = len(messages)
             self.complete_agent_ids = set(agent_ids)
+            self.complete_image_chars = image_chars
 
     def lines(self) -> Generator[tuple[int, str], None, None]:
         """Yield ``(line_no, text)`` for the bytes past the held prefix."""
@@ -355,6 +372,7 @@ class _ByteParse:
         entry_store: "ParsedEntryStore",
         messages: list[TranscriptEntry],
         agent_ids: set[str],
+        image_chars: int,
     ) -> None:
         """Hold the parse for the next tick, up to the last *complete* line.
 
@@ -378,6 +396,7 @@ class _ByteParse:
         if self.complete_count is not None:
             messages = messages[: self.complete_count]
             agent_ids = self.complete_agent_ids or set()
+            image_chars = self.complete_image_chars or 0
         entry_store.put_prefix(
             self.path,
             consumed,
@@ -385,6 +404,7 @@ class _ByteParse:
             messages,
             agent_ids,
             line_count,
+            image_chars=image_chars,
         )
 
 
@@ -469,6 +489,7 @@ def _begin_byte_parse(
         start_line=held.line_count if held else 0,
         resumed=held is not None,
         held_count=len(held.entries) if held else 0,
+        held_image_chars=held.image_chars if held else 0,
     )
 
 
@@ -569,6 +590,7 @@ def load_transcript(
     # Track unrecognized message types already warned about so we emit at
     # most one warning per distinct type per file (these tend to repeat a lot).
     warned_unrecognized_types: set[str | None] = set()
+    warned_bad_ids: set[str] = set()
 
     # With a store, read bytes rather than text: that yields both the
     # offset and the rolling hash a later tick needs to resume from what
@@ -582,9 +604,14 @@ def load_transcript(
         else None
     )
 
+    # Characters of this file's own lines the parse does not keep: image
+    # base64 held by reference or dropped (`image_store.take_images`),
+    # recorded with the file for the memory checks.
+    image_chars = 0
     if byte_parse is not None:
         messages = byte_parse.entries
         agent_ids = byte_parse.agent_ids
+        image_chars = byte_parse.held_image_chars
         line_source = byte_parse.lines()
         # The first line whose bytes fall outside the prefix cut: reaching
         # it is what tells `commit` where the holdable entries stop.
@@ -606,7 +633,7 @@ def load_transcript(
             print(f"Processing {jsonl_path}...")
         for line_no, line in line_source:
             if line_no == mark_line and byte_parse is not None:
-                byte_parse.mark_incomplete(messages, agent_ids)
+                byte_parse.mark_incomplete(messages, agent_ids, image_chars)
             line = line.strip()
             if line:
                 try:
@@ -616,6 +643,29 @@ def load_transcript(
                             f"Line {line_no} of {jsonl_path} is not a JSON object: {line}"
                         )
                         continue
+
+                    # Images become references, their bytes held once
+                    # each until the cache stores them (`image_store`).
+                    if BASE64_MARK in line or REF_MARK in line:
+                        image_chars += take_images(entry_dict)
+
+                    # Ids become file names, a `claude --resume` argument
+                    # and markup, so an invalid one is replaced before
+                    # anything below reads it (transcript_ids.py). The
+                    # value itself is never echoed: it may carry escapes.
+                    # Shown even in a silent (`--all-projects`) run: it is the
+                    # only sign that a transcript carried a crafted id.
+                    replaced = sanitize_entry_ids(entry_dict)
+                    if replaced:
+                        fields = [f for f in replaced if f not in warned_bad_ids]
+                        if fields:
+                            warned_bad_ids.update(fields)
+                            print(
+                                f"Warning: line {line_no} of {jsonl_path} has an "
+                                f"invalid {', '.join(fields)}; its session is "
+                                f"rendered under a quarantined id",
+                                file=sys.stderr,
+                            )
 
                     # Check for agentId BEFORE Pydantic parsing
                     # agentId can be at top level OR nested in toolUseResult
@@ -716,7 +766,7 @@ def load_transcript(
     # `spawnedAgentId`) and splice agent blocks in, and a resumed parse
     # must start from the raw per-line products and re-run them.
     if byte_parse is not None and entry_store is not None:
-        byte_parse.commit(entry_store, messages, agent_ids)
+        byte_parse.commit(entry_store, messages, agent_ids, image_chars)
 
     # How many entries came straight off the file's own lines, before any
     # of the whole-file passes below can add or alter one. The append-only
@@ -750,6 +800,11 @@ def load_transcript(
             jsonl_path.stem
         )  # e.g., "29ccd257-68b1-427f-ae5f-6524b7cb6f20"
         for agent_id in agent_ids:
+            # The id names a file to read: never one that could leave the
+            # session's directories (ingestion replaces invalid ids; this
+            # also covers ids reaching here from the sidecar or a cache).
+            if not is_plain_id(agent_id):
+                continue
             # Try legacy location first (same directory as session file)
             agent_file = parent_dir / f"agent-{agent_id}.jsonl"
             # Skip if the agent file is the same as the current file (self-reference)
@@ -836,9 +891,14 @@ def load_transcript(
             appended,
             subagents_fp=subagents_fp,
             source_stat=source_stat,
+            image_bytes=image_chars,
         ):
             cache_manager.save_cached_entries(
-                jsonl_path, messages, subagents_fp=subagents_fp, source_stat=source_stat
+                jsonl_path,
+                messages,
+                subagents_fp=subagents_fp,
+                source_stat=source_stat,
+                image_bytes=image_chars,
             )
 
     return messages
@@ -1654,17 +1714,23 @@ def _resolve_session_source_files(
             name for name in session_files if not (directory_path / name).exists()
         ]
         if not session_files:
-            if strict or (directory_path / f"{sid}.jsonl").exists():
+            if strict or _own_file_exists(directory_path, sid):
                 return None
             continue  # archived: no source anywhere, nothing to render
         if missing:
             if strict or len(missing) != len(session_files):
                 return None
-            if (directory_path / f"{sid}.jsonl").exists():
+            if _own_file_exists(directory_path, sid):
                 return None
             continue  # archived: every mapped source is gone
         needed_files |= session_files
     return needed_files
+
+
+def _own_file_exists(directory_path: Path, session_id: str) -> bool:
+    """Whether ``<session_id>.jsonl`` exists; never for an id that isn't plain."""
+    path = session_path(directory_path, session_id)
+    return path is not None and path.exists()
 
 
 def _load_sessions_partial(
@@ -2187,25 +2253,36 @@ def combined_link_available(
     return (output_dir / f"combined_transcripts{variant_suffix}.{ext}").exists()
 
 
-def combined_theme_mismatch(output_dir: Path, variant_suffix: str, theme: str) -> bool:
-    """Is an existing combined HTML output stamped with another theme?
+def combined_output_outdated(
+    output_dir: Path, variant_suffix: str, ext: str, theme: str
+) -> bool:
+    """Is an existing combined output stamped by another version or theme?
 
-    Themes overwrite the same files, so a run must not leave behind an
-    output of the other theme that its own pages link to. A ``--combined
-    no`` run (every ``watch`` tick by default) never rewrites the combined
-    output, yet its session pages carry a back-link to it
-    (``combined_link_available``); left alone, a theme switch would strand
-    a combined page in the old theme next to session pages in the new one.
-    Callers use this to promote such a run to writing the combined output
-    once — after that it carries the new theme and the run goes back to
-    skipping it. ``False`` when there is no combined file (or no stamp:
-    not ours). Paginated projects name page 1 like the single file, and
-    the paginated pass then re-checks every page's stamp itself.
+    A ``--combined no`` run (every ``watch`` tick and ``serve --watch`` by
+    default) never rewrites the combined output, yet its session pages
+    carry a back-link to it (``combined_link_available``). Left alone, a
+    theme switch would strand a combined page in the old theme next to
+    session pages in the new one, and an upgrade would leave it in the old
+    rendering (inline base64 images before 1.9, say) for as long as only
+    watches run. Callers use this to promote such a run to writing the
+    combined output once; after that it carries the current stamp and the
+    run goes back to skipping it. ``False`` when there is no combined file,
+    no stamp (not ours) or a format without one (JSON). Paginated projects
+    name page 1 like the single file, and the paginated pass then
+    re-checks every page's stamp itself.
     """
-    from .html.renderer import check_html_theme
+    from .html.renderer import check_html_version, html_generator_stamp
 
-    found = check_html_theme(output_dir / f"combined_transcripts{variant_suffix}.html")
-    return found is not None and found != theme
+    if ext not in ("html", "md"):
+        return False
+    # Markdown carries the same generator comment, without a theme.
+    found = check_html_version(
+        output_dir / f"combined_transcripts{variant_suffix}.{ext}"
+    )
+    if found is None:
+        return False
+    current = html_generator_stamp(theme) if ext == "html" else get_library_version()
+    return found != current
 
 
 def _variant_label_from_suffix(suffix: str) -> str:
@@ -2764,7 +2841,7 @@ def _render_page_unit_inline(
     from .html.renderer import HtmlRenderer
 
     assert unit.entries is not None  # every page unit is planned with them
-    page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "embedded")
+    page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "referenced")
     page_renderer.depth = depth
     page_renderer.compact = compact
     page_renderer.no_recaps = no_recaps
@@ -3201,6 +3278,16 @@ def _streaming_mode() -> str:
 _STREAMING_MAX_SPARSE_FRACTION = 1.0 / 3.0
 
 
+def _resident_project_bytes(
+    input_path: Path, cache_manager: "Optional[CacheManager]"
+) -> int:
+    """The project's transcript bytes less the images a parse doesn't hold
+    (`utils.resident_transcript_bytes`), as far as the cache has counted
+    them: what every memory check sizes a conversion from."""
+    image_bytes = cache_manager.image_bytes_by_file() if cache_manager else {}
+    return resident_transcript_bytes(input_path, image_bytes)
+
+
 def _should_stream(transcript_bytes: int) -> Optional[str]:
     """How this conversion should stream page-by-page, if at all.
 
@@ -3409,6 +3496,9 @@ def _stream_paginated_conversion(
         # full path would have done itself.
         if sparse_only and len(page_work) > len(pages) * _STREAMING_MAX_SPARSE_FRACTION:
             return None
+        # Each page's fragment-store valve sizes from its files less
+        # their images (`utils.resident_bytes`).
+        image_bytes = cache_manager.image_bytes_by_file()
 
         if not silent:
             print(
@@ -3449,7 +3539,7 @@ def _stream_paginated_conversion(
             # so its keys (this load's entry ordinals) never cross loads,
             # and its memory is bounded by the page. The valve compares
             # against the page's own source bytes.
-            page_bytes = sum(f.stat().st_size for f in trunk_files)
+            page_bytes = resident_bytes(trunk_files, image_bytes)
             fragment_store = _make_fragment_store("html", transcript_bytes=page_bytes)
             if fragment_store is not None:
                 fragment_store.set_entry_ordinals(page_entries)
@@ -3770,7 +3860,7 @@ def _try_streaming(
     )
     if not stream_paginated:
         return None
-    stream_decision = _should_stream(project_transcript_bytes(input_path))
+    stream_decision = _should_stream(_resident_project_bytes(input_path, cache_manager))
     if stream_decision is None:
         return None
 
@@ -3808,6 +3898,7 @@ def _try_streaming(
     return streamed_path
 
 
+@releases_what_it_parses
 def convert_jsonl_to(
     format: str,
     input_path: Path,
@@ -3899,7 +3990,7 @@ def convert_jsonl_to(
             stamp, so switching theme regenerates every output this run
             writes. Under ``write_combined=False`` an
             existing combined output in another theme is rewritten too (see
-            ``combined_theme_mismatch``), so no archive is left mixed.
+            ``combined_output_outdated``), so no archive is left mixed.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -3936,6 +4027,9 @@ def convert_jsonl_to(
         # Single file mode - cache only available for directory mode
         if output_path is None:
             output_path = input_path.with_suffix(f"{suffix}.{ext}")
+            if output_root is not None:
+                output_root.mkdir(parents=True, exist_ok=True)
+                output_path = output_root / output_path.name
         messages = load_transcript(input_path, silent=silent)
         # Parent agent entries and assign synthetic session IDs (same as
         # directory mode) so DAG-based ordering handles sidechain placement.
@@ -3975,18 +4069,21 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
-        # Never leave a combined output of another theme behind for this
-        # run's session pages to link back to: rewrite it once.
+        # Never leave a combined output of another version or theme behind
+        # for this run's session pages to link back to: rewrite it once.
+        # Not for a date window: its combined page would replace the full
+        # one with the window's view.
         if (
-            format == "html"
-            and not write_combined
+            not write_combined
             and generate_individual_sessions
-            and combined_theme_mismatch(effective_output_dir, suffix, theme)
+            and from_date is None
+            and to_date is None
+            and combined_output_outdated(effective_output_dir, suffix, ext, theme)
         ):
             if not silent:
                 print(
-                    f"Combined output in {effective_output_dir.name} has another "
-                    f"theme; regenerating it in the {theme} theme"
+                    f"Combined output in {effective_output_dir.name} was "
+                    "rendered by another version or theme; regenerating it"
                 )
             write_combined = True
 
@@ -4127,7 +4224,7 @@ def convert_jsonl_to(
             view_files = [output_path] if write_combined else []
             if generate_individual_sessions and shown_sessions:
                 view_files += [
-                    effective_output_dir / f"session-{sid}{suffix}.{ext}"
+                    effective_output_dir / session_file_name(sid, f"{suffix}.{ext}")
                     for sid in sorted(shown_sessions)
                 ]
             existing = _first_existing(view_files)
@@ -4171,9 +4268,10 @@ def convert_jsonl_to(
     # work/render-format-once.md). Scoped to this call: it dies with the
     # conversion, so nothing about it needs invalidating. The byte count
     # feeds the store's memory valve (same source-size measure as
-    # build_render_pool's cap: top-level JSONL, agent files excluded).
+    # build_render_pool's cap: top-level JSONL, agent files excluded, less
+    # the images a parse doesn't hold).
     if input_path.is_dir():
-        source_bytes = project_transcript_bytes(input_path)
+        source_bytes = _resident_project_bytes(input_path, cache_manager)
     else:
         source_bytes = input_path.stat().st_size
     fragment_store = _make_fragment_store(format, transcript_bytes=source_bytes)
@@ -4533,6 +4631,11 @@ def _incremental_cache_refresh(
         old_file_map = cache_manager.get_session_file_map()
         old_rows = cache_manager.get_all_session_rows()
 
+        def image_bytes_after(path: Path) -> int:
+            # What the parse just recorded for the file (the scope's
+            # overlay reads the spool): the store charges for the rest.
+            return cache_manager.image_bytes_by_file().get(path.name, 0)
+
         for f in modified_files:
             # Stamp BEFORE the parse: a file that grows while we read it
             # must make the store decline (its stamp would then be older
@@ -4543,7 +4646,10 @@ def _incremental_cache_refresh(
             )
             if entry_store is not None:
                 entry_store.put(
-                    f, pending.finish(f, parsed) if pending else None, parsed
+                    f,
+                    pending.finish(f, parsed) if pending else None,
+                    parsed,
+                    image_chars=image_bytes_after(f),
                 )
         new_states = cache_manager.get_file_states(modified_names)
 
@@ -5155,20 +5261,20 @@ class WindowOutputExists(Exception):
         self, path: Path, *, project_pages: bool = False, combined: bool = True
     ) -> None:
         self.path = path
-        # For one project, --output names the combined page only: its
-        # session pages go into the project whatever it names. Without a
-        # combined page, nothing is left for --output to move.
+        # For one project, an --output *file* names the combined page only:
+        # its session pages go into the project. Without a combined page,
+        # nothing is left for such an --output to move.
         if not project_pages:
             way_out = ", or choose another --output"
         elif combined:
             way_out = (
-                ", or write the combined page alone elsewhere, with "
-                "--combined only and --output"
+                ", or choose an --output directory, or write the combined page "
+                "alone elsewhere, with --combined only and an --output file"
             )
         else:
             way_out = (
-                "; a project's session pages are written into it, whatever "
-                "--output names"
+                ", or choose an --output directory: a project's session pages "
+                "are written into it otherwise"
             )
         super().__init__(
             f"{path} already exists. A date-filtered run writes only into a "
@@ -5512,13 +5618,13 @@ def _generate_individual_session_files(
                 session_title += f" ({date_range_str})"
 
             # Check if session file needs regeneration
-            session_file_name = f"session-{session_id}{suffix}.{ext}"
-            session_file_path = output_dir / session_file_name
+            session_page_name = session_file_name(session_id, f"{suffix}.{ext}")
+            session_file_path = output_dir / session_page_name
 
             # Use incremental regeneration: check per-session staleness via
             # html_cache. Works for the marker-tracked formats (HTML +
             # Markdown) — rows are keyed by the variant-specific filename
-            # (session_file_name) and the check compares against the file's
+            # (session_page_name) and the check compares against the file's
             # real location (issue: keying on the default "session-{id}.html"
             # name / source dir made every Markdown or --output run
             # "not_cached" forever, re-rendering each session on every run).
@@ -5526,7 +5632,7 @@ def _generate_individual_session_files(
             # reads its own `version` field (see `_tracks_version_marker`).
             if cache_manager is not None and _tracks_version_marker(format):
                 is_stale, _reason = cache_manager.is_transcript_stale(
-                    session_file_name,
+                    session_page_name,
                     session_id,
                     output_dir=output_dir,
                     combined_linked=combined_available,
@@ -5559,7 +5665,7 @@ def _generate_individual_session_files(
                     RenderUnit(
                         kind="session",
                         key=session_id,
-                        file_name=session_file_name,
+                        file_name=session_page_name,
                         title=session_title,
                         # No combined file to point at — the back-link
                         # would 404, so leave it out. See
@@ -5802,7 +5908,7 @@ def generate_single_session_file(
         output_file = output
         output_dir = output.parent
     else:
-        output_file = input_path / f"session-{matched_id}{suffix}.{ext}"
+        output_file = input_path / session_file_name(matched_id, f"{suffix}.{ext}")
 
     # Generate content and write
     renderer = get_renderer(
@@ -6009,6 +6115,7 @@ def render_provider_wholesale(
     expand_paths: bool = False,
     filter_path: Optional[str] = None,
     silent: bool = False,
+    show_temp_projects: bool = False,
 ) -> Path:
     """Render every session of one provider under ``sessions_root`` into a
     project hierarchy — per-session pages, a per-project combined page, and a
@@ -6245,7 +6352,7 @@ def render_provider_wholesale(
             session_key = info.session_id
             session_title = info.title or f"{provider_name.title()}: {session_key}"
             if write_individual:
-                output_name = f"session-{session_key}{suffix}.{ext}"
+                output_name = session_file_name(session_key, f"{suffix}.{ext}")
                 source_changed = (
                     info.source_path is not None
                     and info.source_path.resolve() in modified_sources
@@ -6379,6 +6486,8 @@ def render_provider_wholesale(
         index_kwargs["provider_label"] = provider_name.title()
         if expand_paths:
             index_kwargs["expand_paths_tree"] = True
+        if show_temp_projects:
+            index_kwargs["show_temp_projects"] = True
     index_content = renderer.generate_projects_index(
         project_summaries, from_date, to_date, **index_kwargs
     )
@@ -6661,7 +6770,7 @@ def _window_view_files(
             yield plan.dest_dir / combined_name
         if generate_individual_sessions and plan.window is not None:
             for sid in sorted(plan.window.session_ids):
-                yield plan.dest_dir / f"session-{sid}{session_suffix}"
+                yield plan.dest_dir / session_file_name(sid, session_suffix)
 
 
 def _plan_project(
@@ -6806,16 +6915,16 @@ def _plan_project(
             or not output_path.exists()
         )
     else:
-        # A combined output left in another theme is rewritten even here
-        # (convert_jsonl_to promotes the run; see combined_theme_mismatch).
+        # A combined output left by another version or theme is rewritten
+        # even here (convert_jsonl_to promotes the run; see
+        # combined_output_outdated).
         needs_work = (
             bool(modified_files)
             or bool(stale_sessions)
             or unrefreshed
             or (
-                combined_ext == "html"
-                and generate_individual_sessions
-                and combined_theme_mismatch(dest_dir, variant, theme)
+                generate_individual_sessions
+                and combined_output_outdated(dest_dir, variant, combined_ext, theme)
             )
         )
 
@@ -6845,7 +6954,10 @@ def _plan_project(
         needs_work=needs_work,
         archived_count=archived_count,
         stats=stats,
-        source_bytes=sum(f.stat().st_size for f in jsonl_files),
+        source_bytes=resident_bytes(
+            jsonl_files,
+            cache_manager.image_bytes_by_file() if cache_manager is not None else {},
+        ),
         cached_message_count=cached_message_count,
     )
 
@@ -6858,6 +6970,45 @@ def _init_project_worker(turns: Optional[WriteTurns]) -> None:
 
     install_write_turns(turns)
     defer_index_maintenance()
+
+
+def sweep_project_images(
+    input_path: Path,
+    output_root: Optional[Path],
+    format: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> int:
+    """After a project's conversion, remove the images no page shows.
+
+    Once per library version per output directory
+    (``image_export.sweep_images_once``): the conversion after an upgrade,
+    whose re-rendered pages may no longer reference a previous encoder's
+    files. A date window writes a partial view, so it never sweeps; nor
+    does a single transcript, whose page shares its directory with others.
+    Never raises: a sweep is housekeeping, not part of the conversion.
+    """
+    from .image_export import sweep_images_once
+
+    if format not in ("html", "md", "markdown") or from_date or to_date:
+        return 0
+    try:
+        if not input_path.is_dir():
+            return 0
+        return sweep_images_once(output_root or input_path, get_library_version())
+    except Exception:  # noqa: BLE001 - housekeeping must not fail a run
+        return 0
+
+
+def _sweep_after(worker_args: Dict[str, Any]) -> None:
+    """``sweep_project_images`` for a ``_conversion_kwargs`` argument set."""
+    sweep_project_images(
+        worker_args["input_path"],
+        worker_args.get("output_root"),
+        worker_args["format"],
+        worker_args.get("from_date"),
+        worker_args.get("to_date"),
+    )
 
 
 def _convert_project_worker(
@@ -6885,6 +7036,8 @@ def _convert_project_worker(
     except Exception as exc:
         error = traceback.format_exc()
         busy = is_busy_database_error(exc)
+    else:
+        _sweep_after(worker_args)
     return (str(worker_args["input_path"]), time.monotonic() - start, error, busy)
 
 
@@ -6911,6 +7064,7 @@ def process_projects_hierarchy(
     entry_store: "Optional[ParsedEntryStore]" = None,
     failed_projects: Optional[List[str]] = None,
     force: bool = False,
+    show_temp_projects: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6984,6 +7138,7 @@ def process_projects_hierarchy(
                 entry_store=entry_store,
                 failed_projects=failed_projects,
                 force=force,
+                show_temp_projects=show_temp_projects,
             )
         if use_cache:
             # The pass's workers have all exited: the files they rewrote
@@ -6992,10 +7147,15 @@ def process_projects_hierarchy(
             # `checkpoint_wal` (issue #332). The catch-up reports its own
             # failures; the `finally` is for whatever it did not foresee,
             # so the checkpoint is never the casualty of the index.
+            db_path = get_cache_db_path(projects_path)
             try:
-                catch_up_search_index(get_cache_db_path(projects_path))
+                catch_up_search_index(db_path)
+                sweep_image_blobs(db_path)
+                reclaimed = compact_cache(db_path)
+                if reclaimed and not silent:
+                    print(f"Compacted the cache by {reclaimed / 1e6:.0f} MB")
             finally:
-                checkpoint_wal(get_cache_db_path(projects_path))
+                checkpoint_wal(db_path)
         return result
 
 
@@ -7007,6 +7167,7 @@ def _write_recent_page(
     session_pages: bool = True,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    show_temp_projects: bool = False,
 ) -> None:
     """Write ``recent.html`` and its ``recent-data.js`` next to the index.
 
@@ -7018,9 +7179,10 @@ def _write_recent_page(
     there are none: the index names each session's file all the same,
     but nothing writes it. Under a date window the page lists the
     window's sessions, those of the index's cards, each with the window's
-    part of it, and names the window. A failure here must never fail the
-    conversion: the page is a convenience next to the index, not part of
-    it.
+    part of it, and names the window. Sessions run in a temp dir are left
+    out unless ``show_temp_projects``, as the index folds their projects.
+    A failure here must never fail the conversion: the page is a
+    convenience next to the index, not part of it.
     """
     from .recent import (
         RECENT_DATA,
@@ -7034,7 +7196,7 @@ def _write_recent_page(
     for summary in project_summaries if session_pages else []:
         for session in summary.get("sessions", []):
             if session.get("id") and session.get("file"):
-                links[str(session["id"])] = str(session["file"])
+                links[str(session["id"])] = relative_href(str(session["file"]))
     label = date_window_label(from_date, to_date)
     try:
         from .html.renderer import generate_recent_html
@@ -7058,11 +7220,36 @@ def _write_recent_page(
             projects_path,
             href_for=lambda _project, sid: links.get(sid),
             window=window,
+            show_temp_projects=show_temp_projects,
         )
         atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
         atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(theme, label))
     except Exception as exc:  # pragma: no cover - defensive
         print(f"Warning: could not write {RECENT_PAGE}: {exc}")
+
+
+def _untouched_projects_line(
+    *, cached: int, outside_window: int, seconds: float
+) -> Optional[str]:
+    """The one progress line for the projects a pass had nothing to do for.
+
+    ``cached`` projects were current; ``outside_window`` ones had no
+    messages in a date-filtered run's window. None when there are neither.
+    """
+
+    def projects(n: int) -> str:
+        return f"{n} project{'' if n == 1 else 's'}"
+
+    parts: List[str] = []
+    if cached:
+        parts.append(f"{projects(cached)} cached")
+    if outside_window:
+        # "3 projects cached, 2 with no ..." -- the noun is said once.
+        count = str(outside_window) if cached else projects(outside_window)
+        parts.append(f"{count} with no messages in the window")
+    if not parts:
+        return None
+    return f"  {', '.join(parts)} ({seconds:.1f}s)"
 
 
 def _process_projects_hierarchy(
@@ -7088,6 +7275,7 @@ def _process_projects_hierarchy(
     entry_store: "Optional[ParsedEntryStore]" = None,
     failed_projects: Optional[List[str]] = None,
     force: bool = False,
+    show_temp_projects: bool = False,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -7125,6 +7313,10 @@ def _process_projects_hierarchy(
             already exist at the destination; without it the pass raises
             ``WindowOutputExists`` before writing anything when one does.
             Nothing is removed either way.
+        show_temp_projects: List projects worked on only from temp dirs
+            with the rest on the index, and their sessions on the recent
+            page, instead of folding them into one index group and leaving
+            them off the recent page. Every project is still converted.
 
     With a date window the pass writes a view of it: the master index
     lists the projects with a session in the window (``window_session_ids``),
@@ -7345,15 +7537,18 @@ def _process_projects_hierarchy(
     to_convert = [p for p in plans if p.needs_work and p.error is None]
     projects_with_updates = sum(1 for p in to_convert if p.stats.files_updated > 0)
 
-    # Cached (no-work) projects are reported first, in stable
-    # alphabetical order; regenerated projects follow as they finish.
-    for plan in plans:
-        if not plan.needs_work and plan.error is None:
-            state = "no messages in the window" if plan.outside_window else "cached"
-            print(
-                f"  {plan.project_dir.name}: {state}{_archived_suffix(plan)} "
-                f"({plan.stats.total_time:.1f}s)"
-            )
+    # Projects with nothing to do are rolled up into one line, reported
+    # first; regenerated projects follow, named, as they finish. On a real
+    # archive nearly every project is untouched on a given run, and a
+    # `watch --all-projects` printed the whole list on every tick.
+    untouched = [p for p in plans if not p.needs_work and p.error is None]
+    rollup = _untouched_projects_line(
+        cached=sum(1 for p in untouched if not p.outside_window),
+        outside_window=sum(1 for p in untouched if p.outside_window),
+        seconds=sum(p.stats.total_time for p in untouched),
+    )
+    if rollup is not None:
+        print(rollup)
 
     # ---- Phase 2 (execute): (re)generate stale projects. Rendering is
     # CPU-bound pure Python and projects are independent — each
@@ -7507,16 +7702,17 @@ def _process_projects_hierarchy(
             # worker would cost more than the re-parse it saves, and the
             # worker's copy would die with the task. Deliberately absent
             # from `_conversion_kwargs` for that reason.
-            convert_jsonl_to(
-                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs),
-                entry_store=entry_store,
+            conversion = _conversion_kwargs(
+                plan, silent=silent, render_jobs=render_jobs
             )
+            convert_jsonl_to(**conversion, entry_store=entry_store)
         except Exception as exc:
             if not final_attempt and is_busy_database_error(exc):
                 _defer_locked_out(plan)
                 return
             _print_project_failed(plan, traceback.format_exc())
             return
+        _sweep_after(conversion)
         _print_project_done(plan, time.monotonic() - project_start_time)
 
     if resolved_jobs <= 1:
@@ -7823,9 +8019,15 @@ def _process_projects_hierarchy(
                     "total_cache_read_tokens": total_cache_read_tokens,
                     "latest_timestamp": latest_timestamp,
                     "earliest_timestamp": earliest_timestamp,
+                    # Without a cache, the cwds the loaded messages record:
+                    # the display name and the temp-project fold read them.
                     "working_directories": cache_manager.get_working_directories()
                     if cache_manager
-                    else [],
+                    else list(
+                        dict.fromkeys(
+                            cwd for m in messages if (cwd := getattr(m, "cwd", None))
+                        )
+                    ),
                     "is_archived": False,
                     "combined_suppressed": not write_combined,
                     "sessions": sessions_data,
@@ -7974,6 +8176,10 @@ def _process_projects_hierarchy(
     index_kwargs: dict[str, Any] = {}
     if expand_paths and output_format in ("md", "markdown", "html"):
         index_kwargs["expand_paths_tree"] = True
+    # Temp-dir projects fold into one group at the end of the HTML and
+    # Markdown index; JSON lists every project as data.
+    if show_temp_projects and output_format in ("md", "markdown", "html"):
+        index_kwargs["show_temp_projects"] = True
     index_content = renderer.generate_projects_index(
         project_summaries, from_date, to_date, **index_kwargs
     )
@@ -8002,6 +8208,7 @@ def _process_projects_hierarchy(
             session_pages=generate_individual_sessions,
             from_date=from_date,
             to_date=to_date,
+            show_temp_projects=show_temp_projects,
         )
 
     # Count total sessions from project summaries

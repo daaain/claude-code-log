@@ -22,6 +22,10 @@ import pytest
 
 from claude_code_log import converter
 from claude_code_log.converter import process_projects_hierarchy
+from test.conftest import run_in_both_themes
+
+# Each test runs in both themes: the claim these tests check holds in each.
+theme = run_in_both_themes("process_projects_hierarchy")
 
 TEST_DATA_DIR = Path(__file__).parent / "test_data"
 
@@ -110,10 +114,10 @@ def test_parallel_second_run_takes_cached_fast_path(
 
     process_projects_hierarchy(projects_dir, jobs=2)
     second_run = capsys.readouterr().out
-    # All three projects hit the fast path... (": cached" is the
-    # per-project progress line; bare "cached" also appears in the
-    # archived-sessions footer note)
-    assert second_run.count(": cached") == 3
+    # All three projects hit the fast path, rolled up into one line
+    # rather than named one by one...
+    assert "  3 projects cached (" in second_run
+    assert "-proj-" not in second_run
     # ...and the index is still (unconditionally) regenerated.
     assert "SENTINEL" not in index_path.read_text(encoding="utf-8")
 
@@ -158,3 +162,24 @@ def test_pool_failure_falls_back_to_sequential(
     out = capsys.readouterr().out
     assert "falling back to sequential processing" in out
     _assert_all_outputs_exist(projects_dir)
+
+
+@pytest.mark.parametrize(
+    ("cached", "outside_window", "expected"),
+    [
+        (0, 0, None),
+        (1, 0, "  1 project cached (0.5s)"),
+        (3, 0, "  3 projects cached (0.5s)"),
+        (0, 1, "  1 project with no messages in the window (0.5s)"),
+        (3, 2, "  3 projects cached, 2 with no messages in the window (0.5s)"),
+    ],
+)
+def test_untouched_projects_roll_up_into_one_line(
+    cached: int, outside_window: int, expected: str | None
+) -> None:
+    from claude_code_log.converter import _untouched_projects_line  # pyright: ignore[reportPrivateUsage]
+
+    line = _untouched_projects_line(
+        cached=cached, outside_window=outside_window, seconds=0.5
+    )
+    assert line == expected

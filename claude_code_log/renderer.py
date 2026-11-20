@@ -91,6 +91,7 @@ from .utils import (
     get_parent_session_id,
     get_project_display_name,
     is_agent_session,
+    is_temp_project,
     should_skip_message,
     should_use_as_session_starter,
     create_session_preview,
@@ -595,6 +596,10 @@ class TemplateProject:
         self.display_name = get_project_display_name(
             self.name, self.working_directories
         )
+        # Worked on only from temp dirs (test suites, scratchpad agents,
+        # scripted runs): the index folds it into one group at the end.
+        # prepare_projects_index clears it under --show-temp-projects.
+        self.is_temporary: bool = is_temp_project(self.name, self.working_directories)
 
         # Format last modified date
         last_modified_dt = datetime.fromtimestamp(self.last_modified)
@@ -5236,17 +5241,59 @@ def _disambiguate_display_names(projects: list["TemplateProject"]) -> None:
             tp.display_name = _path_suffix_label(bp, depth)
 
 
+def has_nothing_to_open(project_summary: dict[str, Any]) -> bool:
+    """Whether an index row for this project would lead nowhere.
+
+    No listable session, and nothing for the combined page to show: a
+    transcript holding only metadata (a session started and killed before
+    its first prompt, say), or only a summary entry (older Claude Code
+    wrote those to files of their own). A summary or ai-title entry counts
+    toward ``message_count`` but carries no timestamp and renders nothing,
+    so a project whose summary records no timestamp at all (an empty
+    ``latest_timestamp``, as every converter path sets it) shows nothing
+    either. A summary that doesn't report timestamps is no evidence of
+    that. Messages without a listable session (an agent-only session)
+    still open, on the combined page.
+    """
+    if project_summary.get("sessions"):
+        return False
+    if not project_summary.get("message_count"):
+        return True
+    return (
+        "latest_timestamp" in project_summary
+        and not project_summary["latest_timestamp"]
+    )
+
+
+def split_temp_projects(
+    projects: list["TemplateProject"],
+) -> tuple[list["TemplateProject"], list["TemplateProject"]]:
+    """``(regular, temporary)``, each keeping ``projects``' order."""
+    return (
+        [p for p in projects if not p.is_temporary],
+        [p for p in projects if p.is_temporary],
+    )
+
+
 def prepare_projects_index(
     project_summaries: list[dict[str, Any]],
+    show_temp_projects: bool = False,
 ) -> tuple[list["TemplateProject"], "TemplateSummary"]:
     """Prepare project data for rendering in any format.
 
+    Projects with nothing to open (:func:`has_nothing_to_open`) are left
+    out, of the totals too. Each remaining project's ``is_temporary`` says
+    whether the index folds it into the temp-directories group; with
+    ``show_temp_projects`` none is folded.
+
     Args:
         project_summaries: List of project summary dictionaries.
+        show_temp_projects: List temp-dir projects like any other.
 
     Returns:
         A tuple of (template_projects, template_summary) for use by renderers.
     """
+    project_summaries = [p for p in project_summaries if not has_nothing_to_open(p)]
     # Sort projects by last modified (most recent first)
     sorted_projects = sorted(
         project_summaries, key=lambda p: p["last_modified"], reverse=True
@@ -5254,6 +5301,9 @@ def prepare_projects_index(
 
     # Convert to template-friendly format
     template_projects = [TemplateProject(project) for project in sorted_projects]
+    if show_temp_projects:
+        for project in template_projects:
+            project.is_temporary = False
     # Disambiguate any colliding basename labels across the full set (no-op
     # unless a real collision exists → existing output stays byte-identical).
     _disambiguate_display_names(template_projects)
@@ -5735,7 +5785,7 @@ def get_renderer(
     Args:
         format: The output format ("html", "md", or "markdown").
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
-            If None, defaults to "embedded" for HTML and "referenced" for Markdown.
+            If None, defaults to "referenced" for both HTML and Markdown.
         depth: Output depth level controlling which message types are included.
         compact: If True, merge consecutive same-type headings (Markdown only).
         no_timestamps: If True, suppress per-message timestamp lines
@@ -5761,8 +5811,9 @@ def get_renderer(
     if format == "html":
         from .html.renderer import HtmlRenderer
 
-        # For HTML, default to embedded mode (current behavior)
-        mode = image_export_mode or "embedded"
+        # For HTML, default to referenced mode: compressed image files
+        # beside the page (embedded when there is no output directory)
+        mode = image_export_mode or "referenced"
         renderer = HtmlRenderer(image_export_mode=mode)
     elif format in ("md", "markdown"):
         from .markdown.renderer import MarkdownRenderer

@@ -1112,7 +1112,7 @@ def test_payload_lists_recent_sessions_across_projects(archive: Path) -> None:
     assert session["state"] == "asked"
     assert session["project"] == "foldyard"
     assert session["short"] == "aaaa1111"
-    assert session["href"] == "-home-u-code-foldyard/session-aaaa1111-recent.html"
+    assert session["href"] == "./-home-u-code-foldyard/session-aaaa1111-recent.html"
     assert payload["generatedAt"] == NOW_MS
     assert payload["v"] == 1
 
@@ -1315,3 +1315,113 @@ def test_a_memoised_summary_still_sees_the_exit(
         build_recent_payload(projects, now=NOW, memo=memo)["sessions"][0]["state"]
         == "done"
     )
+
+
+# -- sessions run in a temp dir ----------------------------------------------
+
+
+@pytest.fixture
+def temp_burst(tmp_path: Path) -> Path:
+    """One real session, then three newer ones a test suite ran in /tmp."""
+    projects = tmp_path / "projects"
+    real = _Session("aaaa1111-real", cwd="/home/u/code/foldyard")
+    real.prompt(60, "Pin the cache mode.")
+    real.reply(59, "Pinned.")
+    _project(projects, "-home-u-code-foldyard", real)
+    for n in range(3):
+        cwd = f"/private/var/folders/5l/x/T/pytest-of-u/pytest-{n}/repo"
+        burst = _Session(f"tttt000{n}-temp", cwd=cwd)
+        burst.prompt(10 + n, "Return an empty list of findings.")
+        burst.reply(9 + n, "[]")
+        _project(projects, cwd.replace("/", "-"), burst)
+    return projects
+
+
+def test_sessions_run_in_a_temp_dir_are_left_out(
+    temp_burst: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process_projects_hierarchy(temp_burst, silent=True)
+    # Fewer places than temp sessions: the filter runs before the cut, so
+    # the burst cannot crowd the real session off the page.
+    monkeypatch.setattr(recent_module, "MAX_SESSIONS", 2)
+    payload = build_recent_payload(temp_burst, now=NOW)
+    assert [s["id"] for s in payload["sessions"]] == ["aaaa1111-real"]
+
+
+def test_show_temp_projects_keeps_them(
+    temp_burst: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process_projects_hierarchy(temp_burst, silent=True)
+    monkeypatch.setattr(recent_module, "MAX_SESSIONS", 2)
+    payload = build_recent_payload(temp_burst, now=NOW, show_temp_projects=True)
+    assert [s["id"] for s in payload["sessions"]] == ["tttt0000-temp", "tttt0001-temp"]
+
+
+def test_write_recent_data_threads_show_temp_projects(temp_burst: Path) -> None:
+    process_projects_hierarchy(temp_burst, silent=True)
+    ids = {
+        flag: [
+            s["id"]
+            for s in (
+                write_recent_data(
+                    temp_burst, temp_burst, now=NOW, show_temp_projects=flag
+                )
+                or {}
+            )["sessions"]
+        ]
+        for flag in (False, True)
+    }
+    assert ids[False] == ["aaaa1111-real"]
+    assert len(ids[True]) == 4
+
+
+def test_a_date_window_leaves_temp_sessions_out_too(temp_burst: Path) -> None:
+    """The window's sessions come from the index's cards, temp ones included
+    (folded, not dropped): the page still leaves them out."""
+    day = NOW.strftime("%Y-%m-%d")
+    process_projects_hierarchy(temp_burst, silent=True, from_date=day, to_date=day)
+    payload = _data_payload(temp_burst / RECENT_DATA)
+    assert [s["id"] for s in payload["sessions"]] == ["aaaa1111-real"]
+    process_projects_hierarchy(
+        temp_burst,
+        silent=True,
+        from_date=day,
+        to_date=day,
+        force=True,
+        show_temp_projects=True,
+    )
+    payload = _data_payload(temp_burst / RECENT_DATA)
+    assert len(payload["sessions"]) == 4
+
+
+def test_a_date_window_classifies_by_cwd_before_its_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window's candidates are keyed by project folder, but the recorded
+    cwd decides, before the cut: temp-cwd sessions under a real-looking
+    folder can't take the places, and a real cwd under a temp-looking
+    folder stays."""
+    projects = tmp_path / "projects"
+    real = _Session("aaaa1111-real", cwd="/home/u/code/foldyard")
+    real.prompt(60, "Pin the cache mode.")
+    real.reply(59, "Pinned.")
+    _project(projects, "-home-u-code-foldyard", real)
+    moved = _Session("bbbb2222-moved", cwd="/home/u/code/moved")
+    moved.prompt(50, "Carry on.")
+    moved.reply(49, "Done.")
+    _project(projects, "-tmp-moved", moved)
+    burst_dir = projects / "-home-u-code-burst"
+    burst_dir.mkdir(parents=True)
+    for n in range(3):
+        burst = _Session(f"tttt000{n}-temp", cwd=f"/tmp/pytest-{n}/repo")
+        burst.prompt(10 + n, "Return an empty list of findings.")
+        burst.reply(9 + n, "[]")
+        burst.write(burst_dir / f"{burst.session_id}.jsonl")
+    monkeypatch.setattr(recent_module, "MAX_SESSIONS", 2)
+    day = NOW.strftime("%Y-%m-%d")
+    process_projects_hierarchy(projects, silent=True, from_date=day, to_date=day)
+    payload = _data_payload(projects / RECENT_DATA)
+    assert [s["id"] for s in payload["sessions"]] == [
+        "bbbb2222-moved",
+        "aaaa1111-real",
+    ]
