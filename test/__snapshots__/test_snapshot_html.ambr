@@ -67881,13 +67881,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). The gutters carry
-         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+         nested sub-agent group (mockup .row / .nest .row). The main gutter also
+         carries the compact token triplet (for example, 98k+20k · 364). */
       --ic: 12px;
       --ic-gap: 3px;
-      --gut: 72px;
+      --gut: 96px;
       --rail: 18px;
-      --gut-nest: 60px;
+      --gut-nest: 76px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
