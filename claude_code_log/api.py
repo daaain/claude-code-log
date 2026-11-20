@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from .cache import get_library_version
+from .cache import get_library_version, is_corrupt_database_error
 from .search import (
     DEFAULT_SEARCH_FIELDS,
     SEARCH_FIELDS,
@@ -89,11 +89,20 @@ class SearchApi:
 
     def projects(self, _params: dict[str, str]) -> dict[str, Any]:
         """Project list for the filter dropdown, newest activity first."""
-        rows = self.connection().execute(
-            "SELECT id, project_path, total_message_count, earliest_timestamp, "
-            "       latest_timestamp "
-            "  FROM projects ORDER BY latest_timestamp DESC"
-        )
+        try:
+            rows = (
+                self.connection()
+                .execute(
+                    "SELECT id, project_path, total_message_count, earliest_timestamp, "
+                    "       latest_timestamp "
+                    "  FROM projects ORDER BY latest_timestamp DESC"
+                )
+                .fetchall()
+            )
+        except sqlite3.DatabaseError as exc:
+            if not is_corrupt_database_error(exc):
+                raise
+            raise ValueError(f"cache database is unreadable ({exc})") from exc
         return {
             "projects": [
                 {
@@ -127,7 +136,13 @@ class SearchApi:
         # Cheap readiness check, not full `index_status`: that one reports
         # counts, and even the aggregate version is more work than a search
         # needs to do on every keystroke.
-        if not index_ready(conn):
+        try:
+            ready = index_ready(conn)
+        except sqlite3.DatabaseError as exc:
+            if not is_corrupt_database_error(exc):
+                raise
+            ready = False
+        if not ready:
             status = index_status(conn)
             raise ValueError(
                 f"search index is not available ({status.reason or 'not built'})"
@@ -191,8 +206,22 @@ class SearchApi:
         }
 
     def routes(self) -> dict[str, Callable[[dict[str, str]], Any]]:
-        return {
+        def clean_corruption(
+            handler: Callable[[dict[str, str]], Any],
+        ) -> Callable[[dict[str, str]], Any]:
+            def wrapped(params: dict[str, str]) -> Any:
+                try:
+                    return handler(params)
+                except sqlite3.DatabaseError as exc:
+                    if not is_corrupt_database_error(exc):
+                        raise
+                    raise ValueError(f"cache database is unreadable ({exc})") from exc
+
+            return wrapped
+
+        routes = {
             "/api/ping": self.ping,
             "/api/search": self.search,
             "/api/projects": self.projects,
         }
+        return {path: clean_corruption(handler) for path, handler in routes.items()}
