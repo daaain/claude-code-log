@@ -367,7 +367,11 @@ class TestDirectoryNoCacheStaleness:
 
         r2 = runner.invoke(main, [str(proj), "--no-cache"])
         assert r2.exit_code == 0, r2.output
-        assert "skipping regeneration" not in r2.output
+        # Session pages may be current; only the combined page must regenerate.
+        assert (
+            "combined_transcripts.html is current, skipping regeneration"
+            not in r2.output
+        )
         second = combined.read_text(encoding="utf-8")
         assert "SECOND_dir_marker" in second, (
             "stale combined HTML served on a --no-cache directory re-run"
