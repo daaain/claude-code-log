@@ -100,6 +100,24 @@ FROM sessions s
 JOIN projects p ON s.project_id = p.id
 ORDER BY s.first_timestamp;
 
--- Export a session's messages
-SELECT content FROM messages WHERE session_id = 'your-session-id' ORDER BY timestamp;
+-- List a session's messages
+SELECT type, timestamp, _uuid FROM messages WHERE session_id = 'your-session-id' ORDER BY timestamp;
 ```
+
+`messages.content` is zlib-compressed JSON, so `sqlite3` shows it as a blob. To
+export a session as JSONL, decompress it in Python:
+
+```python
+import json, sqlite3, sys, zlib
+
+db, session_id = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+for (blob,) in con.execute(
+    "SELECT content FROM messages WHERE session_id = ? ORDER BY timestamp",
+    (session_id,),
+):
+    print(json.dumps(json.loads(zlib.decompress(blob))))
+```
+
+To search message bodies, see
+[Searching from a terminal or an agent](archive-search.md#searching-from-a-terminal-or-an-agent).
