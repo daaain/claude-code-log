@@ -1804,9 +1804,10 @@ from 1.03s — with rendering, which was where this began, now a rounding
 error against it.
 
 **The served page updates itself** via
-`html/templates/components/live_update.js`, active only over `http(s)` —
-a `file://` page cannot fetch anything, not even its own URL, so the
-poller notices and does nothing. It polls a HEAD of its own URL and
+`html/templates/components/live_update.js`, polling from load over
+`http(s)`. (A `file://` page cannot fetch anything, not even its own URL;
+what it does instead, and only when asked, is *Following from disk*
+below.) It polls a HEAD of its own URL and
 compares `Last-Modified`, `Content-Length` **and `X-Content-Revision`**.
 Each covers the one before it: HTTP dates have one-second granularity, so
 two updates inside the same second are otherwise invisible (the same trap
@@ -1890,6 +1891,84 @@ update's new cards were localised last and the fade-in played over a raw
 ISO string. Draining while `timeRemaining()` allows (checked per 32
 elements, `{timeout: 200}`, first slice on the current task under a 24ms
 budget) takes those to **13ms and 35ms**.
+
+
+**Following from disk** gives `watch` without `serve` the same in-place
+update, in the same `live_update.js`. A `file://` page cannot fetch
+anything, but it can frame itself, and the framed copy can `postMessage`
+what it holds back up — each `file://` document is an opaque origin, so
+the parent can neither read the frame nor address the message to an
+origin, but messages pass. So pressing **follow** (⏬, shown from disk on
+any page with a card) starts a 1 s poll that loads the page's own file
+into a `display:none` iframe (`?t=…#ccl-probe=<lastModified>~<uuid>`),
+and releasing it stops the poll; until then nothing runs but two inert
+scripts (3.7KB with their comments; the transport adds 8.8KB to
+`live_update.js`). Two scripts answer inside the frame:
+
+- `live_probe.js`, first in `<head>`: when the file's
+  `document.lastModified` equals the one the parent sent, it posts
+  `same` and calls `window.stop()` before the body is parsed — ~10ms on
+  a 5.8MB page. It also captures `DOMContentLoaded`/`load` on `window`
+  and stops their propagation: Firefox fires both even after
+  `window.stop()`, which would otherwise start the page's own scripts
+  (this one included) inside the probe.
+- `live_probe_post.js`, the first script after `#transcript`: otherwise
+  it posts `#title` + `#transcript` as HTML and stops the load there,
+  so no later script runs. The parent hands that to the same
+  `applyUpdate` a served page's GET goes through — patch or swap, fold
+  and `<details>` state, rehydrate hooks and all. A changed page's
+  render is in hand ~130ms (Chromium) / ~100ms (Firefox) after the
+  frame is created on that page.
+
+`display:none` is load-bearing: a 0×0 or 1×1 frame still lays the page
+out, in a viewport a pixel wide, and the same read took 1.3s.
+
+*Who may read it.* Posting to `'*'` is the only option between opaque
+origins, so without a check any local HTML file could frame a
+transcript page at a predictable path (`combined_transcripts.html`) and
+read it — a channel `file://` otherwise lacks. The frame posts content
+only to a parent that names a card `data-uuid` it holds: random, found
+nowhere but in the transcript, so naming one proves the caller already
+read the file. Any card will do, since an out-of-order arrival can
+render ahead of the first. Otherwise it answers `refused` (and the
+parent stops following: its history was rewritten). A guessed-exactly
+mtime earns `same`, which carries only that mtime. `document.referrer`
+would have been the natural check, but it is empty inside the frame in
+Firefox and WebKit. An `http(s)` page cannot frame a `file://` one at
+all.
+
+*The one-second mtime.* `lastModified` has one-second granularity, so a
+rewrite inside the second of the last read leaves it unchanged — the
+same trap as `Last-Modified` above. Until the clock is two seconds past
+the last mtime the parent sends no mtime, forcing a full read, and
+compares the posted render with the last one itself.
+
+*The first read.* The page on screen came from the file at load, not
+from a frame, so there is no posted render to compare the first read
+with. It is compared on what decoration never rewrites — card count,
+the last card's uuid, `#title`'s text — and adopted without an update
+when they match. A false match (a rewrite before following that kept
+all three) shows at the next change.
+
+*WebKit* reports the **current time** as a `file://` document's
+`lastModified`, so the `same` answer never comes and every poll is a
+full read (~155ms of main thread on the 5.8MB page, against ~17ms in
+Chromium and Firefox). Three reads in a row where the mtime moved but
+the render did not switch the poll to every 5 s. Chromium and Firefox
+reach that state only through rewrites that leave the render as it
+was, and a `same` answer in between resets the count.
+
+`claudeLogLiveUpdate.active` says whether the page is being kept
+current — always when served, from disk only while followed — and the
+minimal theme draws an unreturned agent as *running* only then; a
+`claudelog:live` event on `document` makes it redraw when follow is
+pressed or released (minimal-theme.md § 8).
+
+Verified in Chromium 156, Firefox 157 and WebKit 27.2
+(`test/test_follow_from_disk.py`, whose Firefox and WebKit case skips
+where those engines are not installed — CI installs Chromium only).
+Playwright's WebKit is not Safari, which adds local-file restrictions of
+its own.
 
 
 ### 2.16 Parsed-entry store

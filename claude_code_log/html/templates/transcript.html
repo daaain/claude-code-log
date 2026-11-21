@@ -4,6 +4,9 @@
 
 <head>
     <meta charset='UTF-8'>
+    <script>
+{% include 'components/live_probe.js' %}
+    </script>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>{{ title }}</title>
     {% from 'components/session_nav.html' import render_session_nav %}
@@ -321,6 +324,9 @@
     <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>{% endif %}
 
     <script>
+{% include 'components/live_probe_post.js' %}
+    </script>
+    <script>
         // ---- live updates keep the filter and the search -------------------
         // A patched card, or a swapped-in #transcript, is the server's
         // markup: no `filtered-hidden`, no search classes, and cards the
@@ -364,7 +370,7 @@
             // Timezone conversion (included as component)
             {% include 'components/timezone_converter.js' %}
 
-            // Live update (no-op unless served over http -- see the file)
+            // Live update (polls over http; from file:// only once follow is pressed -- see the file)
             {% include 'components/live_update.js' %}
 
             // Click a message image to zoom it

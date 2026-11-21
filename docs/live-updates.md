@@ -13,7 +13,8 @@ With no arguments this watches the project for the current directory —
 which is what you want when running it alongside a live session. It
 converts once up front, then re-converts whenever a transcript changes.
 Anything that reloads files picks the changes up: an editor, Obsidian, a
-browser refresh.
+browser refresh — or, for HTML, the page itself once you press its
+follow button ([below](#following-a-page-from-disk-without-the-server)).
 
 For an Obsidian vault:
 
@@ -64,10 +65,10 @@ when its result arrives, and a rewind adds its fork lane without moving
 the main line. An agent waiting on something slow — a background process,
 a watcher — keeps reading as running however long it takes; once it has
 been silent for a minute its label says for how long (*running · quiet
-42m*). "Running" needs a live page: a page opened from `file://` (or a
-session nothing has moved in for over a week) shows such an agent as
-having ended without a result instead, and so does one the session
-stopped with `TaskStop`.
+42m*). "Running" needs a live page: a page opened from `file://` that
+you are not following (or a session nothing has moved in for over a
+week) shows such an agent as having ended without a result instead, and
+so does one the session stopped with `TaskStop`.
 
 In either theme, a message-type filter or a search you have set also
 applies to messages as they arrive, without moving you to the newest
@@ -78,13 +79,34 @@ To follow the **combined** page live as well, run `claude-code-log watch
 serves whatever is on disk, and that watch keeps the combined page
 current.
 
-This works only over the server. A page opened from `file://` cannot
-fetch anything at all — not even itself — so it stays static, exactly as
-before. Nothing about the generated HTML changes.
-
 This is how following a session looks like:
 
 <video controls style="display: block; width: 100%; height: auto; max-width: 100%;" src="https://github.com/user-attachments/assets/600696aa-dd2b-4979-8cc9-2f62acfc996f"></video>
+
+## Following a page from disk, without the server
+
+```bash
+claude-code-log watch
+```
+
+Open the session page straight from disk (`file://`) and press the
+**follow** button (⏬). The page then re-reads its own file about once a
+second and updates in place as `watch` rewrites it, just like a served
+page: scroll position, folds and open disclosures survive, new messages
+fade in and the page stays pinned to the newest one. Press it again to
+stop.
+
+Nothing is read until you press it, so a page you only browse costs
+nothing extra. A page opened from disk cannot fetch files, not even
+itself, so following loads the page into a hidden frame of itself and
+takes the new messages from there. That frame hands them only to a page
+that has already read the same file, so other local files cannot use
+it to read your transcripts.
+
+In Safari (WebKit) every check reads the whole page, because WebKit
+cannot tell whether a local file changed without reading it. Once
+following notices this, it checks every five seconds instead of every
+second.
 
 ## What "real-time" can and cannot mean here
 

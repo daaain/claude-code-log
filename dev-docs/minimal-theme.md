@@ -328,6 +328,7 @@ inline `display`; filter and search own their classes.
 | ResizeObserver on `#transcript`, `resize`, the phone media query | redraw only — relayout when phone columns (`dag-panes`, sized to the viewport) are shown, or the phone query flips with columns |
 | `animationend` of `live-new-in` (a live card's fade-in, a transform) | redraw only: the rail measured the card mid-way |
 | a 30 s timer, on a live page | relayout while a lane runs (its `quiet …` label), or if one stopped / started reading as running |
+| `claudelog:live` on `document` (follow pressed or released on a `file://` page) | relayout now: the page became live, or stopped being |
 | branch control / column head / toolbar click, a reveal that opens a lane | relayout now |
 | hidden page | deferred until `visibilitychange` |
 
@@ -551,8 +552,9 @@ transcript:
   so a workflow agent reads as *running* only where a run is linked
   without one.
 - **Client** (`minimal_dag.js`, rule revised in P7c): an `open` lane reads
-  as **running** on a page served live (`window.claudeLogLiveUpdate` —
-  never from `file://`), **however long it has been quiet**: agents wait on
+  as **running** on a page kept current (`window.claudeLogLiveUpdate.active`:
+  served live, or followed from `file://` — a static page never), **however
+  long it has been quiet**: agents wait on
   background processes, watchers and Monitor tasks that can run silently
   for hours. Its label says how long instead — `running · quiet 42m`
   (`2h 5m`, `2d 3h`), from the lane's last activity (its newest card, or a

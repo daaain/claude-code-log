@@ -1,9 +1,11 @@
 """The served page updating itself while a session is still being written.
 
-These are live-server browser tests by necessity: the feature only
+These are live-server browser tests by necessity: this transport only
 activates over http, because a `file://` page cannot fetch anything —
 not a sibling, not even itself. The rest of the browser suite runs from
-`file://`, so it cannot cover this.
+`file://`, so it cannot cover this. Following a page from disk, which
+reads the page through a frame of itself instead, is in
+test_follow_from_disk.py.
 """
 
 from __future__ import annotations
@@ -787,39 +789,6 @@ class TestLiveUpdate:
         assert page.evaluate("() => window.__lost") == [], (
             "a message left the page after arriving: a stale response was applied"
         )
-
-    def test_the_poller_is_inert_over_file_urls(self, page, tmp_path: Path) -> None:
-        """The generated HTML must stay exactly as useful from `file://`.
-
-        A `file://` page cannot fetch anything at all, so the poller has
-        to notice and do nothing rather than throw on every interval.
-        """
-        projects = tmp_path / "projects"
-        project = projects / "-tmp-static"
-        project.mkdir(parents=True)
-        (project / f"{SESSION_ID}.jsonl").write_text(
-            _entry("only", "static page"), encoding="utf-8"
-        )
-        process_projects_hierarchy(projects, silent=True)
-
-        errors: list[str] = []
-        page.on(
-            "console", lambda m: errors.append(m.text) if m.type == "error" else None
-        )
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto((project / f"session-{SESSION_ID}.html").as_uri())
-        page.wait_for_selector("#transcript")
-        time.sleep(2)  # several poll intervals, had it been active
-
-        assert errors == []
-        # The follow toggle is in the markup of every transcript page, so
-        # that a served page and the same file on disk render identically.
-        # It must stay hidden here: `file://` can never poll, and a visible
-        # control would promise something it cannot do.
-        follow = page.locator("#followUpdates")
-        assert follow.count() == 1
-        assert "live-active" not in (follow.get_attribute("class") or "")
-        assert not follow.is_visible()
 
 
 # The cards a live update brought, by `data-uuid` (both themes render it).
