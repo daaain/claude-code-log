@@ -536,7 +536,13 @@
         if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
 
         if (added) announce(added);
-        if (following) scrollToEnd();
+        // Scrolling reads the page's height, which lays it out. Rehydrate
+        // hooks may queue work of their own for a microtask (the minimal
+        // theme's DAG engine places the new cards in its grid there), and
+        // this one is queued after theirs: scrolling first would lay the
+        // page out with the cards unplaced, only for the engine to lay it
+        // out again — in WebKit, 0.4-0.9s of a large page's update.
+        if (following) queueMicrotask(scrollToEnd);
     }
 
     // One poll at a time. The interval keeps firing while a full GET is in

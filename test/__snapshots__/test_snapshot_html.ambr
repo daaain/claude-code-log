@@ -6518,7 +6518,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -15358,7 +15364,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -32314,6 +32326,27 @@
       }
   }
   
+  /* A card a live update added: a tint that fades, in place of the classic
+     slide and fade in (message_styles.css, `live-new-in`). In WebKit, an
+     opacity or transform animation on a card of the DAG grid lays the whole
+     grid out when it starts and again when it ends: about 0.45s of each
+     update on a 2,465-card session. A box-shadow only repaints. Inset and
+     spread wide, it covers the card's own background whatever it is, and
+     `--note` gives it the scheme's accent, light or dark. It is a colour
+     change, not motion, so it stays under reduced motion. */
+  @keyframes mn-live-new {
+      from {
+          box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--note) 14%, transparent);
+      }
+      to {
+          box-shadow: inset 0 0 0 100vmax transparent;
+      }
+  }
+  
+  .theme-minimal #transcript .message.live-new {
+      animation: mn-live-new 1.2s ease-out;
+  }
+  
   /* ----------------------------------------- sessions, branches, forks */
   
   .theme-minimal #transcript .session-divider {
@@ -37429,7 +37462,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -39993,23 +40032,31 @@
           btn.textContent = open ? '− less' : '+ more';
           btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
-      // Measuring a clamp forces a layout. At parse time that would be a
-      // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
-      // thrown away when the DAG engine turns the grid on; in the first
-      // frame after DOMContentLoaded it reuses the layout the page needs
-      // anyway. (Not the first frame: during a long parse the stage is
-      // not rendered yet — theme_init.js — and nothing would measure.)
-      function decorateFirstFrame() {
+      // Measuring a clamp forces a layout, so it waits for the next frame,
+      // which reuses the layout the page needs anyway. At parse time
+      // measuring would be a whole extra layout of a large page (≈ 0.6s on
+      // a 5MB one, P8), thrown away when the DAG engine turns the grid on
+      // at DOMContentLoaded. (Not the first frame: during a long parse the
+      // stage is not rendered yet — theme_init.js — and nothing would
+      // measure.) A live update is the same: the rehydrate hooks run before
+      // the engine places the new rows (a microtask later), and a swap
+      // measured then cost 0.9s of a 1.6s swap of a 2,465-card session in
+      // WebKit. The frame decorates the whole page; it holds a few headers.
+      let summariesQueued = false;
+      function decorateNextFrame() {
+          if (summariesQueued) return;
+          summariesQueued = true;
           requestAnimationFrame(function () {
+              summariesQueued = false;
               decorateSessionSummaries(document);
           });
       }
       if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+          document.addEventListener('DOMContentLoaded', decorateNextFrame);
       } else {
-          decorateFirstFrame();
+          decorateNextFrame();
       }
-      if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
+      if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateNextFrame);
       window.addEventListener('resize', function () {
           decorateSessionSummaries(document);
       });
@@ -42545,12 +42592,6 @@
       window.addEventListener('resize', function () {
           if (stage.classList.contains('dag-panes')) schedule();
           else scheduleDraw();
-      });
-      // A card a live update adds fades in from a few px below
-      // (`live-new-in`, a transform): the rail measured it mid-way, and
-      // a transform resizes nothing, so redraw once it has landed.
-      document.addEventListener('animationend', function (event) {
-          if (event.animationName === 'live-new-in') scheduleDraw();
       });
       if (phone) {
           const onPhone = function () {
@@ -48375,6 +48416,27 @@
       }
   }
   
+  /* A card a live update added: a tint that fades, in place of the classic
+     slide and fade in (message_styles.css, `live-new-in`). In WebKit, an
+     opacity or transform animation on a card of the DAG grid lays the whole
+     grid out when it starts and again when it ends: about 0.45s of each
+     update on a 2,465-card session. A box-shadow only repaints. Inset and
+     spread wide, it covers the card's own background whatever it is, and
+     `--note` gives it the scheme's accent, light or dark. It is a colour
+     change, not motion, so it stays under reduced motion. */
+  @keyframes mn-live-new {
+      from {
+          box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--note) 14%, transparent);
+      }
+      to {
+          box-shadow: inset 0 0 0 100vmax transparent;
+      }
+  }
+  
+  .theme-minimal #transcript .message.live-new {
+      animation: mn-live-new 1.2s ease-out;
+  }
+  
   /* ----------------------------------------- sessions, branches, forks */
   
   .theme-minimal #transcript .session-divider {
@@ -54057,7 +54119,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -56621,23 +56689,31 @@
           btn.textContent = open ? '− less' : '+ more';
           btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
-      // Measuring a clamp forces a layout. At parse time that would be a
-      // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
-      // thrown away when the DAG engine turns the grid on; in the first
-      // frame after DOMContentLoaded it reuses the layout the page needs
-      // anyway. (Not the first frame: during a long parse the stage is
-      // not rendered yet — theme_init.js — and nothing would measure.)
-      function decorateFirstFrame() {
+      // Measuring a clamp forces a layout, so it waits for the next frame,
+      // which reuses the layout the page needs anyway. At parse time
+      // measuring would be a whole extra layout of a large page (≈ 0.6s on
+      // a 5MB one, P8), thrown away when the DAG engine turns the grid on
+      // at DOMContentLoaded. (Not the first frame: during a long parse the
+      // stage is not rendered yet — theme_init.js — and nothing would
+      // measure.) A live update is the same: the rehydrate hooks run before
+      // the engine places the new rows (a microtask later), and a swap
+      // measured then cost 0.9s of a 1.6s swap of a 2,465-card session in
+      // WebKit. The frame decorates the whole page; it holds a few headers.
+      let summariesQueued = false;
+      function decorateNextFrame() {
+          if (summariesQueued) return;
+          summariesQueued = true;
           requestAnimationFrame(function () {
+              summariesQueued = false;
               decorateSessionSummaries(document);
           });
       }
       if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+          document.addEventListener('DOMContentLoaded', decorateNextFrame);
       } else {
-          decorateFirstFrame();
+          decorateNextFrame();
       }
-      if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
+      if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateNextFrame);
       window.addEventListener('resize', function () {
           decorateSessionSummaries(document);
       });
@@ -59173,12 +59249,6 @@
       window.addEventListener('resize', function () {
           if (stage.classList.contains('dag-panes')) schedule();
           else scheduleDraw();
-      });
-      // A card a live update adds fades in from a few px below
-      // (`live-new-in`, a transform): the rail measured it mid-way, and
-      // a transform resizes nothing, so redraw once it has landed.
-      document.addEventListener('animationend', function (event) {
-          if (event.animationName === 'live-new-in') scheduleDraw();
       });
       if (phone) {
           const onPhone = function () {
@@ -77336,6 +77406,27 @@
       }
   }
   
+  /* A card a live update added: a tint that fades, in place of the classic
+     slide and fade in (message_styles.css, `live-new-in`). In WebKit, an
+     opacity or transform animation on a card of the DAG grid lays the whole
+     grid out when it starts and again when it ends: about 0.45s of each
+     update on a 2,465-card session. A box-shadow only repaints. Inset and
+     spread wide, it covers the card's own background whatever it is, and
+     `--note` gives it the scheme's accent, light or dark. It is a colour
+     change, not motion, so it stays under reduced motion. */
+  @keyframes mn-live-new {
+      from {
+          box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--note) 14%, transparent);
+      }
+      to {
+          box-shadow: inset 0 0 0 100vmax transparent;
+      }
+  }
+  
+  .theme-minimal #transcript .message.live-new {
+      animation: mn-live-new 1.2s ease-out;
+  }
+  
   /* ----------------------------------------- sessions, branches, forks */
   
   .theme-minimal #transcript .session-divider {
@@ -82567,7 +82658,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -85131,23 +85228,31 @@
           btn.textContent = open ? '− less' : '+ more';
           btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
-      // Measuring a clamp forces a layout. At parse time that would be a
-      // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
-      // thrown away when the DAG engine turns the grid on; in the first
-      // frame after DOMContentLoaded it reuses the layout the page needs
-      // anyway. (Not the first frame: during a long parse the stage is
-      // not rendered yet — theme_init.js — and nothing would measure.)
-      function decorateFirstFrame() {
+      // Measuring a clamp forces a layout, so it waits for the next frame,
+      // which reuses the layout the page needs anyway. At parse time
+      // measuring would be a whole extra layout of a large page (≈ 0.6s on
+      // a 5MB one, P8), thrown away when the DAG engine turns the grid on
+      // at DOMContentLoaded. (Not the first frame: during a long parse the
+      // stage is not rendered yet — theme_init.js — and nothing would
+      // measure.) A live update is the same: the rehydrate hooks run before
+      // the engine places the new rows (a microtask later), and a swap
+      // measured then cost 0.9s of a 1.6s swap of a 2,465-card session in
+      // WebKit. The frame decorates the whole page; it holds a few headers.
+      let summariesQueued = false;
+      function decorateNextFrame() {
+          if (summariesQueued) return;
+          summariesQueued = true;
           requestAnimationFrame(function () {
+              summariesQueued = false;
               decorateSessionSummaries(document);
           });
       }
       if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+          document.addEventListener('DOMContentLoaded', decorateNextFrame);
       } else {
-          decorateFirstFrame();
+          decorateNextFrame();
       }
-      if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
+      if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateNextFrame);
       window.addEventListener('resize', function () {
           decorateSessionSummaries(document);
       });
@@ -87683,12 +87788,6 @@
       window.addEventListener('resize', function () {
           if (stage.classList.contains('dag-panes')) schedule();
           else scheduleDraw();
-      });
-      // A card a live update adds fades in from a few px below
-      // (`live-new-in`, a transform): the rail measured it mid-way, and
-      // a transform resizes nothing, so redraw once it has landed.
-      document.addEventListener('animationend', function (event) {
-          if (event.animationName === 'live-new-in') scheduleDraw();
       });
       if (phone) {
           const onPhone = function () {
@@ -94576,7 +94675,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -103919,7 +104024,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -113209,7 +113320,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -122444,7 +122561,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -131507,7 +131630,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -140375,7 +140504,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in
@@ -149192,7 +149327,13 @@
           if (nextTitle && title) title.innerHTML = nextTitle.innerHTML;
   
           if (added) announce(added);
-          if (following) scrollToEnd();
+          // Scrolling reads the page's height, which lays it out. Rehydrate
+          // hooks may queue work of their own for a microtask (the minimal
+          // theme's DAG engine places the new cards in its grid there), and
+          // this one is queued after theirs: scrolling first would lay the
+          // page out with the cards unplaced, only for the engine to lay it
+          // out again — in WebKit, 0.4-0.9s of a large page's update.
+          if (following) queueMicrotask(scrollToEnd);
       }
   
       // One poll at a time. The interval keeps firing while a full GET is in

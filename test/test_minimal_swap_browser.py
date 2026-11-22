@@ -1,6 +1,12 @@
-"""The DAG engine writing many grid rows at once (minimal_dag.js, relayout).
+"""A live update's swap in the minimal theme, and what it costs the browser.
 
-Every card is a row of the transcript's grid, placed by an inline
+A swap (live_update.js's fallback when a patch can't apply) puts a fresh
+``#transcript`` in place of the old one, which every rehydrate hook and then
+the DAG engine decorate. On a large page each full layout is expensive,
+in WebKit most of all, so a swap should lay the page out once: the
+engine's grid.
+
+**Many rows at once** (minimal_dag.js, relayout). Every card is a row of the transcript's grid, placed by an inline
 ``grid-row``. A swap (live_update.js's fallback when a patch can't apply)
 hands the engine a fresh transcript whose every row must be written. WebKit
 restyles each of those cards on its own once the page has been laid out,
@@ -14,6 +20,12 @@ there; the time is checked in WebKit, where it is installed (CI installs
 Chromium only), on the sample project: its 1,436 cards took 49 s to swap in
 Playwright's WebKit 27.2 before, 1.3 s after. Card count alone doesn't
 bring it on: 1,600 plain question/answer cards swapped in 0.7 s before.
+
+**Nothing measures before the grid.** Session summaries (minimal.js) are
+measured for their "+ more" toggle; measured as the hooks run, before the
+engine has placed the new rows, that laid the whole page out once more just
+to throw it away: 0.92 s of a 1.57 s swap of the 2,465-card session in
+WebKit, 0.22 s of 0.48 s in Chromium.
 """
 
 from __future__ import annotations
@@ -26,16 +38,14 @@ import pytest
 
 from claude_code_log.converter import load_directory_transcripts, load_transcript
 from claude_code_log.html.renderer import HtmlRenderer
+from test.test_follow_from_disk import _append, _archive, _has_text
 from test.test_live_update import _entry, _reply
 
 pytestmark = pytest.mark.browser
 
-SAMPLE = (
-    Path(__file__).parent
-    / "test_data"
-    / "real_projects"
-    / "-Users-dain-workspace-claude-code-log-sample"
-)
+TEST_DATA = Path(__file__).parent / "test_data"
+
+SAMPLE = TEST_DATA / "real_projects" / "-Users-dain-workspace-claude-code-log-sample"
 
 # The transcript as the page was served, before the engine wrote anything:
 # what a swap brings in. The listener is added before the page's own, so it
@@ -95,6 +105,35 @@ _SWAP = """() => {
         .getElementById('transcript');
     document.getElementById('transcript').replaceWith(next);
     window.claudeLogRehydrate(next);
+}"""
+
+# Every layout read of the stage or the page as a whole, and whether the engine had placed
+# the transcript's rows by then (a swapped-in transcript has none).
+_WATCH_READS = """() => {
+    window.__reads = [];
+    const record = (name, el) => {
+        const stage = document.querySelector('.mn-stage');
+        const page = el === document.documentElement || el === document.body;
+        if (!stage || !(page || stage.contains(el))) return;
+        const cards = document.querySelectorAll('#transcript .message');
+        window.__reads.push({
+            name, cls: String(el.className).slice(0, 40),
+            placed: cards.length > 0 && [...cards].every(c => c.style.gridRow),
+            stack: (new Error().stack || '').split('\\n').slice(2, 4).join(' | '),
+        });
+    };
+    [[Element.prototype, ['clientWidth', 'clientHeight', 'scrollWidth', 'scrollHeight']],
+     [HTMLElement.prototype, ['offsetTop', 'offsetLeft', 'offsetWidth', 'offsetHeight']]]
+        .forEach(([proto, names]) => names.forEach(name => {
+            const d = Object.getOwnPropertyDescriptor(proto, name);
+            Object.defineProperty(proto, name, Object.assign({}, d, {
+                get() { record(name, this); return d.get.call(this); },
+            }));
+        }));
+    ['getBoundingClientRect', 'getClientRects'].forEach(name => {
+        const f = Element.prototype[name];
+        Element.prototype[name] = function () { record(name, this); return f.apply(this, arguments); };
+    });
 }"""
 
 # A patch's worth: one new card at the end.
@@ -172,6 +211,67 @@ def test_one_new_card_leaves_the_grid_on(page: Any, tmp_path: Path) -> None:
     assert 1 <= got["rowWrites"] < 10, got
     assert got["toggles"] == 0, got
     assert got["onAtEnd"], got
+
+
+def test_a_swap_measures_nothing_before_the_rows_are_placed(
+    page: Any, tmp_path: Path
+) -> None:
+    """The representative fixture has a session summary, which minimal.js
+    measures for its "+ more"."""
+    jsonl = TEST_DATA / "representative_messages.jsonl"
+    _open(page, _render(load_transcript(jsonl, silent=True), None, tmp_path / "r.html"))
+    assert page.locator("#transcript .mn-sh-sum").count() > 0
+    page.evaluate(_WATCH_READS)
+    page.evaluate(_SWAP)
+    _settle(page)
+    reads = page.evaluate("window.__reads")
+    assert any(r["cls"].startswith("mn-sh-sum") for r in reads), reads
+    early = [r for r in reads if not r["placed"]]
+    assert early == [], early
+
+
+def test_following_measures_nothing_before_the_rows_are_placed(
+    page: Any, tmp_path: Path
+) -> None:
+    """The real thing, from disk: the first update after pressing follow
+    swaps, the next one patches. Following scrolls to the end after each,
+    and the scroll reads the page's height: a layout, which must wait for
+    the engine to place the new cards."""
+    projects, jsonl, html = _archive(tmp_path, theme="minimal")
+    page.goto(html.as_uri())
+    page.wait_for_function("window.claudeLogDag && window.claudeLogDag.timing()")
+    page.locator("#followUpdates").click()
+    page.wait_for_function("window.claudeLogLiveUpdate.active")
+    for marker in ("PLACED-SWAP", "PLACED-PATCH"):
+        page.evaluate(_WATCH_READS)
+        _append(projects, jsonl, marker, theme="minimal")
+        page.wait_for_function(_has_text(marker), timeout=15000)
+        _settle(page)
+        reads = page.evaluate("window.__reads")
+        early = [r for r in reads if not r["placed"]]
+        assert early == [], (marker, early)
+
+
+def test_a_new_card_is_marked_by_paint_alone(page: Any, tmp_path: Path) -> None:
+    """In WebKit an opacity or transform animation on a card of the grid lays
+    the whole grid out as it starts and as it ends (0.45 s of each update
+    on a 2,465-card session); a box-shadow only repaints."""
+    projects, jsonl, html = _archive(tmp_path, theme="minimal")
+    page.goto(html.as_uri())
+    page.wait_for_function("window.claudeLogDag && window.claudeLogDag.timing()")
+    page.locator("#followUpdates").click()
+    page.wait_for_function("window.claudeLogLiveUpdate.active")
+    _append(projects, jsonl, "TINTED", theme="minimal")
+    page.wait_for_function(_has_text("TINTED"), timeout=15000)
+    animated = page.evaluate(
+        """() => document.getAnimations()
+            .filter(a => a.effect && a.effect.target && a.effect.target.classList.contains('live-new'))
+            .map(a => ({name: a.animationName,
+                        props: [...new Set(a.effect.getKeyframes().flatMap(k => Object.keys(k)))]
+                            .filter(k => !['offset', 'computedOffset', 'easing', 'composite'].includes(k))}))"""
+    )
+    assert animated, "the new card is not marked at all"
+    assert all(a["props"] == ["boxShadow"] for a in animated), animated
 
 
 def test_a_large_swap_is_quick_in_webkit(playwright: Any, tmp_path: Path) -> None:

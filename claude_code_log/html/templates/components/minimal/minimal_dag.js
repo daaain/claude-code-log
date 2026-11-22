@@ -2190,12 +2190,6 @@
         if (stage.classList.contains('dag-panes')) schedule();
         else scheduleDraw();
     });
-    // A card a live update adds fades in from a few px below
-    // (`live-new-in`, a transform): the rail measured it mid-way, and
-    // a transform resizes nothing, so redraw once it has landed.
-    document.addEventListener('animationend', function (event) {
-        if (event.animationName === 'live-new-in') scheduleDraw();
-    });
     if (phone) {
         const onPhone = function () {
             if (stage.classList.contains('dag-cols')) schedule();

@@ -329,7 +329,6 @@ inline `display`; filter and search own their classes.
 | MutationObserver on `#transcript` (structure; `style` on `.children`; a card's hidden classes changing) | relayout in the next frame |
 | `claudeLogOnRehydrate` (live swap or patch) | re-observe a swapped `#transcript`; relayout in a microtask, coalesced over the update's rehydrate calls — before the browser lays out or paints the new markup (a patched card's control and classes come back) |
 | ResizeObserver on `#transcript`, `resize`, the phone media query | redraw only — relayout when phone columns (`dag-panes`, sized to the viewport) are shown, or the phone query flips with columns |
-| `animationend` of `live-new-in` (a live card's fade-in, a transform) | redraw only: the rail measured the card mid-way |
 | a 30 s timer, on a live page | relayout while a lane runs (its `quiet …` label), or if one stopped / started reading as running |
 | `claudelog:live` on `document` (follow pressed or released on a `file://` page) | relayout now: the page became live, or stopped being |
 | branch control / column head / toolbar click, a reveal that opens a lane | relayout now |
@@ -458,7 +457,8 @@ re-measured with this one.) The page now lays out once:
   type shown it removes nothing and rewrites the counts just written;
   ≈ 70ms). Session summaries are measured in the first frame *after*
   `DOMContentLoaded` (a frame during the parse would measure a hidden
-  stage). Earlier (P8): `minimal.js` measures the toolbar from its
+  stage), and after a live update in the frame after it (*WebKit*,
+  below). Earlier (P8): `minimal.js` measures the toolbar from its
   ResizeObserver, not at parse time, and writes `--mn-bar-h` /
   `--mn-filter-h` only when they change (a root custom property restyles
   every element; `tokens.css` declares the usual 46px / 0px).
@@ -489,8 +489,40 @@ Chromium it costs one extra restyle (a 0.47s swap became 0.50s). Fewer
 rows (a patch's new cards) are written in place, where they are cheaper:
 on the 2,465-card page in WebKit, 100 rows cost 60ms more than one, 500
 rows 720ms more, and the full restyle about 280ms.
-`test_minimal_dag_bulk_browser.py` checks the order of the writes in
-Chromium, and the sample's swap time in WebKit where it is installed.
+
+**WebKit: one layout per update.** A full layout of a large page is
+expensive in WebKit (0.2–0.9s on the 2,465-card session, where Chromium
+takes 0.1–0.25s), so a live update lays the page out once, as the grid
+with the new cards placed:
+
+- **Session summaries are measured in the next frame** (`minimal.js`,
+  `decorateNextFrame`), as at load. Measured as the rehydrate hooks ran,
+  before the engine placed the new rows a microtask later, they cost a
+  whole layout thrown away: 0.9s of a 1.6s swap of the session in WebKit,
+  0.2s of 0.5s in Chromium.
+- **Following scrolls after the engine** (`live_update.js` queues
+  `scrollToEnd` as a microtask, behind the engine's relayout): the scroll
+  reads the page's height, and read first it laid the page out with the
+  new cards unplaced — 0.4–0.9s of each update in WebKit.
+- **A new card is tinted, not moved** (`layout.css`, `mn-live-new`: an
+  inset box-shadow in `--note` that fades over 1.2s, in place of the
+  classic slide and fade, `live-new-in`). In WebKit an opacity or
+  transform animation on a card of the grid lays the whole grid out when
+  it starts and again when it ends — 0.21s each on the session — while a
+  box-shadow only repaints. A card that doesn't move also needs no redraw
+  of the rail once it lands.
+
+Measured in Playwright's WebKit 27.2, median of three swaps (the same
+swap with only `BULK_ROWS` before): the session 1.80 → 1.42s, the sample
+1.35 → 1.12s; in Chromium 0.57 → 0.43s and 0.37 → 0.31s. A patch, which
+is most updates, loses the early scroll's layout and the animation's two.
+
+`test_minimal_swap_browser.py` checks, in Chromium: that a swap writes its
+rows with the grid off and a one-card patch doesn't toggle it; that no
+layout is read before the engine has placed every row, for a swap in
+isolation and while following from disk (the swap and the patch after
+it); that a new card's animation is a box-shadow alone; and, in WebKit
+where it is installed, the sample's swap time.
 
 **Conversion (P8).** `scripts/bench_render.py --theme {classic,minimal}`
 on the eight `test/test_data/real_projects` (19MB of transcripts, 4

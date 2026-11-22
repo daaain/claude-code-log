@@ -658,6 +658,27 @@
     }
 }
 
+/* A card a live update added: a tint that fades, in place of the classic
+   slide and fade in (message_styles.css, `live-new-in`). In WebKit, an
+   opacity or transform animation on a card of the DAG grid lays the whole
+   grid out when it starts and again when it ends: about 0.45s of each
+   update on a 2,465-card session. A box-shadow only repaints. Inset and
+   spread wide, it covers the card's own background whatever it is, and
+   `--note` gives it the scheme's accent, light or dark. It is a colour
+   change, not motion, so it stays under reduced motion. */
+@keyframes mn-live-new {
+    from {
+        box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--note) 14%, transparent);
+    }
+    to {
+        box-shadow: inset 0 0 0 100vmax transparent;
+    }
+}
+
+.theme-minimal #transcript .message.live-new {
+    animation: mn-live-new 1.2s ease-out;
+}
+
 /* ----------------------------------------- sessions, branches, forks */
 
 .theme-minimal #transcript .session-divider {
