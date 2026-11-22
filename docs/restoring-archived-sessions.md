@@ -105,19 +105,41 @@ SELECT type, timestamp, _uuid FROM messages WHERE session_id = 'your-session-id'
 ```
 
 `messages.content` is zlib-compressed JSON, so `sqlite3` shows it as a blob. To
-export a session as JSONL, decompress it in Python:
+export a session as JSONL, decompress it in Python. Images aren't in that
+JSON: each is stored once in `image_blobs`, and the message holds a
+reference (`{"type": "ref", "digest": …}`) in its place. The script puts
+each image's bytes back, base64-encoded, as the transcript had them:
 
 ```python
-import json, sqlite3, sys, zlib
+import base64, json, sqlite3, sys, zlib
 
 db, session_id = sys.argv[1], sys.argv[2]
 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+
+
+def with_images(node):
+    if isinstance(node, list):
+        return [with_images(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if node.get("type") == "ref" and "digest" in node:
+        row = con.execute(
+            "SELECT data FROM image_blobs WHERE digest = ?", (node["digest"],)
+        ).fetchone()
+        data = base64.b64encode(row[0]).decode("ascii") if row else ""
+        return {"type": "base64", "media_type": node["media_type"], "data": data}
+    return {key: with_images(value) for key, value in node.items()}
+
+
 for (blob,) in con.execute(
     "SELECT content FROM messages WHERE session_id = ? ORDER BY timestamp",
     (session_id,),
 ):
-    print(json.dumps(json.loads(zlib.decompress(blob))))
+    print(json.dumps(with_images(json.loads(zlib.decompress(blob)))))
 ```
+
+An image whose bytes the cache no longer holds comes out with empty
+`data`.
 
 To search message bodies, see
 [Searching from a terminal or an agent](archive-search.md#searching-from-a-terminal-or-an-agent).
