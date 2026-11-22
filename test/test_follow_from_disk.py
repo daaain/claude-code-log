@@ -80,6 +80,18 @@ def _open(page: Any, html: Path) -> list[str]:
     return errors
 
 
+# A page the test can hide and show: `document.hidden` as the poller reads
+# it, and the event that tells it to look again.
+_FAKE_HIDDEN = """() => {
+    window.__hidden = false;
+    Object.defineProperty(document, 'hidden', {configurable: true, get: () => window.__hidden});
+    window.__setHidden = hidden => {
+        window.__hidden = hidden;
+        document.dispatchEvent(new Event('visibilitychange'));
+    };
+}"""
+
+
 def _has_text(text: str) -> str:
     return f"() => document.getElementById('transcript').textContent.includes({text!r})"
 
@@ -186,6 +198,43 @@ class TestFollowFromDisk:
             page.wait_for_function(_has_text(f"SAME-B-{_attempt}"), timeout=10000)
             return
         pytest.skip("could not land two rewrites inside one second on this machine")
+
+    def test_a_same_second_rewrite_while_hidden_is_seen(self, page, tmp_path) -> None:
+        """What makes a read safe is *when the render on screen was read*,
+        not what the clock says now. Hidden straight after a read, the page
+        stops probing; a second rewrite inside the first one's second
+        leaves the mtime as it was; shown again seconds later, a probe
+        trusting the clock asks whether the file is still at that mtime,
+        is told it is, and keeps the older render for good."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        page.evaluate(_FAKE_HIDDEN)
+        page.locator("#followUpdates").click()
+        _append(projects, jsonl, "HIDDEN-A")
+        page.wait_for_function(_has_text("HIDDEN-A"), timeout=10000)
+        page.evaluate("window.__setHidden(true)")
+        stamp = html.stat()
+        _append(projects, jsonl, "HIDDEN-B")
+        # The same second as the read, whatever the clock did meanwhile.
+        os.utime(html, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        time.sleep(2.5)
+        page.evaluate("window.__setHidden(false)")
+        page.wait_for_function(_has_text("HIDDEN-B"), timeout=10000)
+
+    def test_a_same_second_rewrite_before_following_is_seen(
+        self, page, tmp_path
+    ) -> None:
+        """The page as loaded has the same gap: nothing says when within its
+        mtime's second the file was read, so the first probe after pressing
+        follow reads in full however long ago that second was."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        stamp = html.stat()
+        _append(projects, jsonl, "BEFORE-FOLLOW")
+        os.utime(html, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        time.sleep(2.5)
+        page.locator("#followUpdates").click()
+        page.wait_for_function(_has_text("BEFORE-FOLLOW"), timeout=10000)
 
     def test_another_page_cannot_read_it_through_the_probe(
         self, page, tmp_path

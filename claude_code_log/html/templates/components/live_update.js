@@ -619,17 +619,26 @@
     // it (null until the first read since following started).
     let diskKnown = document.lastModified;
     let diskSeen = null;
+    // When the render on screen was read: the clock as the probe whose
+    // render it is went out (the frame reads the file after that). Unknown
+    // (0) for the page as loaded, and only a render moves it on: a `same`
+    // answer reads nothing.
+    let diskReadAt = 0;
     // Reads in a row where the mtime moved and the render did not.
     let diskStill = 0;
     let diskSlow = false;
 
     // `document.lastModified` has one-second granularity, so a rewrite
     // inside the second the last read happened in is invisible to it (two
-    // conversions can land inside one second). Until the clock is safely
-    // past that second, read the page whole and compare the render itself.
+    // conversions can land inside one second). Until a render read safely
+    // past that second is on screen, read the page whole and compare the
+    // render itself. The time that matters is the read's, not the clock's:
+    // a page hidden right after a read stops probing, and a same-second
+    // rewrite meanwhile would otherwise be answered `same` when it is
+    // shown again, seconds later — and missed for good.
     function diskRacy() {
         const t = Date.parse(diskKnown);
-        return diskSlow || !(t > 0) || Date.now() - t < 2000;
+        return diskSlow || !(t > 0) || !diskReadAt || diskReadAt - t < 2000;
     }
 
     // What decoration never rewrites, computed as live_probe_post.js does on
@@ -649,7 +658,7 @@
         ].join('\n');
     }
 
-    async function diskAnswer(answer) {
+    async function diskAnswer(answer, sentAt) {
         if (answer.cclProbe === 'same') {
             diskStill = 0;
             return;
@@ -664,6 +673,7 @@
         if (answer.cclProbe !== 'page' || typeof answer.html !== 'string' || !following) return;
         const moved = answer.lm !== diskKnown;
         diskKnown = answer.lm;
+        diskReadAt = sentAt;
         if (diskSeen === null && answer.fingerprint === liveFingerprint()) {
             diskSeen = answer.html;
             return;
@@ -705,7 +715,7 @@
             if (settled || ev.source !== frame.contentWindow) return;
             if (!ev.data || typeof ev.data.cclProbe !== 'string') return;
             settle();
-            diskAnswer(ev.data)
+            diskAnswer(ev.data, sentAt)
                 .catch(err => console.debug('follow from disk failed', err))
                 .finally(() => {
                     if (diskCancel === cancel) diskCancel = null;
@@ -721,6 +731,7 @@
         diskCancel = cancel;
         window.addEventListener('message', onMessage);
         const known = diskRacy() ? '' : diskKnown;
+        const sentAt = Date.now();
         frame.src =
             location.href.split('#')[0].split('?')[0] +
             '?t=' +

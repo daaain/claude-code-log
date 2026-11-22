@@ -1939,9 +1939,18 @@ all.
 
 *The one-second mtime.* `lastModified` has one-second granularity, so a
 rewrite inside the second of the last read leaves it unchanged — the
-same trap as `Last-Modified` above. Until the clock is two seconds past
-the last mtime the parent sends no mtime, forcing a full read, and
-compares the posted render with the last one itself.
+same trap as `Last-Modified` above. Until the render on screen was read
+at least two seconds after its mtime, the parent sends no mtime, forcing
+a full read, and compares the posted render with the last one itself.
+"When it was read" is the clock as the probe that brought that render
+went out (the frame reads the file after it); only a render moves it,
+never a `same` answer, and the page as loaded has none, so the first
+probe after pressing follow always reads in full. The clock *now* is not
+enough: a page hidden straight after a read stops probing, and a
+same-second rewrite meanwhile would be answered `same` when it is shown
+again seconds later, and missed for good
+(`test_a_same_second_rewrite_while_hidden_is_seen`; the page as loaded,
+`…_before_following_is_seen`).
 
 *The first read.* The page on screen came from the file at load, not
 from a frame, so there is no posted render to compare the first read
