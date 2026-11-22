@@ -3,9 +3,12 @@
 //
 // The page is opened from disk, where nothing can be fetched; a <script>
 // tag can still be added, though, so the data lives in a sibling
-// recent-data.js that calls window.__cclRecent(payload). Every 15 s (while
+// recent-data.js that calls window.__cclRecent(payload). Every 3 s (while
 // the tab is visible) the script is added again with a fresh ?t= so no
-// cache serves an old copy, and removed once it has run. The rows are
+// cache serves an old copy, and removed once it has run. A reload costs
+// ~2ms at a real archive's data and 14-26ms at the largest payload the caps
+// allow (2.16MB, 60 sessions), under 1% of a core either way, so it reloads
+// unconditionally rather than detecting a change first. The rows are
 // updated in place — expanded rows, the filter, grouping, scroll position,
 // focus and a text selection all survive a refresh — and every 30 s the
 // times are redrawn against the clock.
@@ -20,7 +23,7 @@
     'use strict';
 
     const DATA_SRC = 'recent-data.js';
-    const RELOAD_MS = 15000;
+    const RELOAD_MS = 3000;
     const TICK_MS = 30000;
     const STALE_MS = 2 * 60000;
     const BEFORE_MS = 4 * 3600000; // the strip shows 4 h back...

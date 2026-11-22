@@ -417,7 +417,7 @@ def refresh(projects: Path) -> None:
 
 #: Waits for the top row to be ``[session id, status]``, prompting the page to reload
 #: its data file meanwhile (a ``visibilitychange`` while visible reloads it
-#: now rather than at its next 15 s tick).
+#: now rather than at its next 3 s tick).
 UNTIL_TOP_JS = """([id, status]) => {
     const row = document.querySelector('.rc-row');
     const ok = !!row && row.dataset.id === id

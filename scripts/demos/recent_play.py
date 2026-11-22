@@ -12,7 +12,7 @@ the real full run after each stage. Open the printed ``recent.html`` (it
 opens in your browser by default) and watch the rows move, judge the
 motion, try the filters while it runs.
 
-The page reloads its data file every 15 s, as it does for real, so a stage
+The page reloads its data file every 3 s, as it does for real, so a stage
 can take that long to show; switching to another tab and back reloads it
 at once. In a dev box (foldyard) there is no browser: the default sandbox
 is inside the repo, so open the printed repo-relative path on the host.

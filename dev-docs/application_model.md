@@ -2345,7 +2345,7 @@ Only turns that ended within `TURN_HORIZON_HOURS` (24) are sent; the rest
 are counted in `earlierTurns`. Each sent turn carries `SNIPPET_CHARS`
 (200) of its prompt and of how it ended, which the strip's markers show
 on hover. The last prompt, and the last message when Claude wrote it,
-carry `html` *in place of* `text` (the data file is reloaded every 15 s,
+carry `html` *in place of* `text` (the data file is reloaded every 3 s,
 so it holds one form, not both): the clipped text rendered by
 `render_user_markdown` / `render_markdown`, the session pages' escaping
 pipeline (§ 2.17). Tool lines and errors stay plain `text`.
@@ -2445,7 +2445,14 @@ session's file, but nothing writes it. The watch's per-tick refresh
 **Self-refresh on `file://`.** A page opened as a file cannot `fetch`
 (see `live_update.js`), but it can add a `<script>`. So `recent.html`
 holds no data at all: it loads `recent-data.js` with a plain script tag
-on open, then re-adds `<script src="recent-data.js?t=…">` every 15 s. The
+on open, then re-adds `<script src="recent-data.js?t=…">` every 3 s
+(while the tab is visible). A reload costs ~2ms on a real archive's
+4.9KB of data and 14–26ms at the 2.16MB the caps allow (60 sessions,
+each at every cap), headless Chromium/Firefox/WebKit medians, so it
+reloads unconditionally: under 1% of a core either way, with no change
+detection to get wrong. (Reading the page through a frame of itself,
+as a transcript page followed from disk does, measured dearer at every
+size but the largest, and would put the data in the page.) The
 file calls `window.__cclRecent(payload)` (its JSON made by `payload_json`,
 which escapes `<`), and the page redraws its rows in place, keeping open
 rows, filters and scroll. Keeping data out of the page also makes the
