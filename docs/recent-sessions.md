@@ -110,6 +110,10 @@ The watch refreshes `recent-data.js` when the watched project sits in the
 default projects directory and no `--output` is given; with a custom
 output tree, a full run (or `watch --all-projects`) keeps it current.
 
+To follow the page from a phone or another computer, serve it over your
+tailnet: see
+[From your other devices, over Tailscale](archive-search.md#from-your-other-devices-over-tailscale).
+
 ## With foldyard
 
 When agents run in [foldyard](https://github.com/twistco/foldyard) boxes,

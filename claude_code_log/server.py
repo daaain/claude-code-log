@@ -40,7 +40,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Optional
+from typing import Any, BinaryIO, Callable, Iterable, Optional
 
 from .cache import get_library_version
 from .utils import retry_on_sharing_violation
@@ -56,6 +56,10 @@ API_PREFIX = "/api/"
 # advertising an ETag would make browsers stop getting 304s on the
 # multi-MB pages that make 304s worth having.
 REVISION_HEADER = "X-Content-Revision"
+
+# `Host` names that address us as loopback (port stripped). The empty
+# string is an HTTP/1.0 request with no `Host` at all.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", ""})
 
 # How long a file's mtime must have been in the past before a cached
 # digest for it can be trusted. A write landing after we hashed can only
@@ -95,11 +99,12 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     # ---- security -------------------------------------------------------
 
     def _host_is_allowed(self) -> bool:
-        """Reject requests that don't address us as loopback.
+        """Reject requests that don't address us by a name we were given.
 
         A page on the open web can point a hostname at 127.0.0.1 (DNS
         rebinding) and then read our responses same-origin. Checking `Host`
-        blocks that; there is no legitimate request with another value here.
+        blocks that. The only legitimate values are loopback, plus any
+        names `serve --allow-host` opted into for a reverse proxy.
         """
         host = self.headers.get("Host", "")
         # Strip the port: loopback on any port is us.
@@ -297,7 +302,14 @@ class ArchiveServer:
         api_routes: Optional[dict[str, Callable[[dict[str, str]], Any]]] = None,
         host: str = "127.0.0.1",
         port: int = 8010,
+        extra_hosts: Iterable[str] = (),
     ) -> None:
+        """``extra_hosts``: names to accept in `Host` besides loopback.
+
+        For a reverse proxy that forwards to loopback but keeps the
+        browser's `Host` — `tailscale serve` does exactly that. Matched
+        whole and case-insensitively, any port; the bind is unchanged.
+        """
         self.directory = directory
         self.host = host
         routes: dict[str, Callable[[dict[str, str]], Any]] = {
@@ -307,7 +319,7 @@ class ArchiveServer:
             },
         }
         routes.update(api_routes or {})
-        allowed = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", ""})
+        allowed = LOOPBACK_HOSTS | {name.lower() for name in extra_hosts}
         self._httpd = http.server.ThreadingHTTPServer(
             (host, port), build_handler(directory, routes, allowed)
         )

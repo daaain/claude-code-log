@@ -189,6 +189,69 @@ def test_host_check_also_guards_the_api(server: ArchiveServer) -> None:
     assert status == 421
 
 
+class TestExtraHosts:
+    """Names besides loopback the server answers to, for a reverse proxy.
+
+    `tailscale serve` forwards to loopback but keeps the browser's `Host`
+    (the machine's `*.ts.net` name), so without an opt-in every proxied
+    request is a 421. Allowing one named host must not loosen the check
+    for anything else.
+    """
+
+    TAILNET = "box.tailnet-1234.ts.net"
+
+    @pytest.fixture
+    def proxied(self, archive: Path):
+        with ArchiveServer(archive, port=0, extra_hosts=[self.TAILNET]) as srv:
+            yield srv
+
+    @pytest.mark.parametrize(
+        "host",
+        [TAILNET, f"{TAILNET}:443", f"{TAILNET}:8443", TAILNET.upper()],
+    )
+    def test_an_allowed_host_is_served(self, proxied: ArchiveServer, host: str) -> None:
+        status, body, _ = _get(f"{proxied.url}/index.html", headers={"Host": host})
+        assert status == 200
+        assert b"index" in body
+
+    def test_an_allowed_host_reaches_the_api(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(f"{proxied.url}/api/ping", headers={"Host": self.TAILNET})
+        assert status == 200
+
+    def test_an_allowed_host_can_head(self, proxied: ArchiveServer) -> None:
+        # live_update.js polls with HEAD, so the proxied page needs it too.
+        request = urllib.request.Request(
+            f"{proxied.url}/index.html", method="HEAD", headers={"Host": self.TAILNET}
+        )
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 200
+            assert response.headers[REVISION_HEADER]
+
+    def test_other_hosts_are_still_refused(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(
+            f"{proxied.url}/index.html", headers={"Host": "attacker.example.com"}
+        )
+        assert status == 421
+
+    def test_a_suffix_match_is_not_enough(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(
+            f"{proxied.url}/index.html",
+            headers={"Host": f"evil-{self.TAILNET}"},
+        )
+        assert status == 421
+
+    def test_loopback_still_works(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(f"{proxied.url}/index.html")
+        assert status == 200
+
+    def test_an_allowed_host_given_in_mixed_case_matches(self, archive: Path) -> None:
+        with ArchiveServer(archive, port=0, extra_hosts=["Box.Example.TS.net"]) as srv:
+            status, _, _ = _get(
+                f"{srv.url}/index.html", headers={"Host": "box.example.ts.net"}
+            )
+        assert status == 200
+
+
 def test_conditional_get_returns_304(server: ArchiveServer) -> None:
     """2.26 GB of pages in a real archive — 304s are worth having."""
     status, _, headers = _get(f"{server.url}/index.html")
