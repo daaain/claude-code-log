@@ -674,13 +674,21 @@
         }
         if (answer.cclProbe !== 'page' || typeof answer.html !== 'string' || !following) return;
         const moved = answer.lm !== diskKnown;
-        diskKnown = answer.lm;
-        diskReadAt = sentAt;
-        if (diskSeen === null && answer.fingerprint === liveFingerprint()) {
+        // What the render on screen is, and its mtime and read time, are
+        // recorded only once it *is* on screen: an update that throws
+        // part-way, recorded first, would have the next probe answered
+        // `same` and leave the page behind until the file changed again.
+        const adopt = function () {
+            diskKnown = answer.lm;
+            diskReadAt = sentAt;
             diskSeen = answer.html;
+        };
+        if (diskSeen === null && answer.fingerprint === liveFingerprint()) {
+            adopt();
             return;
         }
         if (answer.html === diskSeen) {
+            adopt();
             // WebKit reports the *current time* as a file's lastModified, so
             // the mtime moves on every read and the unchanged answer never
             // comes: every poll is a full read (~155ms of main thread on a
@@ -694,8 +702,8 @@
             return;
         }
         diskStill = 0;
-        diskSeen = answer.html;
         await applyUpdate(answer.html);
+        adopt();
     }
 
     // One probe at a time, as `poll` is one request at a time, and for the

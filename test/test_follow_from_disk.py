@@ -92,6 +92,18 @@ _FAKE_HIDDEN = """() => {
 }"""
 
 
+# `Date.now()` with an offset the test can move, in every frame of the page
+# (the probe frames read it too).
+_SHIFTABLE_CLOCK = """
+(() => {
+  const top = window.top;
+  const now = Date.now.bind(Date);
+  if (window === top) window.__clockShift = 0;
+  Date.now = () => now() + (top.__clockShift || 0);
+})();
+"""
+
+
 def _has_text(text: str) -> str:
     return f"() => document.getElementById('transcript').textContent.includes({text!r})"
 
@@ -207,19 +219,49 @@ class TestFollowFromDisk:
         trusting the clock asks whether the file is still at that mtime,
         is told it is, and keeps the older render for good."""
         projects, jsonl, html = _archive(tmp_path)
+        # Both clocks are set, not raced: both rewrites carry an mtime a
+        # minute ahead, so the read of the first is inside its second
+        # however slow the machine; once hidden, the page's clock jumps two
+        # minutes, past that second, before it is shown again.
+        page.add_init_script(_SHIFTABLE_CLOCK)
         _open(page, html)
         page.evaluate(_FAKE_HIDDEN)
         page.locator("#followUpdates").click()
+        ahead = time.time_ns() + 60 * 10**9
         _append(projects, jsonl, "HIDDEN-A")
+        os.utime(html, ns=(ahead, ahead))
         page.wait_for_function(_has_text("HIDDEN-A"), timeout=10000)
         page.evaluate("window.__setHidden(true)")
-        stamp = html.stat()
         _append(projects, jsonl, "HIDDEN-B")
-        # The same second as the read, whatever the clock did meanwhile.
-        os.utime(html, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
-        time.sleep(2.5)
+        os.utime(html, ns=(ahead, ahead))
+        page.evaluate("window.__clockShift = 120000")
         page.evaluate("window.__setHidden(false)")
         page.wait_for_function(_has_text("HIDDEN-B"), timeout=10000)
+
+    def test_a_failed_update_is_read_again(self, page, tmp_path) -> None:
+        """An update that throws part-way must not be recorded as the render
+        on screen: the next probe would send its mtime, be answered `same`,
+        and the page would stay behind until the file changed again. The
+        file here is written well in the past, so nothing else forces a
+        full read."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        page.evaluate(
+            """() => {
+                const parse = DOMParser.prototype.parseFromString;
+                window.__failed = 0;
+                DOMParser.prototype.parseFromString = function (...args) {
+                    if (!window.__failed++) throw new Error('one failed update');
+                    return parse.apply(this, args);
+                };
+            }"""
+        )
+        page.locator("#followUpdates").click()
+        _append(projects, jsonl, "FAILED-ONCE")
+        past = time.time_ns() - 3600 * 10**9
+        os.utime(html, ns=(past, past))
+        page.wait_for_function(_has_text("FAILED-ONCE"), timeout=10000)
+        assert page.evaluate("window.__failed") >= 2
 
     def test_a_same_second_rewrite_before_following_is_seen(
         self, page, tmp_path

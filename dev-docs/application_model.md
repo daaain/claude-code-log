@@ -1928,10 +1928,13 @@ origins, so without a check any local HTML file could frame a
 transcript page at a predictable path (`session-<id>.html`) and read it —
 a channel `file://` otherwise lacks. The frame posts content only to a
 parent that names a card `data-uuid` it holds. Those uuids are random,
-and no link carries one (card ids are positional, `msg-d-N`); only the
-session's own page and JSONL do, so naming one proves the caller already
-holds that session. Any card will do, since an out-of-order arrival can
-render ahead of the first. That is why only **session pages** can be
+and the page's own links don't carry them (card ids are positional,
+`msg-d-N`), but they are not secret: besides the session's page and
+JSONL, an archive-search result links to its message as
+`session-<id>.html?uuid=…`. So naming one shows the caller holds the
+session or a search link into it, not that it read this file; a key of
+the page's own would close that (review on #427). Any card will do,
+since an out-of-order arrival can render ahead of the first. That is why only **session pages** can be
 followed from disk: a combined page holds every session's cards, so one
 session's uuid would have read them all (raised in review on #427).
 `HtmlRenderer.generate_session` passes `follow_from_disk=True`, which
