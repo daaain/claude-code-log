@@ -1925,12 +1925,22 @@ out, in a viewport a pixel wide, and the same read took 1.3s.
 
 *Who may read it.* Posting to `'*'` is the only option between opaque
 origins, so without a check any local HTML file could frame a
-transcript page at a predictable path (`combined_transcripts.html`) and
-read it — a channel `file://` otherwise lacks. The frame posts content
-only to a parent that names a card `data-uuid` it holds: random, found
-nowhere but in the transcript, so naming one proves the caller already
-read the file. Any card will do, since an out-of-order arrival can
-render ahead of the first. Otherwise it answers `refused` (and the
+transcript page at a predictable path (`session-<id>.html`) and read it —
+a channel `file://` otherwise lacks. The frame posts content only to a
+parent that names a card `data-uuid` it holds. Those uuids are random,
+and no link carries one (card ids are positional, `msg-d-N`); only the
+session's own page and JSONL do, so naming one proves the caller already
+holds that session. Any card will do, since an out-of-order arrival can
+render ahead of the first. That is why only **session pages** can be
+followed from disk: a combined page holds every session's cards, so one
+session's uuid would have read them all (raised in review on #427).
+`HtmlRenderer.generate_session` passes `follow_from_disk=True`, which
+includes the two probe scripts; `live_probe.js` sets
+`window.__cclProbeable`, and `live_update.js` starts the disk transport
+only on a page that has it. A combined page from disk is static, as it
+was before; over `serve` it follows as ever. The flag rather than a page
+name, so a page written by `generate` for any other reason (a combined
+or paginated page, a single-file conversion) never answers. Otherwise it answers `refused` (and the
 parent stops following: its history was rewritten). A guessed-exactly
 mtime earns `same`, which carries only that mtime. `document.referrer`
 would have been the natural check, but it is empty inside the frame in

@@ -89,8 +89,8 @@ This is how following a session looks like:
 claude-code-log watch
 ```
 
-Open the session page straight from disk (`file://`) and press the
-**follow** button (⏬). The page then re-reads its own file about once a
+Open a session page (`session-<id>.html`) straight from disk
+(`file://`) and press the **follow** button (⏬). The page then re-reads its own file about once a
 second and updates in place as `watch` rewrites it, just like a served
 page: scroll position, folds and open disclosures survive, new messages
 fade in and the page stays pinned to the newest one. Press it again to
@@ -101,7 +101,9 @@ nothing extra. A page opened from disk cannot fetch files, not even
 itself, so following loads the page into a hidden frame of itself and
 takes the new messages from there. That frame hands them only to a page
 that has already read the same file, so other local files cannot use
-it to read your transcripts.
+it to read your transcripts. For the same reason the combined page,
+which holds every session, does not offer it from disk; under `serve`
+it follows like any other page.
 
 In Safari (WebKit) every check reads the whole page, because WebKit
 cannot tell whether a local file changed without reading it. Once

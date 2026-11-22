@@ -324,19 +324,21 @@ class TestToolbarReachability:
         page.keyboard.press("Escape")
         expect(menu).to_be_hidden()
 
-    def test_follow_shows_only_once_live_updates_can_run(
+    def test_follow_stays_hidden_until_live_updates_start(
         self, page: Page, tmp_path: Path
     ) -> None:
-        # From disk, live_update.js offers it (following reads the file
-        # through a frame: test_follow_from_disk.py) by adding `live-active`;
-        # without that class the toolbar keeps it hidden.
+        # A page rendered whole, not as a session page, can't be followed
+        # from disk (only session pages answer the probe:
+        # test_follow_from_disk.py), so from file:// nothing adds
+        # `live-active`, and the toolbar keeps the button hidden until
+        # something does.
         page.goto(_render(tmp_path, REPRESENTATIVE).as_uri())
         follow = page.locator("#followUpdates")
-        expect(follow).to_be_visible()
-        page.evaluate(
-            "document.getElementById('followUpdates').classList.remove('live-active')"
-        )
         expect(follow).to_be_hidden()
+        page.evaluate(
+            "document.getElementById('followUpdates').classList.add('live-active')"
+        )
+        expect(follow).to_be_visible()
 
     def test_resume_button_copies_the_command(self, page: Page, tmp_path: Path) -> None:
         page.goto(_render(tmp_path, REPRESENTATIVE).as_uri())

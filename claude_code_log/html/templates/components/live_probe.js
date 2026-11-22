@@ -11,6 +11,12 @@
 // the body is parsed (~10ms on a 6MB page). Otherwise the page parses on
 // to live_probe_post.js, right after #transcript, which posts the new
 // render and stops the load there.
+//
+// Only session pages carry these scripts (HtmlRenderer.generate,
+// `follow_from_disk`), and live_update.js offers following from disk only
+// where they are: the combined page holds every session's cards, so a
+// page holding one session's uuid could read them all through it.
+window.__cclProbeable = true;
 (function () {
     const m = /[#&]ccl-probe=([^&]*)/.exec(location.hash);
     if (!m || window.parent === window) return;

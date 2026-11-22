@@ -272,6 +272,47 @@ window.frameIt = (hash) => new Promise(resolve => {
         # Guessing the mtime exactly earns `same`, which carries only that mtime.
         assert {"cclProbe": "same", "lm": lm} in got
 
+    def test_the_combined_page_answers_no_probe(self, page, tmp_path) -> None:
+        """A card's uuid is no secret from someone holding one session (its
+        page or its JSONL), and the combined page holds every session's
+        cards: if it answered probes, one session's uuid would read them
+        all. So only session pages answer; a combined page framed with a
+        uuid it does hold gets no answer at all."""
+        _projects, _jsonl, html = _archive(tmp_path)
+        combined = html.parent / "combined_transcripts.html"
+        assert combined.exists()
+        page.goto(html.as_uri())
+        uuid = page.evaluate(
+            "document.querySelector('#transcript .message[data-uuid]').dataset.uuid"
+        )
+        page.goto("about:blank")
+        attacker = tmp_path / "elsewhere" / "evil.html"
+        attacker.parent.mkdir()
+        attacker.write_text(
+            """<!doctype html><body><script>
+window.got = [];
+window.addEventListener('message', ev => window.got.push(ev.data));
+const f = document.createElement('iframe');
+f.src = %r + '#ccl-probe=' + encodeURIComponent('~' + %r);
+document.body.appendChild(f);
+</script></body>"""
+            % (combined.as_uri(), uuid),
+            encoding="utf-8",
+        )
+        page.goto(attacker.as_uri())
+        page.wait_for_timeout(2000)
+        assert page.evaluate("window.got") == []
+
+    def test_the_combined_page_offers_no_follow_from_disk(self, page, tmp_path) -> None:
+        """Opened from disk, the combined page is the static page it was
+        before following from disk existed: no follow button, no frame."""
+        _projects, _jsonl, html = _archive(tmp_path)
+        _open(page, html.parent / "combined_transcripts.html")
+        page.wait_for_timeout(1500)
+        assert not page.locator("#followUpdates").is_visible()
+        assert page.evaluate("window.__frames") == 0
+        assert not page.evaluate("!!window.claudeLogLiveUpdate")
+
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["firefox", "webkit"])

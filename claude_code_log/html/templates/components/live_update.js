@@ -34,8 +34,10 @@
 
     const overHttp = location.protocol === 'http:' || location.protocol === 'https:';
     // A framed page is a probe (live_probe.js halts this script there);
-    // the check keeps any other framing from starting a transport.
-    const fromDisk = location.protocol === 'file:' && window.parent === window;
+    // the check keeps any other framing from starting a transport. Only a
+    // page that can answer its own probes (live_probe.js, session pages)
+    // follows from disk.
+    const fromDisk = location.protocol === 'file:' && window.parent === window && !!window.__cclProbeable;
     if (!overHttp && !fromDisk) return;
 
     // A metadata HEAD costs ~1ms and carries no body while nothing

@@ -1889,6 +1889,7 @@ class HtmlRenderer(Renderer):
         page_info: Optional[dict[str, Any]] = None,
         page_stats: Optional[dict[str, Any]] = None,
         archive_search_link: Optional[str] = None,
+        follow_from_disk: bool = False,
     ) -> str:
         """Generate HTML from transcript messages.
 
@@ -1906,6 +1907,12 @@ class HtmlRenderer(Renderer):
                 `search.html`, so the link would dangle. Computed by the
                 caller because only it knows where the index root is: under
                 ``--expand-paths`` a project page can be several levels deep.
+            follow_from_disk: Whether the page can be followed from disk
+                (``file://``): it then carries the probe scripts that answer
+                a framed copy of itself (live_probe.js). Session pages only:
+                the probe hands the transcript to a page naming one of its
+                cards' uuids, which is no secret from someone holding one
+                session, and a combined page holds every session's cards.
         """
 
         from ..git_remote import canonical_cwd_from_messages, render_with_repo_context
@@ -1927,6 +1934,7 @@ class HtmlRenderer(Renderer):
                 page_stats=page_stats,
                 archive_search_link=archive_search_link,
                 repo_cwd=repo_cwd,
+                follow_from_disk=follow_from_disk,
             )
 
     def _generate_inner(
@@ -1940,6 +1948,7 @@ class HtmlRenderer(Renderer):
         page_stats: Optional[dict[str, Any]] = None,
         archive_search_link: Optional[str] = None,
         repo_cwd: Optional[str] = None,
+        follow_from_disk: bool = False,
     ) -> str:
         """Body of ``generate`` running inside the SHA-resolver context."""
         import time
@@ -2053,6 +2062,7 @@ class HtmlRenderer(Renderer):
                     theme=theme,
                     lane_attrs=lane_attrs,
                     cross_links=cross_links,
+                    follow_from_disk=follow_from_disk,
                 )
             )
 
@@ -2108,6 +2118,7 @@ class HtmlRenderer(Renderer):
             combined_transcript_link=combined_link,
             output_dir=output_dir,
             session_tree=session_tree,
+            follow_from_disk=True,
         )
 
     def generate_projects_index(
