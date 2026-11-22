@@ -299,7 +299,10 @@ A pure function of (DOM, lane modes), in `relayout()`:
    stage (and `dag-panes` for phone columns), `dag-wide` / `--dag-min` /
    `--dag-view` on `<body>`; the column
    chrome; branch controls ensured on every spawn card (overflow: `hidden`
-   on the extra lanes' controls, the `+N more branches` toggle).
+   on the extra lanes' controls, the `+N more branches` toggle). When more
+   than `BULK_ROWS` (256) rows change — the first relayout, a swap — the
+   classes and placements are written with `dag-on` off and it comes back
+   after them (§ 5, *WebKit*).
 7. **Draw** (`draw`): one batched read of the few rows the rail needs (spawn,
    merge, first / last shown row of each lane), then the SVG in `#dag-rail`
    is rebuilt. Paths carry `data-lane` and `data-part` (`fork`, `lane`,
@@ -470,6 +473,24 @@ when the parse ends, nothing measures the stage while it is hidden
 (animation frames requested during the parse are run at its end, the
 earliest a real frame could), and every layout read once it shows happens
 with `dag-on` set.
+
+**WebKit: many rows at once.** Once a page has been laid out, WebKit
+restyles each grid item whose inline placement changes on its own, at a
+cost that grows with the square of their number. A swap (§ 8) or the
+first relayout writes every row: after a swap, the rail's first
+measurement took 14–17s in Safari 27 on a 2,465-card session (0.06s in
+Chromium), and the combined sample (1,436 cards) took 49s in Playwright's
+WebKit 27.2. Card count alone doesn't bring it on: 1,600 plain
+question/answer cards swapped in 0.7s. So a relayout that changes more
+than `BULK_ROWS` (256) rows takes `dag-on` off the stage, writes, and puts
+it back: one full restyle instead. The swap then takes 1.3s on the sample
+in WebKit and 0.1s of draw on the 2,465-card session in Safari; in
+Chromium it costs one extra restyle (a 0.47s swap became 0.50s). Fewer
+rows (a patch's new cards) are written in place, where they are cheaper:
+on the 2,465-card page in WebKit, 100 rows cost 60ms more than one, 500
+rows 720ms more, and the full restyle about 280ms.
+`test_minimal_dag_bulk_browser.py` checks the order of the writes in
+Chromium, and the sample's swap time in WebKit where it is installed.
 
 **Conversion (P8).** `scripts/bench_render.py --theme {classic,minimal}`
 on the eight `test/test_data/real_projects` (19MB of transcripts, 4

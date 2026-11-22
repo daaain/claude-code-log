@@ -53,6 +53,12 @@
     const PHONE_PAD = 20; // px: the body's side padding on a phone (2 × 10px)
     const STRIP = 34; // px: a collapsed column
     const ROW0 = 2; // grid row of the first card (row 1: column heads)
+    // Past this many rows to place, a relayout writes them with the grid
+    // off (relayout, `regroup`). Near where the two cost the same in
+    // WebKit on a 2,465-card page: 100 rows written in place took 60 ms
+    // more than one, 500 rows 720 ms more; the regroup's full restyle,
+    // about 280 ms.
+    const BULK_ROWS = 256;
     const MAX_SLOTS = 6; // rail slots beside the main line
     const RADIUS = 8; // fork/merge connector corner
     const STUB = 12; // a folded fork's stub below its row
@@ -1457,7 +1463,21 @@
         // The one layout read before the writes (setView's width).
         const view = tracks.length ? document.documentElement.clientWidth : 0;
         if (observer) observer.disconnect();
-        if (!stage.classList.contains('dag-on')) stage.classList.add('dag-on');
+        // WebKit restyles each grid item whose inline placement changes on
+        // its own once the page has been laid out, at a cost that grows
+        // with the square of their number: after a swap, the rail's first
+        // measurement of a 2,465-card session took 14-17 s in Safari 27
+        // (0.06 s in Chromium), and 1,400 cards of the sample project took
+        // 49 s. Written with the grid off, the same writes cost one full
+        // restyle when it comes back. A few rows (a patch's new cards) are
+        // cheaper written in place.
+        let moved = 0;
+        sequence.forEach(function (item) {
+            if (rowWritten.get(item.el) !== String(item.row + ROW0)) moved++;
+        });
+        const regroup = moved > BULK_ROWS;
+        if (regroup) stage.classList.remove('dag-on');
+        else if (!stage.classList.contains('dag-on')) stage.classList.add('dag-on');
         const slotsValue = String(rail.slots);
         if (stage.style.getPropertyValue('--dag-slots') !== slotsValue)
             stage.style.setProperty('--dag-slots', slotsValue);
@@ -1522,6 +1542,7 @@
             else item.el.style.removeProperty('--dag-tag');
             tagWritten.set(item.el, value);
         });
+        if (regroup) stage.classList.add('dag-on');
         const transcript = document.getElementById('transcript');
         if (transcript) syncChrome(transcript, tracks, colours, packed.rows, running);
         model.spawnCards.forEach(function (item) {
