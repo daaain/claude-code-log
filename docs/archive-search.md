@@ -190,6 +190,14 @@ The server binds to `127.0.0.1` only, and rejects requests that don't
 address it as loopback — a page on the open web can otherwise point a
 hostname at your machine and read the archive through your browser.
 
+It also refuses requests that other sites' pages make, using the
+`Sec-Fetch-Site` header browsers send. Without that, any page you visit
+could include `recent-data.js` with a `<script>` tag and receive your
+recent sessions. Following a link into the archive from elsewhere still
+works. A browser too old to send the header (Safari before 16.4) gets no
+such protection, and neither does a program that can reach the port
+directly, since it can send whatever headers it likes.
+
 ## From your other devices, over Tailscale
 
 To read the archive, or keep [the recent sessions page](recent-sessions.md)

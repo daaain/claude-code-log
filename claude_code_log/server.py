@@ -19,6 +19,10 @@ Design notes, in case the shape looks arbitrary:
   which is a DNS-rebinding hole — and the read side already exposes every
   transcript in the archive, so this matters before any write endpoint
   exists, not after.
+* **So is where a request came from.** Another site's page can't read our
+  responses, but it can *run* one: `recent-data.js` included by a
+  `<script>` tag hands it every recent session. Requests other sites'
+  pages make (`Sec-Fetch-Site`) are refused; see `_is_from_another_site`.
 * **The search core is HTTP-free.** Everything interesting lives in
   `search.py` as plain functions; this module is the adapter.
 * **File responses carry `X-Content-Revision`.** The live page asks "did
@@ -110,6 +114,34 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         # Strip the port: loopback on any port is us.
         hostname = host.rsplit(":", 1)[0] if ":" in host else host
         return hostname.lower() in self.allowed_hosts
+
+    def _is_from_another_site(self) -> bool:
+        """Whether another site's page made the browser send this request.
+
+        The Host check doesn't cover a page that simply names us:
+        `<script src="http://127.0.0.1:8010/recent-data.js">` runs our
+        file in *its* page, and `recent-data.js` hands every recent session
+        to whatever `window.__cclRecent` that page defined. Same-origin
+        rules only stop a page reading a response; a script is executed.
+
+        Browsers label each request's source in `Sec-Fetch-Site`. Ours
+        say `same-origin`, a typed URL or bookmark says `none`. Anything
+        else is refused, `same-site` included — to a browser, every app
+        forwarded to 127.0.0.1 shares our site — except a top-level
+        navigation: following a link into the archive gives the linking
+        page nothing it can read.
+
+        No header means a non-browser client (curl) or a browser too old
+        to send one (Safari before 16.4); those are let through, as before.
+        """
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is None or site in ("same-origin", "none"):
+            return False
+        top_level_navigation = (
+            self.headers.get("Sec-Fetch-Mode") == "navigate"
+            and self.headers.get("Sec-Fetch-Dest") == "document"
+        )
+        return not top_level_navigation
 
     # ---- plumbing -------------------------------------------------------
 
@@ -242,6 +274,9 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         if not self._host_is_allowed():
             self._send_json({"error": "invalid Host header"}, status=421)
             return
+        if self._is_from_another_site():
+            self._send_json({"error": "requests from other sites are refused"}, 403)
+            return
 
         path, params = self._split_query()
         if path.startswith(API_PREFIX) or path == API_PREFIX.rstrip("/"):
@@ -268,6 +303,10 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self) -> None:  # noqa: N802
         if not self._host_is_allowed():
             self.send_response(421)
+            self.end_headers()
+            return
+        if self._is_from_another_site():
+            self.send_response(403)
             self.end_headers()
             return
         super().do_HEAD()
