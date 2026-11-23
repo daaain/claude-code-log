@@ -1951,10 +1951,17 @@ minimal theme's `.mn-stage`): an update replaces only `#transcript` and
 and the button asks for a reload (review on #427). A frame that loads
 and posts nothing (a page written without the probe, because `watch`
 couldn't read the key; a file missing mid-rewrite) counts as unanswered
-a second after its `load`, or at the 30 s give-up. Three in a row mark
-the follow *lost*: `.live-lost` on the button, `active` false (so the
-minimal theme stops drawing agents as running), probes every 5 s. Any
-answer clears it.
+a second after its `load`, or at the 30 s give-up. An answering page
+stops its own load, and no engine fires the frame's `load` then
+(measured in Chromium, Firefox and WebKit); since nothing promises it,
+or orders a posted answer against that timer, a probe counted as
+unanswered frees the slot but keeps listening until the next probe
+starts, and an answer landing then is taken as usual. Three in a row
+mark the follow *lost*: `.live-lost` on the button, `active` false (so
+the minimal theme stops drawing agents as running), probes every 5 s.
+Any answer clears it. Lost, back, and beyond following are also said
+through a visually hidden `role=status` region (`.live-status`), since
+focus is usually in the transcript, not on the button.
 `document.referrer` would have been the natural check, but it is empty
 inside the frame in Firefox and WebKit. An `http(s)` page cannot frame a
 `file://` one at all.

@@ -1987,6 +1987,16 @@ img.artifact-favicon {
     outline-offset: -4px;
 }
 
+/* What following from disk announces (live_update.js): read out, not shown. */
+.live-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
 /* Unseen-message count, as a corner badge so the button keeps the round
    50px footprint the rest of the stack has. */
 .follow-updates[data-unseen]:not([data-unseen="0"])::after {

@@ -104,6 +104,46 @@ _SHIFTABLE_CLOCK = """
 """
 
 
+# Hands every `message` event on the top window to its listeners late, by
+# `window.__delayMessages` ms, and has every probe frame report `load` at
+# once: an answer the event loop ran after the deadline a load starts.
+_DELAY_MESSAGES = """
+(() => {
+  if (window.top !== window) return;
+  window.__delayMessages = 0;
+  const create = Document.prototype.createElement;
+  Document.prototype.createElement = function (tag, ...rest) {
+    const el = create.call(this, tag, ...rest);
+    if (String(tag).toLowerCase() === 'iframe' && window.__delayMessages) {
+      setTimeout(() => el.dispatchEvent(new Event('load')), 50);
+    }
+    return el;
+  };
+  const add = window.addEventListener, remove = window.removeEventListener;
+  const late = new Map();
+  window.addEventListener = function (type, fn, opts) {
+    if (type !== 'message') return add.call(this, type, fn, opts);
+    const wrapped = ev => {
+      if (window.__delayMessages) setTimeout(() => fn(ev), window.__delayMessages);
+      else fn(ev);
+    };
+    late.set(fn, wrapped);
+    return add.call(this, type, wrapped, opts);
+  };
+  window.removeEventListener = function (type, fn, opts) {
+    return remove.call(this, type, (type === 'message' && late.get(fn)) || fn, opts);
+  };
+})();
+"""
+
+
+def _status(page: Any) -> str:
+    """What the follow last announced, through its `role=status` region."""
+    return page.evaluate(
+        "(document.querySelector('[role=status].live-status') || {}).textContent || ''"
+    )
+
+
 def _has_text(text: str) -> str:
     return f"() => document.getElementById('transcript').textContent.includes({text!r})"
 
@@ -454,6 +494,8 @@ window.frameIt = (hash) => new Promise(resolve => {
             timeout=15000,
         )
         assert "reload" in (follow.get_attribute("title") or "")
+        # Said aloud as well: focus may be in the transcript, not on the button.
+        assert "reload" in _status(page)
         assert not page.evaluate(_has_text("OTHER-THEME")), "patched in another theme"
         assert errors == []
 
@@ -487,6 +529,7 @@ window.frameIt = (hash) => new Promise(resolve => {
                 timeout=20000,
             )
             assert "reload" in (follow.get_attribute("title") or "")
+            assert "stopped answering" in _status(page)
             assert follow.get_attribute("aria-pressed") == "true", "still trying"
             assert not page.evaluate("window.claudeLogLiveUpdate.active")
         finally:
@@ -499,6 +542,32 @@ window.frameIt = (hash) => new Promise(resolve => {
             "document.getElementById('followUpdates').classList.contains('live-lost')"
         )
         assert page.evaluate("window.claudeLogLiveUpdate.active")
+        assert "again" in _status(page)
+        assert errors == []
+
+    def test_an_answer_that_lands_after_the_deadline_still_counts(
+        self, page, tmp_path
+    ) -> None:
+        """No engine fires a frame's `load` once its page has answered (the
+        answer stops the load), but nothing promises that, nor orders the
+        posted answer against the timer a `load` starts. Here every frame
+        reports `load` at once and every answer reaches the page after the
+        one-second deadline: each must still be taken, and no probe counted
+        as unanswered for it."""
+        page.add_init_script(_DELAY_MESSAGES)
+        projects, jsonl, html = _archive(tmp_path)
+        errors = _open(page, html)
+        page.evaluate("window.__delayMessages = 1200")
+        page.locator("#followUpdates").click()
+
+        _append(projects, jsonl, "LATE-ANSWER")
+        page.wait_for_function(_has_text("LATE-ANSWER"), timeout=15000)
+        time.sleep(5)
+        assert not page.evaluate(
+            "document.getElementById('followUpdates').classList.contains('live-lost')"
+        ), "answers that arrived were counted as missing"
+        _append(projects, jsonl, "LATE-AGAIN")
+        page.wait_for_function(_has_text("LATE-AGAIN"), timeout=15000)
         assert errors == []
 
     def test_the_combined_page_answers_no_probe(self, page, tmp_path) -> None:

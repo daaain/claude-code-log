@@ -81,6 +81,9 @@
     const DISK_LOST_AFTER = 3;
     let diskMisses = 0;
     let diskLost = false;
+    // The last probe counted as unanswered, still listening until the next
+    // one starts (see `unanswered` in `diskProbe`).
+    let diskLingering = null;
 
     // ---- state that a swap would otherwise destroy -----------------------
 
@@ -466,6 +469,11 @@
         if (fromDisk) {
             if (following) diskStart();
             else diskStop();
+            say(
+                diskRefused
+                    ? 'Following stopped: this page changed beyond following — reload it to follow it again.'
+                    : ''
+            );
             // From disk this is the page becoming live, or ceasing to be
             // (`active` below); the minimal theme redraws what it shows as
             // running.
@@ -473,6 +481,20 @@
         }
         renderFollowBtn();
         if (following) scrollToEnd();
+    }
+
+    // What the follow says aloud when it changes by itself — lost, back, or
+    // beyond following — since focus is usually in the transcript, not on
+    // the button whose tooltip says it.
+    let liveStatus = null;
+    if (fromDisk && followBtn) {
+        liveStatus = document.createElement('div');
+        liveStatus.className = 'live-status';
+        liveStatus.setAttribute('role', 'status');
+        document.body.appendChild(liveStatus);
+    }
+    function say(text) {
+        if (liveStatus) liveStatus.textContent = text;
     }
 
     if (followBtn) {
@@ -742,6 +764,7 @@
         if (diskLost === lost) return;
         diskLost = lost;
         renderFollowBtn();
+        say(lost ? 'This file has stopped answering — still trying to follow it.' : 'Following again.');
         // Kept current or not: the minimal theme draws agents as running
         // only while it is (`active` below).
         document.dispatchEvent(new Event('claudelog:live'));
@@ -752,11 +775,13 @@
     // same reason: an older render must never land after a newer one.
     function diskProbe() {
         if (!fromDisk || !following || stopped || diskCancel || document.hidden) return;
+        if (diskLingering) diskLingering();
         const frame = document.createElement('iframe');
         frame.style.display = 'none';
         frame.setAttribute('aria-hidden', 'true');
         frame.tabIndex = -1;
         let settled = false;
+        let counted = false;
         let late = 0;
         function settle() {
             settled = true;
@@ -769,6 +794,7 @@
             if (settled || ev.source !== frame.contentWindow) return;
             if (!ev.data || typeof ev.data.cclProbe !== 'string') return;
             settle();
+            if (diskLingering === cancel) diskLingering = null;
             diskMisses = 0;
             diskLostChanged(false);
             diskAnswer(ev.data, sentAt)
@@ -783,16 +809,25 @@
         function cancel() {
             if (!settled) settle();
             if (diskCancel === cancel) diskCancel = null;
+            if (diskLingering === cancel) diskLingering = null;
         }
+        // Counted once, and the slot freed for the next probe; but the frame
+        // keeps listening until that probe starts. Nothing orders a posted
+        // answer against this deadline's timer, so one can land after it,
+        // and is then taken as any answer is (clearing the miss).
         function unanswered() {
-            if (settled) return;
-            cancel();
+            if (settled || counted) return;
+            counted = true;
+            clearTimeout(giveUp);
+            if (diskCancel === cancel) diskCancel = null;
+            diskLingering = cancel;
             if (++diskMisses >= DISK_LOST_AFTER) diskLostChanged(true);
         }
         diskCancel = cancel;
         window.addEventListener('message', onMessage);
-        // A frame that loaded and posted nothing never will: an answer is
-        // posted before the load stops, so a second is ample for it to land.
+        // A frame that loaded and posted nothing has no probe to answer
+        // with. An answering page stops its own load, so no engine fires
+        // this for it; should one, the answer is still taken (above).
         frame.addEventListener('load', () => {
             if (!settled && !late) late = setTimeout(unanswered, 1000);
         });
@@ -830,6 +865,7 @@
         clearInterval(diskTimer);
         diskTimer = 0;
         if (diskCancel) diskCancel();
+        if (diskLingering) diskLingering();
     }
 
     // Don't poll a page nobody is looking at.
