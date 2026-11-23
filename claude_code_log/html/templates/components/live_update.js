@@ -35,9 +35,9 @@
     const overHttp = location.protocol === 'http:' || location.protocol === 'https:';
     // A framed page is a probe (live_probe.js halts this script there);
     // the check keeps any other framing from starting a transport. Only a
-    // page that can answer its own probes (live_probe.js, session pages)
-    // follows from disk.
-    const fromDisk = location.protocol === 'file:' && window.parent === window && !!window.__cclProbeable;
+    // page that can answer its own probes (live_probe.js: a session page,
+    // with its token) follows from disk.
+    const fromDisk = location.protocol === 'file:' && window.parent === window && !!window.__cclProbeToken;
     if (!overHttp && !fromDisk) return;
 
     // A metadata HEAD costs ~1ms and carries no body while nothing
@@ -47,15 +47,9 @@
     const POLL_MS = 1000;
     const container = () => document.getElementById('transcript');
     if (!container()) return;
-    // The framed copy answers only a parent that names one of its cards
-    // (live_probe_post.js): a page with no card has nothing to follow.
-    const diskToken = fromDisk ? firstCardUuid() : '';
-    if (fromDisk && !diskToken) return;
-
-    function firstCardUuid() {
-        const card = container().querySelector('.message[data-uuid]');
-        return card ? card.getAttribute('data-uuid') : '';
-    }
+    // The framed copy answers only a parent that names its token
+    // (live_probe_post.js), which this page holds as the file it came from.
+    const diskToken = fromDisk ? window.__cclProbeToken : '';
 
     // The page's identity as of the last poll. `Last-Modified` alone is
     // not enough: HTTP dates have **one-second granularity**, so two
@@ -679,8 +673,8 @@
             return;
         }
         if (answer.cclProbe === 'refused') {
-            // The file no longer holds the card we named: its history was
-            // rewritten under us. Only a reload can follow it from here.
+            // The file's token is no longer ours: it was rewritten under
+            // another install key. Only a reload can follow it from here.
             diskRefused = true;
             setFollowing(false);
             return;

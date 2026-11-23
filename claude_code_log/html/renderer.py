@@ -1889,7 +1889,7 @@ class HtmlRenderer(Renderer):
         page_info: Optional[dict[str, Any]] = None,
         page_stats: Optional[dict[str, Any]] = None,
         archive_search_link: Optional[str] = None,
-        follow_from_disk: bool = False,
+        probe_token: Optional[str] = None,
     ) -> str:
         """Generate HTML from transcript messages.
 
@@ -1907,12 +1907,12 @@ class HtmlRenderer(Renderer):
                 `search.html`, so the link would dangle. Computed by the
                 caller because only it knows where the index root is: under
                 ``--expand-paths`` a project page can be several levels deep.
-            follow_from_disk: Whether the page can be followed from disk
-                (``file://``): it then carries the probe scripts that answer
-                a framed copy of itself (live_probe.js). Session pages only:
-                the probe hands the transcript to a page naming one of its
-                cards' uuids, which is no secret from someone holding one
-                session, and a combined page holds every session's cards.
+            probe_token: Set on a session page, which can then be followed
+                from disk (``file://``): it carries the probe scripts that
+                answer a framed copy of itself (live_probe.js), and hands
+                its transcript only to a parent that names this token
+                (``page_key.probe_token``: in this page and nowhere else).
+                Combined and other pages have none, and stay static.
         """
 
         from ..git_remote import canonical_cwd_from_messages, render_with_repo_context
@@ -1934,7 +1934,7 @@ class HtmlRenderer(Renderer):
                 page_stats=page_stats,
                 archive_search_link=archive_search_link,
                 repo_cwd=repo_cwd,
-                follow_from_disk=follow_from_disk,
+                probe_token=probe_token,
             )
 
     def _generate_inner(
@@ -1948,7 +1948,7 @@ class HtmlRenderer(Renderer):
         page_stats: Optional[dict[str, Any]] = None,
         archive_search_link: Optional[str] = None,
         repo_cwd: Optional[str] = None,
-        follow_from_disk: bool = False,
+        probe_token: Optional[str] = None,
     ) -> str:
         """Body of ``generate`` running inside the SHA-resolver context."""
         import time
@@ -2062,7 +2062,7 @@ class HtmlRenderer(Renderer):
                     theme=theme,
                     lane_attrs=lane_attrs,
                     cross_links=cross_links,
-                    follow_from_disk=follow_from_disk,
+                    probe_token=probe_token,
                 )
             )
 
@@ -2079,6 +2079,8 @@ class HtmlRenderer(Renderer):
         suppress_combined_link: bool = False,
     ) -> str:
         """Generate HTML for a single session."""
+        from ..page_key import probe_token
+
         # Filter messages for this session (SummaryTranscriptEntry.sessionId is always None).
         # Also accept entries whose sessionId was rewritten to
         # ``{session_id}#agent-{agent_id}`` by ``_integrate_agent_entries``;
@@ -2118,7 +2120,7 @@ class HtmlRenderer(Renderer):
             combined_transcript_link=combined_link,
             output_dir=output_dir,
             session_tree=session_tree,
-            follow_from_disk=True,
+            probe_token=probe_token(session_id),
         )
 
     def generate_projects_index(
@@ -2316,13 +2318,18 @@ def generate_recent_html(
     minimal theme's tokens); ``theme`` is accepted for symmetry with the
     other page generators and recorded in the stamp. ``window`` is a
     date-filtered run's window (``date_window_label``), which the page
-    names: its data is then the window's sessions.
+    names: its data is then the window's sessions. The page carries the
+    key that decrypts its data (``page_key.recent_key``): derived from the
+    install key, so the page is still the same on every run.
     """
+    from ..page_key import recent_key
+
     env = get_template_environment()
     return str(
         env.get_template("recent.html").render(
             library_version=get_library_version(),
             theme=normalize_theme(theme),
             window=window,
+            recent_key=recent_key().hex(),
         )
     )

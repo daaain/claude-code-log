@@ -33,9 +33,23 @@ def is_host_setting(name: str) -> bool:
     return name.startswith(_PREFIX) or name in _OTHER_SETTINGS
 
 
+#: Settings the run fixes itself, after the scrub, to values of its own
+#: (never the host's): the install key (``claude_code_log/page_key.py``),
+#: so that pages carrying what it derives are the same in every test,
+#: worker and snapshot. In the environment, not patched in, because
+#: render workers are separate processes.
+TEST_SETTINGS = {
+    "CLAUDE_CODE_LOG_KEY_FILE": os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "test_data", "page-key.txt"
+    ),
+}
+
+
 def scrub_host_settings(environ: MutableMapping[str, str] = os.environ) -> list[str]:
-    """Remove every host setting from *environ*; returns the names removed."""
+    """Remove every host setting from *environ*, then set the run's own
+    (:data:`TEST_SETTINGS`); returns the names removed."""
     removed = sorted(name for name in environ if is_host_setting(name))
     for name in removed:
         del environ[name]
+    environ.update(TEST_SETTINGS)
     return removed

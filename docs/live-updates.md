@@ -100,8 +100,10 @@ Nothing is read until you press it, so a page you only browse costs
 nothing extra. A page opened from disk cannot fetch files, not even
 itself, so following loads the page into a hidden frame of itself and
 takes the new messages from there. That frame hands them only to a page
-that has already read the same file, so other local files cannot use
-it to read your transcripts. For the same reason the combined page,
+that holds the page's own token, which is in the page and nowhere else,
+so other local files cannot use it to read your transcripts. The token
+comes from the key described in
+[Who can read it](recent-sessions.md#who-can-read-it). For the same reason the combined page,
 which holds every session, does not offer it from disk; under `serve`
 it follows like any other page.
 

@@ -5,6 +5,9 @@
 <head>
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    {# Decrypts recent-data.js (page_key.py): any page can run that file,
+       only this one can read what it passes. #}
+    <meta name='ccl-recent-key' content='{{ recent_key }}'>
     <title>Recent sessions{% if window %} ({{ window }}){% endif %}</title>
     {#- One look in both themes: the minimal theme's tokens, and the page's own
         stylesheet. The stored light/dark choice applies before first paint.
