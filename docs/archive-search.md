@@ -189,3 +189,82 @@ claude-code-log serve --projects-dir /path/to/projects
 The server binds to `127.0.0.1` only, and rejects requests that don't
 address it as loopback — a page on the open web can otherwise point a
 hostname at your machine and read the archive through your browser.
+
+## Searching from a terminal or an agent
+
+The cache works for scripts too, but there's one trap first.
+
+!!! warning "`LIKE` on `messages.content` always finds nothing"
+    Each message body is stored as `zlib(json(entry))`, so `content` is a
+    compressed blob. `WHERE content LIKE '%foo%'` scans it without error
+    and returns no rows, which looks exactly like "never mentioned".
+
+### With the index (fast)
+
+If `serve` has built the index, `message_fts` exists and its `rowid` is
+`messages.id`. Check with `.tables` in `sqlite3`. Query it with an FTS5
+`MATCH`:
+
+```sql
+SELECT p.project_path, m.session_id, min(m.timestamp) AS first_seen, count(*) AS hits
+FROM message_fts f
+JOIN messages m ON m.id = f.rowid
+JOIN projects p ON p.id = m.project_id
+WHERE message_fts MATCH '"gcs storage backup"'
+GROUP BY m.session_id
+ORDER BY first_seen;
+```
+
+Raw FTS5 doesn't get the punctuation handling the web page adds. Quote
+anything with a hyphen or a dot, because a bare `gcs-storage-backup` fails
+with `no such column: storage`. To restrict the match to fields, use a column filter such as
+`{text tool_input} : "gcs storage backup"`.
+
+### Without the index (substring, slower)
+
+Decompress in SQL with a user-defined function. This matches substrings,
+including mid-word ones, which FTS can't do. On a 4 GB cache it takes about
+20 seconds.
+
+The decompressed text is JSON as `json.dumps` writes it, with anything
+outside ASCII escaped (`café` is stored as `caf\u00e9`), and quotes,
+backslashes and newlines escaped too. So the script escapes the needle
+the same way before it searches; a plain `café` would find nothing.
+
+```python
+import json, sqlite3, sys, zlib
+
+db = sys.argv[1]
+# Escaped as the cache stores it: café -> caf\u00e9, " -> \", newline -> \n.
+needle = json.dumps(sys.argv[2])[1:-1]
+con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+con.create_function(
+    "unz", 1,
+    lambda b: zlib.decompress(b).decode("utf-8", "replace") if b else "",
+    deterministic=True,
+)
+rows = con.execute(
+    """SELECT p.project_path, m.session_id, min(m.timestamp), count(*)
+       FROM messages m JOIN projects p ON p.id = m.project_id
+       WHERE instr(unz(m.content), ?) > 0
+       GROUP BY m.session_id ORDER BY min(m.timestamp)""",
+    (needle,),
+)
+for row in rows:
+    print(*row, sep=" | ")
+```
+
+```bash
+python3 cache_grep.py ~/.claude/projects/claude-code-log-cache.db gcs-storage-backup
+```
+
+It also matches field names and the rest of the JSON structure, so a
+needle such as `"type"` finds every message.
+
+`grep -rl needle ~/.claude/projects --include='*.jsonl'` over the raw
+transcripts also works as a cross-check, but it only covers transcripts
+that still exist on disk.
+
+A `claude-code-log search` command that does this properly, decoding the
+JSON instead of matching it raw, is proposed in
+[#425](https://github.com/daaain/claude-code-log/issues/425).
