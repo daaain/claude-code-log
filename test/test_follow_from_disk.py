@@ -303,6 +303,48 @@ class TestFollowFromDisk:
             timeout=10000,
         )
 
+    def test_a_restart_after_a_failed_update_still_repairs_the_page(
+        self, page, tmp_path
+    ) -> None:
+        """Pressing follow again after an update failed part-way must not
+        take the first-read shortcut: the half-edited page can still match
+        the file by card count, last card and title, and would be taken as
+        on screen, wrong card and all."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        page.locator("#followUpdates").click()
+        _append(projects, jsonl, "BASELINE")
+        page.wait_for_function(_has_text("BASELINE"), timeout=10000)
+        before = html.read_text(encoding="utf-8")
+        page.evaluate(
+            """() => {
+                const importNode = Document.prototype.importNode;
+                window.__imports = 0;
+                Document.prototype.importNode = function (...args) {
+                    if (++window.__imports % 2 === 0) throw new Error('part-way');
+                    return importNode.apply(this, args);
+                };
+            }"""
+        )
+        html.write_text(
+            before.replace("seed answer 3 ", "EDITED-3 ").replace(
+                "seed answer 5 ", "EDITED-5 "
+            ),
+            encoding="utf-8",
+        )
+        page.wait_for_function(_has_text("EDITED-"), timeout=10000)
+        page.wait_for_function("window.__imports >= 2", timeout=10000)
+        # Stop following, put the file back, follow again.
+        page.locator("#followUpdates").click()
+        page.wait_for_function("!window.claudeLogLiveUpdate.active")
+        time.sleep(1.1)
+        html.write_text(before, encoding="utf-8")
+        page.locator("#followUpdates").click()
+        page.wait_for_function(
+            "() => !document.getElementById('transcript').textContent.includes('EDITED-')",
+            timeout=10000,
+        )
+
     def test_a_same_second_rewrite_before_following_is_seen(
         self, page, tmp_path
     ) -> None:

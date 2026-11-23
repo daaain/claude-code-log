@@ -775,7 +775,10 @@
 
     function diskStart() {
         diskRefused = false;
-        diskSeen = null;
+        // A fresh start may take the first-read shortcut (diskSeen null):
+        // unless an update failed part-way, which no restart repairs. The
+        // page then still matches no render, and the first read applies.
+        if (diskSeen !== DISK_UNKNOWN) diskSeen = null;
         diskStill = 0;
         diskSchedule();
         diskProbe();
