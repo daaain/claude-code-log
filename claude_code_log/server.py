@@ -21,8 +21,9 @@ Design notes, in case the shape looks arbitrary:
   exists, not after.
 * **So is where a request came from.** Another site's page can't read our
   responses, but it can *run* one: `recent-data.js` included by a
-  `<script>` tag hands it every recent session. Requests other sites'
-  pages make (`Sec-Fetch-Site`) are refused; see `_is_from_another_site`.
+  `<script>` tag hands it the recent sessions, encrypted (`page_key.py`).
+  Requests other sites' pages make (`Sec-Fetch-Site`) are refused as a
+  second layer; see `_is_from_another_site`.
 * **The search core is HTTP-free.** Everything interesting lives in
   `search.py` as plain functions; this module is the adapter.
 * **File responses carry `X-Content-Revision`.** The live page asks "did
@@ -120,9 +121,11 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         The Host check doesn't cover a page that simply names us:
         `<script src="http://127.0.0.1:8010/recent-data.js">` runs our
-        file in *its* page, and `recent-data.js` hands every recent session
+        file in *its* page, and `recent-data.js` hands the recent sessions
         to whatever `window.__cclRecent` that page defined. Same-origin
         rules only stop a page reading a response; a script is executed.
+        The payload is encrypted (`page_key.py`), so this is a second
+        layer: for that file, and for anything script-shaped added later.
 
         Browsers label each request's source in `Sec-Fetch-Site`. Ours
         say `same-origin`, a typed URL or bookmark says `none`. Anything

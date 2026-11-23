@@ -8,7 +8,6 @@ and that the conversion writes the page and its self-refresh data file.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -32,6 +31,7 @@ from claude_code_log.recent import (
     build_recent_payload,
     payload_json,
     read_session,
+    read_recent_data,
     recent_data_js,
     session_exit,
     summarise_session,
@@ -1118,9 +1118,7 @@ def test_payload_lists_recent_sessions_across_projects(archive: Path) -> None:
 
 
 def _data_payload(path: Path) -> dict[str, Any]:
-    match = re.search(r"__cclRecent\((\{.*\})\);", path.read_text(encoding="utf-8"))
-    assert match, "recent-data.js should hand the page its payload"
-    return json.loads(match.group(1))
+    return read_recent_data(path.read_text(encoding="utf-8"))
 
 
 def test_conversion_writes_the_page_and_its_data(archive: Path) -> None:

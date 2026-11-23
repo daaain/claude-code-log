@@ -327,9 +327,14 @@ class TestToolbarReachability:
     def test_follow_stays_hidden_until_live_updates_start(
         self, page: Page, tmp_path: Path
     ) -> None:
+        # A page rendered whole, not as a session page, can't be followed
+        # from disk (only session pages answer the probe:
+        # test_follow_from_disk.py), so from file:// nothing adds
+        # `live-active`, and the toolbar keeps the button hidden until
+        # something does.
         page.goto(_render(tmp_path, REPRESENTATIVE).as_uri())
         follow = page.locator("#followUpdates")
-        expect(follow).to_be_hidden()  # file:// cannot poll
+        expect(follow).to_be_hidden()
         page.evaluate(
             "document.getElementById('followUpdates').classList.add('live-active')"
         )

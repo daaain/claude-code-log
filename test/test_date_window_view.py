@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pytest
+
+from claude_code_log.recent import read_recent_data
 from click.testing import CliRunner
 
 from claude_code_log.cli import main
@@ -139,7 +141,7 @@ def _render_rows(cache: Path) -> List[Tuple[Any, ...]]:
 
 
 def _hrefs(text: str) -> Set[str]:
-    """The relative page links in an index page or the recent-data script."""
+    """The relative page links in an index page or the recent page's data."""
     found = re.findall(r"""href=['"]([^'"#?]+)""", text)
     found += re.findall(r'"href":\s*"([^"#?]+)"', text)
     # Not the search script's template literals, nor absolute links; the
@@ -189,7 +191,7 @@ def test_no_page_of_the_view_links_a_file_it_did_not_write(
     view = tmp_path / "view"
     _window(projects, view)
     links = _hrefs((view / "index.html").read_text(encoding="utf-8"))
-    links |= _hrefs((view / "recent-data.js").read_text(encoding="utf-8"))
+    links |= _hrefs(json.dumps(_recent_payload(view)))
     assert any("session-" in link for link in links), links
     dead = sorted(link for link in links if not (view / link).is_file())
     assert dead == []
@@ -290,8 +292,7 @@ def test_one_project_without_a_cache_writes_the_window_s_session_pages(
 
 def _recent_payload(index_dir: Path) -> Dict[str, Any]:
     text = (index_dir / "recent-data.js").read_text(encoding="utf-8")
-    start = text.index("__cclRecent(") + len("__cclRecent(")
-    return json.loads(text[start : text.rindex(");")])
+    return read_recent_data(text)
 
 
 def test_the_recent_page_lists_the_window_s_sessions_with_its_counts(

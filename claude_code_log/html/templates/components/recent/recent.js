@@ -3,9 +3,12 @@
 //
 // The page is opened from disk, where nothing can be fetched; a <script>
 // tag can still be added, though, so the data lives in a sibling
-// recent-data.js that calls window.__cclRecent(payload). Every 15 s (while
+// recent-data.js that calls window.__cclRecent(payload). Every 3 s (while
 // the tab is visible) the script is added again with a fresh ?t= so no
-// cache serves an old copy, and removed once it has run. The rows are
+// cache serves an old copy, and removed once it has run. A reload costs
+// ~2ms at a real archive's data and 14-26ms at the largest payload the caps
+// allow (2.16MB, 60 sessions), under 1% of a core either way, so it reloads
+// unconditionally rather than detecting a change first. The rows are
 // updated in place — expanded rows, the filter, grouping, scroll position,
 // focus and a text selection all survive a refresh — and every 30 s the
 // times are redrawn against the clock.
@@ -20,7 +23,7 @@
     'use strict';
 
     const DATA_SRC = 'recent-data.js';
-    const RELOAD_MS = 15000;
+    const RELOAD_MS = 3000;
     const TICK_MS = 30000;
     const STALE_MS = 2 * 60000;
     const BEFORE_MS = 4 * 3600000; // the strip shows 4 h back...
@@ -303,7 +306,7 @@
     }
 
     // ---- state -----------------------------------------------------
-    const state = { payload: null, filter: 'all', group: false, expanded: new Set() };
+    const state = { payload: null, unreadable: false, filter: 'all', group: false, expanded: new Set() };
     (function restore() {
         try {
             const saved = JSON.parse(window.sessionStorage.getItem(STORE_KEY) || 'null');
@@ -1233,15 +1236,33 @@
         updatedEl.title = payload.generatedAt ? new Date(payload.generatedAt).toString() : '';
         // Old data: say so (a role=status region, so only rewrite it when
         // its text changes, or a screen reader hears it on every tick).
-        const stale = payload.generatedAt && now - payload.generatedAt > STALE_MS;
-        if (staleEl.hidden === Boolean(stale)) staleEl.hidden = !stale;
-        const staleText = stale ? 'Data from ' + ago(payload.generatedAt, now) + ' — is ' : '';
-        if (stale && staleEl.dataset.text !== staleText) {
+        // Data this page can't read (its key changed) says so first.
+        const unreadable = Boolean(state.unreadable);
+        const stale = !unreadable && payload.generatedAt && now - payload.generatedAt > STALE_MS;
+        const notice = unreadable || stale;
+        if (staleEl.hidden === Boolean(notice)) staleEl.hidden = !notice;
+        const staleText = unreadable
+            ? 'unreadable'
+            : stale
+              ? 'Data from ' + ago(payload.generatedAt, now) + ' — is '
+              : '';
+        if (notice && staleEl.dataset.text !== staleText) {
             staleEl.dataset.text = staleText;
-            staleEl.replaceChildren(
-                document.createTextNode(staleText),
-                el('code', '', 'claude-code-log watch'),
-                document.createTextNode(' running?')
+            staleEl.replaceChildren.apply(
+                staleEl,
+                unreadable
+                    ? [
+                          document.createTextNode(
+                              "This page can't read its data: its key has changed since the page was written. Run "
+                          ),
+                          el('code', '', 'claude-code-log'),
+                          document.createTextNode(' to write it again.')
+                      ]
+                    : [
+                          document.createTextNode(staleText),
+                          el('code', '', 'claude-code-log watch'),
+                          document.createTextNode(' running?')
+                      ]
             );
         }
         groupEl.checked = state.group;
@@ -1370,12 +1391,93 @@
     })();
 
     // ---- data ------------------------------------------------------
-    window.__cclRecent = function (raw) {
+    // recent-data.js passes its payload encrypted (page_key.py): any page
+    // can run that file, by a <script> tag on any site or by relative path
+    // from any local HTML file, and receive what it passes. Only this page
+    // holds the key, in <meta name='ccl-recent-key'>. The keystream is
+    // HKDF-SHA256 per chunk of 8,160 bytes (its longest output; salt: the
+    // 16-byte nonce before the ciphertext, info: the chunk's 4-byte index),
+    // XORed in.
+    const CHUNK = 8160;
+    let recentKey = null;
+    function importRecentKey() {
+        if (!recentKey) {
+            const meta = document.querySelector("meta[name='ccl-recent-key']");
+            const hex = (meta && meta.getAttribute('content')) || '';
+            const bytes = new Uint8Array(
+                (hex.match(/../g) || []).map(function (h) {
+                    return parseInt(h, 16);
+                })
+            );
+            recentKey = crypto.subtle.importKey('raw', bytes, 'HKDF', false, ['deriveBits']);
+        }
+        return recentKey;
+    }
+    async function decryptPayload(blob) {
+        const raw = Uint8Array.from(atob(blob), function (c) {
+            return c.charCodeAt(0);
+        });
+        const nonce = raw.subarray(0, 16);
+        const text = raw.slice(16);
+        const key = await importRecentKey();
+        const chunks = [];
+        for (let index = 0, start = 0; start < text.length; index++, start += CHUNK) {
+            const info = new Uint8Array(4);
+            new DataView(info.buffer).setUint32(0, index);
+            const length = Math.min(CHUNK, text.length - start);
+            chunks.push(
+                crypto.subtle
+                    .deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: nonce, info: info }, key, length * 8)
+                    .then(function (bits) {
+                        const stream = new Uint8Array(bits);
+                        for (let i = 0; i < stream.length; i++) text[start + i] ^= stream[i];
+                    })
+            );
+        }
+        await Promise.all(chunks);
+        return JSON.parse(new TextDecoder().decode(text));
+    }
+
+    function apply(raw) {
         const payload = cleanPayload(raw);
         if (!payload) return;
         state.payload = payload;
+        state.unreadable = false;
         render();
+    }
+    // Loads decrypt asynchronously; only the newest one's data is drawn.
+    let received = 0;
+    let decrypting = 0;
+    window.__cclRecent = function (raw) {
+        const seq = ++received;
+        if (typeof raw !== 'string') {
+            apply(raw);
+            return;
+        }
+        decrypting++;
+        decryptPayload(raw)
+            .then(function (data) {
+                if (seq === received) apply(data);
+            })
+            .catch(function (err) {
+                // A page older than its data's key (the key file was
+                // replaced): the next full run rewrites this page. Said on
+                // the page, not only in the console: unread data must not
+                // look like an archive with nothing recent in it.
+                console.error('recent-data.js could not be read; rerun claude-code-log', err);
+                if (seq !== received) return;
+                state.unreadable = true;
+                if (state.payload) render();
+            })
+            .finally(function () {
+                decrypting--;
+                if (!decrypting && !state.payload) showEmpty();
+            });
     };
+    function showEmpty() {
+        state.payload = cleanPayload({ sessions: [] });
+        render();
+    }
 
     let loading = null;
     function reload() {
@@ -1407,11 +1509,9 @@
     // The page's own <script src='recent-data.js'> (after this one) gives
     // the first payload, and has run or failed by DOMContentLoaded. Only
     // then is "no data" worth drawing, and the refresh worth starting.
+    // (Its data may still be decrypting: then the empty state waits for it.)
     document.addEventListener('DOMContentLoaded', function () {
-        if (!state.payload) {
-            state.payload = cleanPayload({ sessions: [] });
-            render();
-        }
+        if (!state.payload && !decrypting) showEmpty();
         schedule();
     });
     window.setInterval(function () {

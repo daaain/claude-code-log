@@ -2826,7 +2826,8 @@ def watch(
 
     The generated files on disk stay canonical, so anything that reloads
     them picks the changes up: an editor or Obsidian for Markdown, a
-    browser refresh for HTML.
+    browser refresh for HTML -- or the HTML page's follow button, which
+    keeps a session page opened from disk current in place.
     """
     from .watch import WatchEngine
 

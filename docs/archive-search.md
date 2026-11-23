@@ -191,12 +191,14 @@ address it as loopback — a page on the open web can otherwise point a
 hostname at your machine and read the archive through your browser.
 
 It also refuses requests that other sites' pages make, using the
-`Sec-Fetch-Site` header browsers send. Without that, any page you visit
-could include `recent-data.js` with a `<script>` tag and receive your
-recent sessions. Following a link into the archive from elsewhere still
-works. A browser too old to send the header (Safari before 16.4) gets no
-such protection, and neither does a program that can reach the port
-directly, since it can send whatever headers it likes.
+`Sec-Fetch-Site` header browsers send. Any page you visit could otherwise
+include `recent-data.js` with a `<script>` tag; what it would get is
+encrypted (see [Who can read it](recent-sessions.md#who-can-read-it)), so
+the refusal is a second layer, for that file and anything like it later.
+Following a link into the archive from elsewhere still works. A browser
+too old to send the header (Safari before 16.4) gets no such refusal, and
+neither does a program that can reach the port directly, since it can
+send whatever headers it likes.
 
 ## From your other devices, over Tailscale
 

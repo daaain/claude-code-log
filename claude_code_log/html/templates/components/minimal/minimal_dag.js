@@ -386,10 +386,16 @@
         });
         return out;
     }
+    // "Running" needs a page that is kept current: served, or followed
+    // from disk (live_update.js). A static page cannot tell an agent still
+    // at work from one that ended without a result.
+    function liveNow() {
+        return !!(window.claudeLogLiveUpdate && window.claudeLogLiveUpdate.active);
+    }
     // Running lanes: lane id -> how long it has been quiet (ms).
     function runningLanes(newest, activity) {
         const out = new Map();
-        if (!window.claudeLogLiveUpdate) return out;
+        if (!liveNow()) return out;
         const now = Date.now();
         newest.forEach(function (ts, id) {
             if (now - ts > RUNNING_MAX_QUIET_MS) return;
@@ -2261,8 +2267,19 @@
     // While a lane runs, its "quiet …" label is brought up to date
     // (and a session silent for RUNNING_MAX_QUIET_MS stops showing
     // one), with or without an update.
+    // Following a page from disk makes it live, and stopping ends that
+    // (live_update.js): what shows as running changes at once, not at the
+    // next recheck.
+    document.addEventListener('claudelog:live', function () {
+        if (!started || !layout) return;
+        if (document.hidden) {
+            hiddenDirty = true;
+            return;
+        }
+        relayout();
+    });
     setInterval(function () {
-        if (!started || !layout || document.hidden || !window.claudeLogLiveUpdate) return;
+        if (!started || !layout || document.hidden || !liveNow()) return;
         const next = runningLanes(layout.newest, layout.activity);
         if (next.size || !sameSet(next, layout.running)) relayout();
     }, RUNNING_RECHECK_MS);

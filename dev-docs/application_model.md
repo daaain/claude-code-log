@@ -1804,9 +1804,10 @@ from 1.03s — with rendering, which was where this began, now a rounding
 error against it.
 
 **The served page updates itself** via
-`html/templates/components/live_update.js`, active only over `http(s)` —
-a `file://` page cannot fetch anything, not even its own URL, so the
-poller notices and does nothing. It polls a HEAD of its own URL and
+`html/templates/components/live_update.js`, polling from load over
+`http(s)`. (A `file://` page cannot fetch anything, not even its own URL;
+what it does instead, and only when asked, is *Following from disk*
+below.) It polls a HEAD of its own URL and
 compares `Last-Modified`, `Content-Length` **and `X-Content-Revision`**.
 Each covers the one before it: HTTP dates have one-second granularity, so
 two updates inside the same second are otherwise invisible (the same trap
@@ -1890,6 +1891,122 @@ update's new cards were localised last and the fade-in played over a raw
 ISO string. Draining while `timeRemaining()` allows (checked per 32
 elements, `{timeout: 200}`, first slice on the current task under a 24ms
 budget) takes those to **13ms and 35ms**.
+
+
+**Following from disk** gives `watch` without `serve` the same in-place
+update, in the same `live_update.js`. A `file://` page cannot fetch
+anything, but it can frame itself, and the framed copy can `postMessage`
+what it holds back up — each `file://` document is an opaque origin, so
+the parent can neither read the frame nor address the message to an
+origin, but messages pass. So pressing **follow** (⏬, shown from disk on
+any page with a card) starts a 1 s poll that loads the page's own file
+into a `display:none` iframe (`?t=…#ccl-probe=<lastModified>~<token>`),
+and releasing it stops the poll; until then nothing runs but two inert
+scripts (3.7KB with their comments; the transport adds 8.8KB to
+`live_update.js`). Two scripts answer inside the frame:
+
+- `live_probe.js`, first in `<head>`: when the file's
+  `document.lastModified` equals the one the parent sent, it posts
+  `same` and calls `window.stop()` before the body is parsed — ~10ms on
+  a 5.8MB page. It also captures `DOMContentLoaded`/`load` on `window`
+  and stops their propagation: Firefox fires both even after
+  `window.stop()`, which would otherwise start the page's own scripts
+  (this one included) inside the probe.
+- `live_probe_post.js`, the first script after `#transcript`: otherwise
+  it posts `#title` + `#transcript` as HTML and stops the load there,
+  so no later script runs. The parent hands that to the same
+  `applyUpdate` a served page's GET goes through — patch or swap, fold
+  and `<details>` state, rehydrate hooks and all. A changed page's
+  render is in hand ~130ms (Chromium) / ~100ms (Firefox) after the
+  frame is created on that page.
+
+`display:none` is load-bearing: a 0×0 or 1×1 frame still lays the page
+out, in a viewport a pixel wide, and the same read took 1.3s.
+
+*Who may read it.* Posting to `'*'` is the only option between opaque
+origins, so without a check any local HTML file could frame a
+transcript page at a predictable path (`session-<id>.html`) and read it —
+a channel `file://` otherwise lacks. The frame posts content only to a
+parent that names the page's **probe token**, in
+`<meta name='ccl-probe-token'>`: `page_key.probe_token(session_id)`, an
+HMAC under the install key (§ 2.19), so it is the same every time
+`watch` rewrites the page, and is found in that page and nowhere else.
+The first design took any card's `data-uuid` as the token, on the
+reasoning that naming one proves the caller read the file; but uuids
+are in the JSONL and in archive-search links (`session-<id>.html?uuid=…`),
+so a search link was enough (review on #427). Only **session pages**
+carry a token and the probe scripts (`generate_session` passes
+`probe_token`), so only they can be followed from disk: a combined page,
+with every session's cards, would have let one session's uuid read them
+all under the first design, and stays static from disk (over `serve` it
+follows as ever). `live_probe.js` reads the token into
+`window.__cclProbeToken`; `live_update.js` starts the disk transport
+only on a page that has one, and `live_probe_post.js` posts only to a
+parent that names it. Otherwise it answers `refused`, and the parent
+stops following: the file was rewritten under another install key. A
+guessed-exactly mtime earns `same`, which carries only that mtime.
+A `page` answer also names its theme (whether `#transcript` sits in the
+minimal theme's `.mn-stage`): an update replaces only `#transcript` and
+`#title`, not the styles or the shell, so a render in the other theme stops following as `refused` does,
+and the button asks for a reload (review on #427). A frame that loads
+and posts nothing (a page written without the probe, because `watch`
+couldn't read the key; a file missing mid-rewrite) counts as unanswered
+a second after its `load`, or at the 30 s give-up. An answering page
+stops its own load, and no engine fires the frame's `load` then
+(measured in Chromium, Firefox and WebKit); since nothing promises it,
+or orders a posted answer against that timer, a probe counted as
+unanswered frees the slot but keeps listening until the next probe
+starts, and an answer landing then is taken as usual. Three in a row
+mark the follow *lost*: `.live-lost` on the button, `active` false (so
+the minimal theme stops drawing agents as running), probes every 5 s.
+Any answer clears it. Lost, back, and beyond following are also said
+through a visually hidden `role=status` region (`.live-status`), since
+focus is usually in the transcript, not on the button.
+`document.referrer` would have been the natural check, but it is empty
+inside the frame in Firefox and WebKit. An `http(s)` page cannot frame a
+`file://` one at all.
+
+*The one-second mtime.* `lastModified` has one-second granularity, so a
+rewrite inside the second of the last read leaves it unchanged — the
+same trap as `Last-Modified` above. Until the render on screen was read
+at least two seconds after its mtime, the parent sends no mtime, forcing
+a full read, and compares the posted render with the last one itself.
+"When it was read" is the clock as the probe that brought that render
+went out (the frame reads the file after it); only a render moves it,
+never a `same` answer, and the page as loaded has none, so the first
+probe after pressing follow always reads in full. The clock *now* is not
+enough: a page hidden straight after a read stops probing, and a
+same-second rewrite meanwhile would be answered `same` when it is shown
+again seconds later, and missed for good
+(`test_a_same_second_rewrite_while_hidden_is_seen`; the page as loaded,
+`…_before_following_is_seen`).
+
+*The first read.* The page on screen came from the file at load, not
+from a frame, so there is no posted render to compare the first read
+with. It is compared on what decoration never rewrites — card count,
+the last card's uuid, `#title`'s text — and adopted without an update
+when they match. A false match (a rewrite before following that kept
+all three) shows at the next change.
+
+*WebKit* reports the **current time** as a `file://` document's
+`lastModified`, so the `same` answer never comes and every poll is a
+full read (~155ms of main thread on the 5.8MB page, against ~17ms in
+Chromium and Firefox). Three reads in a row where the mtime moved but
+the render did not switch the poll to every 5 s. Chromium and Firefox
+reach that state only through rewrites that leave the render as it
+was, and a `same` answer in between resets the count.
+
+`claudeLogLiveUpdate.active` says whether the page is being kept
+current — always when served, from disk only while followed — and the
+minimal theme draws an unreturned agent as *running* only then; a
+`claudelog:live` event on `document` makes it redraw when follow is
+pressed or released (minimal-theme.md § 8).
+
+Verified in Chromium 156, Firefox 157 and WebKit 27.2
+(`test/test_follow_from_disk.py`, whose Firefox and WebKit case skips
+where those engines are not installed — CI installs Chromium only).
+Playwright's WebKit is not Safari, which adds local-file restrictions of
+its own.
 
 
 ### 2.16 Parsed-entry store
@@ -2266,7 +2383,7 @@ Only turns that ended within `TURN_HORIZON_HOURS` (24) are sent; the rest
 are counted in `earlierTurns`. Each sent turn carries `SNIPPET_CHARS`
 (200) of its prompt and of how it ended, which the strip's markers show
 on hover. The last prompt, and the last message when Claude wrote it,
-carry `html` *in place of* `text` (the data file is reloaded every 15 s,
+carry `html` *in place of* `text` (the data file is reloaded every 3 s,
 so it holds one form, not both): the clipped text rendered by
 `render_user_markdown` / `render_markdown`, the session pages' escaping
 pipeline (§ 2.17). Tool lines and errors stay plain `text`.
@@ -2366,13 +2483,49 @@ session's file, but nothing writes it. The watch's per-tick refresh
 **Self-refresh on `file://`.** A page opened as a file cannot `fetch`
 (see `live_update.js`), but it can add a `<script>`. So `recent.html`
 holds no data at all: it loads `recent-data.js` with a plain script tag
-on open, then re-adds `<script src="recent-data.js?t=…">` every 15 s. The
+on open, then re-adds `<script src="recent-data.js?t=…">` every 3 s
+(while the tab is visible). A reload costs ~2ms on a real archive's
+4.9KB of data and 14–26ms at the 2.16MB the caps allow (60 sessions,
+each at every cap), headless Chromium/Firefox/WebKit medians, so it
+reloads unconditionally: under 1% of a core either way, with no change
+detection to get wrong. (Reading the page through a frame of itself,
+as a transcript page followed from disk does, measured dearer at every
+size but the largest, and would put the data in the page.) The
 file calls `window.__cclRecent(payload)` (its JSON made by `payload_json`,
 which escapes `<`), and the page redraws its rows in place, keeping open
 rows, filters and scroll. Keeping data out of the page also makes the
 page identical from run to run, which the parallel-vs-sequential output
 test relies on; only the data file carries the time it was written (the
-page's staleness notice reads it). Row content is built with DOM APIs and
+page's staleness notice reads it).
+
+**The data is encrypted.** A script is run, not read, so same-origin
+rules don't protect it: any page can include `recent-data.js` and
+receive what it passes to whatever `window.__cclRecent` that page
+defines. Measured on `main` before this: a page on another site got
+every recent session from a running `serve`, and a page saved in
+`~/Downloads` got them from disk by relative path
+(`../.claude/projects/recent-data.js`) in Chromium and WebKit. So the
+file passes ciphertext (`recent.recent_data_js`,
+`page_key.encrypt_recent`), and `recent.html` carries the key in
+`<meta name='ccl-recent-key'>`: `page_key.recent_key()`, derived from
+the install key (§ 2.19), so the page is still the same on every run.
+Another page can run the file but not read the key: an HTML file can't
+be run as a script, and `file://` pages can't read each other. The
+cipher is the standard library's, since Python has no AES without a
+dependency: an HKDF-SHA256 keystream (salt: a fresh 16-byte nonce per
+write, info: the chunk's 4-byte index) in chunks of 8,160 bytes, the
+longest output HKDF has, XORed in. WebCrypto derives each chunk in one
+call in every engine (PBKDF2 was the first choice, but Firefox refuses
+its outputs past 256 bytes). It takes 0.8 ms to encrypt a typical 5 KB
+payload and 88 ms at the 2.5 MB cap; decrypting the cap takes 7–19 ms.
+Confidentiality is all it gives, which is the threat: a page that could
+*write* the file could do worse. `recent.js` decrypts a string payload
+and still applies an object at once (the browser tests drive it that
+way); loads decrypt asynchronously, so only the newest is drawn, and
+the empty state waits while one is pending. A page whose key no longer
+matches (the key file was replaced) logs an error until the next full
+run rewrites it. `test_recent_secrecy_browser.py` replays the
+`~/Downloads` page in every engine installed. Row content is built with DOM APIs and
 `textContent`: titles and messages are untrusted transcript text. The one
 exception is the payload's `html` fields, which go in through a single
 helper (`renderedMarkdown` in `recent.js`) and nowhere else; they carry
@@ -2434,6 +2587,38 @@ a real archive a tick's rewrite went from 0.53s (9 sessions, 22k
 entries) to about 10ms.
 
 ---
+
+### 2.19 The install key
+
+`page_key.py` holds one random 32-byte key per install, for the two things
+the output must keep from other local pages: the recent page's data
+(§ 2.18) and a session page's probe token (§ 2.15). A page opened from
+`file://` can't fetch another file, but it can run one as a script and
+frame another page, and an HTML file the reader opens locally (a
+download, an attachment) is all an attacker needs.
+
+The key lives in `~/.claude-code-log/page.key` (64 hex digits, mode
+0600), or wherever `CLAUDE_CODE_LOG_KEY_FILE` says. It is made on first
+use with `O_EXCL`, so render workers starting at once agree on one; a
+file that holds no key is an error rather than a reason to make a new
+one, since every page made with the old key would stop working. It is
+never written into the output, and a local page can't read it: it is
+neither script nor page. What the pages carry is derived from it with
+HMAC-SHA256 under a label per use (`probe:<session id>`,
+`recent-data`), so the pages are the same on every run and what one
+page holds reveals nothing of the rest. The tests fix the key
+(`test/test_data/page-key.txt`, set in `conftest.py`), so snapshots and
+the equivalence checks see the same pages in every worker.
+
+Without a key to be had (a read-only home, a damaged file), nothing
+fails: session pages are written without a token, static from disk like
+a combined page (`probe_token_or_none` says so once on stderr), and the
+recent page's write is reported and skipped, as any failure there is.
+
+Deleting the key file makes a new key on the next run. Pages written
+since then carry the new key; a session page still open from before
+gets `refused` and stops following, and `recent.html` can't read its
+data until the next full run rewrites it.
 
 ## 3. Data lifecycle
 
