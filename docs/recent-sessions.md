@@ -110,6 +110,24 @@ The watch refreshes `recent-data.js` when the watched project sits in the
 default projects directory and no `--output` is given; with a custom
 output tree, a full run (or `watch --all-projects`) keeps it current.
 
+To follow the page from a phone or another computer, serve it over your
+tailnet: see
+[From your other devices, over Tailscale](archive-search.md#from-your-other-devices-over-tailscale).
+
+### Who can read it
+
+Any page can load a script, not just this one, so `recent-data.js` is
+encrypted: a web page, or an HTML file you open from your downloads,
+could otherwise include it and read your recent sessions. Only
+`recent.html` holds the key that decrypts it.
+
+That key comes from a key file claude-code-log makes the first time it
+needs one, `~/.claude-code-log/page.key`, readable only by you
+(`CLAUDE_CODE_LOG_KEY_FILE` moves it). Keep it: if you delete it, a new
+one is made, and the recent page can't read its data until the next full
+run rewrites the page. Session pages use the same key, for following a
+page from disk.
+
 ## With foldyard
 
 When agents run in [foldyard](https://github.com/twistco/foldyard) boxes,

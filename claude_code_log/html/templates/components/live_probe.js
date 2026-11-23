@@ -1,7 +1,7 @@
 // Following from disk, the framed half (head). The parent half is in
 // live_update.js; this is the only part that runs on every page load, so
 // it does nothing unless this page was loaded *by a copy of itself* to
-// report whether it changed: framed, with `#ccl-probe=<lastModified>~<uuid>`.
+// report whether it changed: framed, with `#ccl-probe=<lastModified>~<token>`.
 //
 // A `file://` page cannot fetch anything, not even itself, but it can
 // frame itself, and the framed copy can `postMessage` what it holds back
@@ -12,11 +12,16 @@
 // to live_probe_post.js, right after #transcript, which posts the new
 // render and stops the load there.
 //
-// Only session pages carry these scripts (HtmlRenderer.generate,
-// `follow_from_disk`), and live_update.js offers following from disk only
-// where they are: the combined page holds every session's cards, so a
-// page holding one session's uuid could read them all through it.
-window.__cclProbeable = true;
+// Only session pages carry these scripts, each with its own token in
+// <meta name='ccl-probe-token'> (page_key.probe_token: derived from a key
+// of this install's, found in this page and nowhere else, the same every
+// time watch rewrites it). The framed copy posts its transcript only to a
+// parent that names it (live_probe_post.js), and live_update.js follows
+// from disk only on a page that has one. The meta sits before this script.
+window.__cclProbeToken = (function () {
+    const meta = document.querySelector("meta[name='ccl-probe-token']");
+    return (meta && meta.getAttribute('content')) || '';
+})();
 (function () {
     const m = /[#&]ccl-probe=([^&]*)/.exec(location.hash);
     if (!m || window.parent === window) return;

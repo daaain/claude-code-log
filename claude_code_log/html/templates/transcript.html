@@ -3,7 +3,8 @@
 <html lang='en'>
 
 <head>
-    <meta charset='UTF-8'>{% if follow_from_disk %}
+    <meta charset='UTF-8'>{% if probe_token %}
+    <meta name='ccl-probe-token' content='{{ probe_token }}'>
     <script>
 {% include 'components/live_probe.js' %}
     </script>{% endif %}
@@ -322,7 +323,7 @@
     <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
     <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
     <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>{% endif %}
-{% if follow_from_disk %}
+{% if probe_token %}
     <script>
 {% include 'components/live_probe_post.js' %}
     </script>{% endif %}

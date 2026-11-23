@@ -35,9 +35,9 @@
     const overHttp = location.protocol === 'http:' || location.protocol === 'https:';
     // A framed page is a probe (live_probe.js halts this script there);
     // the check keeps any other framing from starting a transport. Only a
-    // page that can answer its own probes (live_probe.js, session pages)
-    // follows from disk.
-    const fromDisk = location.protocol === 'file:' && window.parent === window && !!window.__cclProbeable;
+    // page that can answer its own probes (live_probe.js: a session page,
+    // with its token) follows from disk.
+    const fromDisk = location.protocol === 'file:' && window.parent === window && !!window.__cclProbeToken;
     if (!overHttp && !fromDisk) return;
 
     // A metadata HEAD costs ~1ms and carries no body while nothing
@@ -47,15 +47,9 @@
     const POLL_MS = 1000;
     const container = () => document.getElementById('transcript');
     if (!container()) return;
-    // The framed copy answers only a parent that names one of its cards
-    // (live_probe_post.js): a page with no card has nothing to follow.
-    const diskToken = fromDisk ? firstCardUuid() : '';
-    if (fromDisk && !diskToken) return;
-
-    function firstCardUuid() {
-        const card = container().querySelector('.message[data-uuid]');
-        return card ? card.getAttribute('data-uuid') : '';
-    }
+    // The framed copy answers only a parent that names its token
+    // (live_probe_post.js), which this page holds as the file it came from.
+    const diskToken = fromDisk ? window.__cclProbeToken : '';
 
     // The page's identity as of the last poll. `Last-Modified` alone is
     // not enough: HTTP dates have **one-second granularity**, so two
@@ -79,6 +73,17 @@
     let following = false;
     // The disk transport's state, beside the http one's: see `diskProbe`.
     let diskRefused = false;
+    // Probes in a row that got no answer, and whether that has gone on long
+    // enough to show. A page written without the probe (a `watch` that
+    // couldn't read the install key) loads whole and never answers, nor
+    // does a file missing mid-rewrite; only the second recovers by itself,
+    // so the probes go on, less often.
+    const DISK_LOST_AFTER = 3;
+    let diskMisses = 0;
+    let diskLost = false;
+    // The last probe counted as unanswered, still listening until the next
+    // one starts (see `unanswered` in `diskProbe`).
+    let diskLingering = null;
 
     // ---- state that a swap would otherwise destroy -----------------------
 
@@ -441,11 +446,14 @@
         followBtn.setAttribute('aria-pressed', following ? 'true' : 'false');
         followBtn.dataset.unseen = String(unseen);
         if (fromDisk) {
+            followBtn.classList.toggle('live-lost', following && diskLost);
             followBtn.title = diskRefused
                 ? 'This page changed beyond following — reload it'
-                : following
-                  ? 'Following this file as it is rewritten — click to stop'
-                  : 'Follow this file while `claude-code-log watch` rewrites it';
+                : following && diskLost
+                  ? 'This file has stopped answering — still trying; reload it if it stays like this'
+                  : following
+                    ? 'Following this file as it is rewritten — click to stop'
+                    : 'Follow this file while `claude-code-log watch` rewrites it';
         } else {
             followBtn.title = following
                 ? 'Following new messages — click to stop'
@@ -461,6 +469,11 @@
         if (fromDisk) {
             if (following) diskStart();
             else diskStop();
+            say(
+                diskRefused
+                    ? 'Following stopped: this page changed beyond following — reload it to follow it again.'
+                    : ''
+            );
             // From disk this is the page becoming live, or ceasing to be
             // (`active` below); the minimal theme redraws what it shows as
             // running.
@@ -468,6 +481,20 @@
         }
         renderFollowBtn();
         if (following) scrollToEnd();
+    }
+
+    // What the follow says aloud when it changes by itself — lost, back, or
+    // beyond following — since focus is usually in the transcript, not on
+    // the button whose tooltip says it.
+    let liveStatus = null;
+    if (fromDisk && followBtn) {
+        liveStatus = document.createElement('div');
+        liveStatus.className = 'live-status';
+        liveStatus.setAttribute('role', 'status');
+        document.body.appendChild(liveStatus);
+    }
+    function say(text) {
+        if (liveStatus) liveStatus.textContent = text;
     }
 
     if (followBtn) {
@@ -634,7 +661,7 @@
     let diskTimer = 0;
     let diskCancel = null;
     // The mtime of the render on screen, and that render as the frame posted
-    // it (null until the first read since following started).
+    // it (null until the first read since the page loaded).
     let diskKnown = document.lastModified;
     let diskSeen = null;
     // What diskSeen holds after an update failed part-way: equal to no
@@ -679,14 +706,18 @@
         ].join('\n');
     }
 
+    // As live_probe_post.js tells it: the minimal theme stages the transcript.
+    const pageTheme = container().closest('.mn-stage') ? 'minimal' : 'classic';
+
     async function diskAnswer(answer, sentAt) {
         if (answer.cclProbe === 'same') {
             diskStill = 0;
             return;
         }
-        if (answer.cclProbe === 'refused') {
-            // The file no longer holds the card we named: its history was
-            // rewritten under us. Only a reload can follow it from here.
+        // The file's token is no longer ours (it was rewritten under another
+        // install key), or it was rewritten in the other theme, whose styles
+        // and shell an update doesn't carry. Only a reload can follow it.
+        if (answer.cclProbe === 'refused' || (answer.cclProbe === 'page' && answer.theme !== pageTheme)) {
             diskRefused = true;
             setFollowing(false);
             return;
@@ -735,25 +766,43 @@
         adopt();
     }
 
+    function diskLostChanged(lost) {
+        if (diskLost === lost) return;
+        diskLost = lost;
+        renderFollowBtn();
+        say(lost ? 'This file has stopped answering — still trying to follow it.' : 'Following again.');
+        // Kept current or not: the minimal theme draws agents as running
+        // only while it is (`active` below).
+        document.dispatchEvent(new Event('claudelog:live'));
+        diskSchedule();
+    }
+
     // One probe at a time, as `poll` is one request at a time, and for the
     // same reason: an older render must never land after a newer one.
     function diskProbe() {
         if (!fromDisk || !following || stopped || diskCancel || document.hidden) return;
+        if (diskLingering) diskLingering();
         const frame = document.createElement('iframe');
         frame.style.display = 'none';
         frame.setAttribute('aria-hidden', 'true');
         frame.tabIndex = -1;
         let settled = false;
+        let counted = false;
+        let late = 0;
         function settle() {
             settled = true;
             window.removeEventListener('message', onMessage);
             clearTimeout(giveUp);
+            clearTimeout(late);
             frame.remove();
         }
         function onMessage(ev) {
             if (settled || ev.source !== frame.contentWindow) return;
             if (!ev.data || typeof ev.data.cclProbe !== 'string') return;
             settle();
+            if (diskLingering === cancel) diskLingering = null;
+            diskMisses = 0;
+            diskLostChanged(false);
             diskAnswer(ev.data, sentAt)
                 .catch(err => console.debug('follow from disk failed', err))
                 .finally(() => {
@@ -762,13 +811,32 @@
         }
         // A file that vanished mid-rewrite, or a frame that never answers,
         // must not wedge the poller.
-        const giveUp = setTimeout(cancel, 30000);
+        const giveUp = setTimeout(unanswered, 30000);
         function cancel() {
             if (!settled) settle();
             if (diskCancel === cancel) diskCancel = null;
+            if (diskLingering === cancel) diskLingering = null;
+        }
+        // Counted once, and the slot freed for the next probe; but the frame
+        // keeps listening until that probe starts. Nothing orders a posted
+        // answer against this deadline's timer, so one can land after it,
+        // and is then taken as any answer is (clearing the miss).
+        function unanswered() {
+            if (settled || counted) return;
+            counted = true;
+            clearTimeout(giveUp);
+            if (diskCancel === cancel) diskCancel = null;
+            diskLingering = cancel;
+            if (++diskMisses >= DISK_LOST_AFTER) diskLostChanged(true);
         }
         diskCancel = cancel;
         window.addEventListener('message', onMessage);
+        // A frame that loaded and posted nothing has no probe to answer
+        // with. An answering page stops its own load, so no engine fires
+        // this for it; should one, the answer is still taken (above).
+        frame.addEventListener('load', () => {
+            if (!settled && !late) late = setTimeout(unanswered, 1000);
+        });
         const known = diskRacy() ? '' : diskKnown;
         const sentAt = Date.now();
         frame.src =
@@ -782,12 +850,18 @@
 
     function diskSchedule() {
         clearInterval(diskTimer);
-        diskTimer = setInterval(diskProbe, diskSlow ? DISK_SLOW_MS : POLL_MS);
+        diskTimer = setInterval(diskProbe, diskSlow || diskLost ? DISK_SLOW_MS : POLL_MS);
     }
 
     function diskStart() {
         diskRefused = false;
-        diskSeen = null;
+        diskMisses = 0;
+        diskLost = false;
+        // The recorded render is kept: nothing changes the page while it
+        // isn't followed, so it still says what is on screen. Only a page
+        // never read since load (null) takes the first-read shortcut;
+        // resetting it here would let a restart take it over a render the
+        // page already holds, or over one an update failed part-way into.
         diskStill = 0;
         diskSchedule();
         diskProbe();
@@ -797,6 +871,7 @@
         clearInterval(diskTimer);
         diskTimer = 0;
         if (diskCancel) diskCancel();
+        if (diskLingering) diskLingering();
     }
 
     // Don't poll a page nobody is looking at.
@@ -817,7 +892,7 @@
         // always is; one from disk only while it is followed. The minimal
         // theme draws an unreturned sub-agent as running only then.
         get active() {
-            return !stopped && (overHttp || following);
+            return !stopped && (overHttp || (following && !diskLost));
         },
         poll: overHttp ? poll : diskProbe,
         stop() {

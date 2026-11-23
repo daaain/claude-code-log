@@ -189,6 +189,165 @@ def test_host_check_also_guards_the_api(server: ArchiveServer) -> None:
     assert status == 421
 
 
+def _fetch_meta(site: str, mode: str, dest: str) -> dict[str, str]:
+    """The `Sec-Fetch-*` headers a browser attaches to a request."""
+    return {"Sec-Fetch-Site": site, "Sec-Fetch-Mode": mode, "Sec-Fetch-Dest": dest}
+
+
+class TestCrossSiteRequests:
+    """Other sites' pages can't make the browser fetch the archive for them.
+
+    The Host check stops DNS rebinding, but not a page that simply names
+    the server: `<script src=".../recent-data.js">` runs the file in the
+    including page, whose own `window.__cclRecent` then receives every
+    recent session. Same-origin rules protect a response only from being
+    *read*, and a script is executed, not read. Browsers say where a
+    request comes from in `Sec-Fetch-Site`, so the server refuses the ones
+    another site's page made.
+    """
+
+    @pytest.mark.parametrize(
+        ("site", "mode", "dest", "path"),
+        [
+            # The leak: another site includes the recent page's data file.
+            ("cross-site", "no-cors", "script", "/index.html"),
+            # A different port on the same machine is the same *site*:
+            # a box's web app forwarded to 127.0.0.1:3000 is one of these.
+            ("same-site", "no-cors", "script", "/index.html"),
+            ("cross-site", "cors", "empty", "/api/ping"),
+            ("cross-site", "no-cors", "image", "/index.html"),
+            # Framing another site's page in would let it dress ours up.
+            ("cross-site", "navigate", "iframe", "/index.html"),
+            ("same-site", "navigate", "iframe", "/index.html"),
+        ],
+    )
+    def test_another_sites_request_is_refused(
+        self, server: ArchiveServer, site: str, mode: str, dest: str, path: str
+    ) -> None:
+        status, body, _ = _get(
+            f"{server.url}{path}", headers=_fetch_meta(site, mode, dest)
+        )
+        assert status == 403
+        assert b"index" not in body
+
+    def test_another_sites_head_is_refused(self, server: ArchiveServer) -> None:
+        request = urllib.request.Request(
+            f"{server.url}/index.html",
+            method="HEAD",
+            headers=_fetch_meta("cross-site", "no-cors", "script"),
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 403
+
+    @pytest.mark.parametrize(
+        ("site", "mode", "dest"),
+        [
+            # The server's own pages loading their data, images, and API.
+            ("same-origin", "no-cors", "script"),
+            ("same-origin", "cors", "empty"),
+            # A typed URL or a bookmark.
+            ("none", "navigate", "document"),
+            # Following a link from elsewhere into the archive: the linking
+            # page can't read what opens, so there is nothing to refuse.
+            ("cross-site", "navigate", "document"),
+            ("same-site", "navigate", "document"),
+        ],
+    )
+    def test_own_and_top_level_requests_are_served(
+        self, server: ArchiveServer, site: str, mode: str, dest: str
+    ) -> None:
+        status, _, _ = _get(
+            f"{server.url}/index.html", headers=_fetch_meta(site, mode, dest)
+        )
+        assert status == 200
+
+    def test_a_request_without_fetch_metadata_is_served(
+        self, server: ArchiveServer
+    ) -> None:
+        # curl, scripts, and browsers too old to send it.
+        status, _, _ = _get(f"{server.url}/index.html")
+        assert status == 200
+
+    def test_answers_vary_on_where_the_request_came_from(
+        self, server: ArchiveServer
+    ) -> None:
+        """A cache must not hand our own page's copy to another page: a
+        page on another loopback port shares our cache partition
+        (test_server_cross_site_browser.py replays it). 304s too."""
+        vary = "Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest"
+        status, _, headers = _get(f"{server.url}/index.html")
+        assert status == 200 and headers.get("Vary") == vary
+        status, _, again = _get(
+            f"{server.url}/index.html",
+            headers={"If-Modified-Since": headers["Last-Modified"]},
+        )
+        assert status == 304 and again.get("Vary") == vary
+
+
+class TestExtraHosts:
+    """Names besides loopback the server answers to, for a reverse proxy.
+
+    `tailscale serve` forwards to loopback but keeps the browser's `Host`
+    (the machine's `*.ts.net` name), so without an opt-in every proxied
+    request is a 421. Allowing one named host must not loosen the check
+    for anything else.
+    """
+
+    TAILNET = "box.tailnet-1234.ts.net"
+
+    @pytest.fixture
+    def proxied(self, archive: Path):
+        with ArchiveServer(archive, port=0, extra_hosts=[self.TAILNET]) as srv:
+            yield srv
+
+    @pytest.mark.parametrize(
+        "host",
+        [TAILNET, f"{TAILNET}:443", f"{TAILNET}:8443", TAILNET.upper()],
+    )
+    def test_an_allowed_host_is_served(self, proxied: ArchiveServer, host: str) -> None:
+        status, body, _ = _get(f"{proxied.url}/index.html", headers={"Host": host})
+        assert status == 200
+        assert b"index" in body
+
+    def test_an_allowed_host_reaches_the_api(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(f"{proxied.url}/api/ping", headers={"Host": self.TAILNET})
+        assert status == 200
+
+    def test_an_allowed_host_can_head(self, proxied: ArchiveServer) -> None:
+        # live_update.js polls with HEAD, so the proxied page needs it too.
+        request = urllib.request.Request(
+            f"{proxied.url}/index.html", method="HEAD", headers={"Host": self.TAILNET}
+        )
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 200
+            assert response.headers[REVISION_HEADER]
+
+    def test_other_hosts_are_still_refused(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(
+            f"{proxied.url}/index.html", headers={"Host": "attacker.example.com"}
+        )
+        assert status == 421
+
+    def test_a_suffix_match_is_not_enough(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(
+            f"{proxied.url}/index.html",
+            headers={"Host": f"evil-{self.TAILNET}"},
+        )
+        assert status == 421
+
+    def test_loopback_still_works(self, proxied: ArchiveServer) -> None:
+        status, _, _ = _get(f"{proxied.url}/index.html")
+        assert status == 200
+
+    def test_an_allowed_host_given_in_mixed_case_matches(self, archive: Path) -> None:
+        with ArchiveServer(archive, port=0, extra_hosts=["Box.Example.TS.net"]) as srv:
+            status, _, _ = _get(
+                f"{srv.url}/index.html", headers={"Host": "box.example.ts.net"}
+            )
+        assert status == 200
+
+
 def test_conditional_get_returns_304(server: ArchiveServer) -> None:
     """2.26 GB of pages in a real archive — 304s are worth having."""
     status, _, headers = _get(f"{server.url}/index.html")

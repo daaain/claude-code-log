@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from claude_code_log.html.renderer import generate_recent_html
-from claude_code_log.recent import payload_json, recent_data_js
+from claude_code_log.recent import payload_json, read_recent_data, recent_data_js
 
 COMPONENTS = (
     Path(__file__).parent.parent
@@ -78,10 +78,29 @@ def test_message_text_cannot_break_out_of_the_data_file() -> None:
     data = recent_data_js(payload)
     assert "<" not in data
     # The JSON keeps the text, with "<" escaped, and parses back unchanged.
-    assert "\\u003c/script>\\u003cimg" in data
     body = payload_json(payload)
-    assert body in data
+    assert "\\u003c/script>\\u003cimg" in body
+    assert read_recent_data(data) == json.loads(body)
     assert json.loads(body)["sessions"][0]["title"] == EVIL
+
+
+def test_the_data_file_holds_no_transcript_text() -> None:
+    """Any page can run recent-data.js (a <script> tag on any site while
+    serve runs, or a local HTML file by relative path): what it passes must
+    mean nothing without the key, which only recent.html holds."""
+    payload = _payload(title="a very particular title")
+    data = recent_data_js(payload)
+    for text in ("particular", "8b04d7c2", "foldyard"):
+        assert text not in data
+    assert recent_data_js(payload) != data  # a fresh nonce each write
+    assert read_recent_data(data) == json.loads(payload_json(payload))
+
+
+def test_the_page_carries_the_key_to_its_data() -> None:
+    from claude_code_log.page_key import recent_key
+
+    html = generate_recent_html()
+    assert f"<meta name='ccl-recent-key' content='{recent_key().hex()}'>" in html
 
 
 def test_page_hooks_up_the_refresh() -> None:

@@ -104,6 +104,46 @@ _SHIFTABLE_CLOCK = """
 """
 
 
+# Hands every `message` event on the top window to its listeners late, by
+# `window.__delayMessages` ms, and has every probe frame report `load` at
+# once: an answer the event loop ran after the deadline a load starts.
+_DELAY_MESSAGES = """
+(() => {
+  if (window.top !== window) return;
+  window.__delayMessages = 0;
+  const create = Document.prototype.createElement;
+  Document.prototype.createElement = function (tag, ...rest) {
+    const el = create.call(this, tag, ...rest);
+    if (String(tag).toLowerCase() === 'iframe' && window.__delayMessages) {
+      setTimeout(() => el.dispatchEvent(new Event('load')), 50);
+    }
+    return el;
+  };
+  const add = window.addEventListener, remove = window.removeEventListener;
+  const late = new Map();
+  window.addEventListener = function (type, fn, opts) {
+    if (type !== 'message') return add.call(this, type, fn, opts);
+    const wrapped = ev => {
+      if (window.__delayMessages) setTimeout(() => fn(ev), window.__delayMessages);
+      else fn(ev);
+    };
+    late.set(fn, wrapped);
+    return add.call(this, type, wrapped, opts);
+  };
+  window.removeEventListener = function (type, fn, opts) {
+    return remove.call(this, type, (type === 'message' && late.get(fn)) || fn, opts);
+  };
+})();
+"""
+
+
+def _status(page: Any) -> str:
+    """What the follow last announced, through its `role=status` region."""
+    return page.evaluate(
+        "(document.querySelector('[role=status].live-status') || {}).textContent || ''"
+    )
+
+
 def _has_text(text: str) -> str:
     return f"() => document.getElementById('transcript').textContent.includes({text!r})"
 
@@ -303,6 +343,72 @@ class TestFollowFromDisk:
             timeout=10000,
         )
 
+    def test_a_restart_after_a_failed_update_still_repairs_the_page(
+        self, page, tmp_path
+    ) -> None:
+        """Pressing follow again after an update failed part-way must not
+        take the first-read shortcut: the half-edited page can still match
+        the file by card count, last card and title, and would be taken as
+        on screen, wrong card and all."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        page.locator("#followUpdates").click()
+        _append(projects, jsonl, "BASELINE")
+        page.wait_for_function(_has_text("BASELINE"), timeout=10000)
+        before = html.read_text(encoding="utf-8")
+        page.evaluate(
+            """() => {
+                const importNode = Document.prototype.importNode;
+                window.__imports = 0;
+                Document.prototype.importNode = function (...args) {
+                    if (++window.__imports % 2 === 0) {
+                        // Stop following right here, so no retry can
+                        // repair the page before the restart does.
+                        window.claudeLogLiveUpdate.setFollowing(false);
+                        throw new Error('part-way');
+                    }
+                    return importNode.apply(this, args);
+                };
+            }"""
+        )
+        html.write_text(
+            before.replace("seed answer 3 ", "EDITED-3 ").replace(
+                "seed answer 5 ", "EDITED-5 "
+            ),
+            encoding="utf-8",
+        )
+        page.wait_for_function(_has_text("EDITED-"), timeout=10000)
+        page.wait_for_function("window.__imports >= 2", timeout=10000)
+        # Following stopped at the failure; put the file back, follow again.
+        page.wait_for_function("!window.claudeLogLiveUpdate.active")
+        time.sleep(1.1)
+        html.write_text(before, encoding="utf-8")
+        page.locator("#followUpdates").click()
+        page.wait_for_function(
+            "() => !document.getElementById('transcript').textContent.includes('EDITED-')",
+            timeout=10000,
+        )
+
+    def test_a_restart_after_a_good_update_compares_with_it(
+        self, page, tmp_path
+    ) -> None:
+        """Once a read has been applied, the page holds that render, and a
+        restart must compare with it, not take the first-read shortcut: an
+        edit to an earlier card while follow was off keeps the card count,
+        the last card and the title, and would be taken as on screen."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        page.locator("#followUpdates").click()
+        _append(projects, jsonl, "APPLIED")
+        page.wait_for_function(_has_text("APPLIED"), timeout=10000)
+        page.locator("#followUpdates").click()
+        page.wait_for_function("!window.claudeLogLiveUpdate.active")
+        time.sleep(1.1)
+        text = html.read_text(encoding="utf-8")
+        html.write_text(text.replace("seed answer 3 ", "WHILE-OFF "), encoding="utf-8")
+        page.locator("#followUpdates").click()
+        page.wait_for_function(_has_text("WHILE-OFF"), timeout=10000)
+
     def test_a_same_second_rewrite_before_following_is_seen(
         self, page, tmp_path
     ) -> None:
@@ -321,13 +427,24 @@ class TestFollowFromDisk:
     def test_another_page_cannot_read_it_through_the_probe(
         self, page, tmp_path
     ) -> None:
-        """The framed copy posts its transcript only to a parent that names one
-        of its cards. A local page that frames it learns at most the mtime it
-        already guessed exactly — never the content."""
-        _projects, _jsonl, html = _archive(tmp_path)
+        """The framed copy posts its transcript only to a parent that names its
+        token, which is in that page and nowhere else. A local page that
+        frames it learns at most the mtime it already guessed exactly —
+        never the content. Not even with a uuid of one of its cards, which
+        an archive-search link carries (``?uuid=``, search.py), nor with
+        another session page's token."""
+        _projects, jsonl, html = _archive(tmp_path)
         page.goto(html.as_uri())
         lm = page.evaluate("document.lastModified")
+        uuid = page.evaluate(
+            "document.querySelector('#transcript .message[data-uuid]').dataset.uuid"
+        )
+        own = page.evaluate("window.__cclProbeToken")
+        assert len(own) == 32 and own not in jsonl.read_text(encoding="utf-8")
         page.goto("about:blank")
+        from claude_code_log.page_key import probe_token
+
+        other = probe_token("another-session")
 
         attacker = tmp_path / "elsewhere" / "evil.html"
         attacker.parent.mkdir()
@@ -346,13 +463,112 @@ window.frameIt = (hash) => new Promise(resolve => {
             encoding="utf-8",
         )
         page.goto(attacker.as_uri())
-        for guess in ["~", "~not-a-card", "~" + "0" * 36, lm + "~"]:
+        guesses = ["~", "~not-a-card", "~" + "0" * 36, lm + "~", "~" + uuid]
+        for guess in guesses + [lm + "~" + uuid, "~" + other]:
             page.evaluate("(h) => window.frameIt(h)", guess)
         got = page.evaluate("window.got")
         assert all(m.get("cclProbe") in ("refused", "same") for m in got), got
         assert not any("html" in m for m in got), "the transcript reached another page"
         # Guessing the mtime exactly earns `same`, which carries only that mtime.
         assert {"cclProbe": "same", "lm": lm} in got
+
+    @pytest.mark.parametrize(
+        "was,now", [("classic", "minimal"), ("minimal", "classic")]
+    )
+    def test_a_rewrite_in_another_theme_asks_for_a_reload(
+        self, page, tmp_path, was, now
+    ) -> None:
+        """An update replaces the transcript and the title, not the styles,
+        the body's class or the shell around them, which differ by theme. So
+        a page that `watch` rewrote in the other theme is not patched into
+        this one: following stops and the button says to reload."""
+        projects, jsonl, html = _archive(tmp_path, was)
+        errors = _open(page, html)
+        follow = page.locator("#followUpdates")
+        follow.click()
+        page.wait_for_function("window.__frames >= 2", timeout=10000)
+
+        _append(projects, jsonl, "OTHER-THEME", now)
+        page.wait_for_function(
+            "document.getElementById('followUpdates').getAttribute('aria-pressed') === 'false'",
+            timeout=15000,
+        )
+        assert "reload" in (follow.get_attribute("title") or "")
+        # Said aloud as well: focus may be in the transcript, not on the button.
+        assert "reload" in _status(page)
+        assert not page.evaluate(_has_text("OTHER-THEME")), "patched in another theme"
+        assert errors == []
+
+    def test_a_page_that_stops_answering_says_so_and_recovers(
+        self, page, tmp_path, monkeypatch
+    ) -> None:
+        """A `watch` that can't read the install key rewrites the session page
+        without the probe (page_key.probe_token_or_none), and that page never
+        answers: no `refused`, nothing. The button shows the follow as lost,
+        the page stops counting as live, and the probes go on, so the follow
+        picks up again once the page answers."""
+        from claude_code_log import page_key
+
+        projects, jsonl, html = _archive(tmp_path)
+        errors = _open(page, html)
+        follow = page.locator("#followUpdates")
+        follow.click()
+        page.wait_for_function("window.__frames >= 2", timeout=10000)
+        assert page.evaluate("window.claudeLogLiveUpdate.active")
+
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("a file where the key's folder would go")
+        good_key = os.environ[page_key.ENV_KEY_FILE]
+        monkeypatch.setenv(page_key.ENV_KEY_FILE, str(blocker / "page.key"))
+        page_key.reset()
+        try:
+            _append(projects, jsonl, "NO-PROBE")
+            assert "ccl-probe-token" not in html.read_text(encoding="utf-8")
+            page.wait_for_function(
+                "document.getElementById('followUpdates').classList.contains('live-lost')",
+                timeout=20000,
+            )
+            assert "reload" in (follow.get_attribute("title") or "")
+            assert "stopped answering" in _status(page)
+            assert follow.get_attribute("aria-pressed") == "true", "still trying"
+            assert not page.evaluate("window.claudeLogLiveUpdate.active")
+        finally:
+            monkeypatch.setenv(page_key.ENV_KEY_FILE, good_key)
+            page_key.reset()
+
+        _append(projects, jsonl, "PROBE-BACK")
+        page.wait_for_function(_has_text("PROBE-BACK"), timeout=20000)
+        assert not page.evaluate(
+            "document.getElementById('followUpdates').classList.contains('live-lost')"
+        )
+        assert page.evaluate("window.claudeLogLiveUpdate.active")
+        assert "again" in _status(page)
+        assert errors == []
+
+    def test_an_answer_that_lands_after_the_deadline_still_counts(
+        self, page, tmp_path
+    ) -> None:
+        """No engine fires a frame's `load` once its page has answered (the
+        answer stops the load), but nothing promises that, nor orders the
+        posted answer against the timer a `load` starts. Here every frame
+        reports `load` at once and every answer reaches the page after the
+        one-second deadline: each must still be taken, and no probe counted
+        as unanswered for it."""
+        page.add_init_script(_DELAY_MESSAGES)
+        projects, jsonl, html = _archive(tmp_path)
+        errors = _open(page, html)
+        page.evaluate("window.__delayMessages = 1200")
+        page.locator("#followUpdates").click()
+
+        _append(projects, jsonl, "LATE-ANSWER")
+        page.wait_for_function(_has_text("LATE-ANSWER"), timeout=15000)
+        time.sleep(5)
+        assert not page.evaluate(
+            "document.getElementById('followUpdates').classList.contains('live-lost')"
+        ), "answers that arrived were counted as missing"
+        _append(projects, jsonl, "LATE-AGAIN")
+        page.wait_for_function(_has_text("LATE-AGAIN"), timeout=15000)
+        assert errors == []
 
     def test_the_combined_page_answers_no_probe(self, page, tmp_path) -> None:
         """A card's uuid is no secret from someone holding one session (its

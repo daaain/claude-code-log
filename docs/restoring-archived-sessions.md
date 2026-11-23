@@ -100,6 +100,61 @@ FROM sessions s
 JOIN projects p ON s.project_id = p.id
 ORDER BY s.first_timestamp;
 
--- Export a session's messages
-SELECT content FROM messages WHERE session_id = 'your-session-id' ORDER BY timestamp;
+-- List a session's messages
+SELECT type, timestamp, _uuid FROM messages WHERE session_id = 'your-session-id' ORDER BY timestamp;
 ```
+
+`messages.content` is zlib-compressed JSON, so `sqlite3` shows it as a blob. To
+export a session as JSONL, decompress it in Python. Images aren't in that
+JSON: each is stored once in `image_blobs`, and an image item's `source`
+holds a reference (`{"type": "ref", "digest": …}`) in its place. The
+script puts each image's bytes back, base64-encoded, as the transcript had
+them. It touches only the `source` of an `{"type": "image"}` item, as the
+cache does, so a tool's input or output that happens to look like a
+reference is left alone:
+
+```python
+import base64, json, sqlite3, sys, zlib
+
+db, session_id = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+
+
+def inline(source):
+    row = con.execute(
+        "SELECT media_type, data FROM image_blobs WHERE digest = ?",
+        (source["digest"],),
+    ).fetchone()
+    media_type = source.get("media_type") or (row[0] if row else "")
+    data = base64.b64encode(row[1]).decode("ascii") if row else ""
+    return {"type": "base64", "media_type": media_type, "data": data}
+
+
+def with_images(node):
+    if isinstance(node, list):
+        return [with_images(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {key: with_images(value) for key, value in node.items()}
+    source = node.get("source")
+    if (
+        node.get("type") == "image"
+        and isinstance(source, dict)
+        and source.get("type") == "ref"
+    ):
+        out["source"] = inline(source)
+    return out
+
+
+for (blob,) in con.execute(
+    "SELECT content FROM messages WHERE session_id = ? ORDER BY timestamp",
+    (session_id,),
+):
+    print(json.dumps(with_images(json.loads(zlib.decompress(blob)))))
+```
+
+An image whose bytes the cache no longer holds comes out with empty
+`data`.
+
+To search message bodies, see
+[Searching from a terminal or an agent](archive-search.md#searching-from-a-terminal-or-an-agent).
