@@ -109,6 +109,31 @@ def probe_token(session_id: str) -> str:
     return _derive("probe:" + session_id).hex()[:32]
 
 
+_warned = False
+
+
+def probe_token_or_none(session_id: str) -> Optional[str]:
+    """:func:`probe_token`, or None when there is no key to be had (a key
+    file that can't be made, as under a read-only home, or that holds no
+    key). Following from disk is a convenience: without a token the page
+    is written as a combined page is, static from disk, and the
+    conversion goes on. Said once per process, on stderr."""
+    global _warned
+    try:
+        return probe_token(session_id)
+    except (OSError, ValueError) as exc:
+        if not _warned:
+            _warned = True
+            import sys
+
+            print(
+                f"claude-code-log: session pages can't be followed from disk "
+                f"without a key ({exc})",
+                file=sys.stderr,
+            )
+        return None
+
+
 def recent_key() -> bytes:
     """The key ``recent.html`` carries to decrypt ``recent-data.js``."""
     return _derive("recent-data")
