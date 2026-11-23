@@ -101,3 +101,27 @@ def test_each_write_uses_a_fresh_nonce(key_file: Path) -> None:
     a, b = page_key.encrypt_recent(plain), page_key.encrypt_recent(plain)
     assert a != b
     assert b"secret-session" not in base64.b64decode(a)
+
+
+def test_a_key_that_cannot_be_had_leaves_session_pages_static(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Following from disk is a convenience: a key file that can't be made
+    (a read-only home) or read must not fail the conversion. The session
+    page is then written without the probe, as a combined page is."""
+    from claude_code_log.converter import load_transcript
+    from claude_code_log.html.renderer import HtmlRenderer
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("a file where the key's folder would go")
+    monkeypatch.setenv(page_key.ENV_KEY_FILE, str(blocker / "page.key"))
+    page_key.reset()
+    try:
+        data = Path(__file__).parent / "test_data" / "representative_messages.jsonl"
+        entries = load_transcript(data, silent=True)
+        session_id = next(e.sessionId for e in entries if getattr(e, "sessionId", None))
+        html = HtmlRenderer().generate_session(entries, session_id)
+        assert "ccl-probe-token" not in html
+        assert 'id="transcript"' in html or "id='transcript'" in html
+    finally:
+        page_key.reset()

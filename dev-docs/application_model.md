@@ -2593,6 +2593,11 @@ page holds reveals nothing of the rest. The tests fix the key
 (`test/test_data/page-key.txt`, set in `conftest.py`), so snapshots and
 the equivalence checks see the same pages in every worker.
 
+Without a key to be had (a read-only home, a damaged file), nothing
+fails: session pages are written without a token, static from disk like
+a combined page (`probe_token_or_none` says so once on stderr), and the
+recent page's write is reported and skipped, as any failure there is.
+
 Deleting the key file makes a new key on the next run. Pages written
 since then carry the new key; a session page still open from before
 gets `refused` and stops following, and `recent.html` can't read its

@@ -2079,7 +2079,7 @@ class HtmlRenderer(Renderer):
         suppress_combined_link: bool = False,
     ) -> str:
         """Generate HTML for a single session."""
-        from ..page_key import probe_token
+        from ..page_key import probe_token_or_none
 
         # Filter messages for this session (SummaryTranscriptEntry.sessionId is always None).
         # Also accept entries whose sessionId was rewritten to
@@ -2120,7 +2120,7 @@ class HtmlRenderer(Renderer):
             combined_transcript_link=combined_link,
             output_dir=output_dir,
             session_tree=session_tree,
-            probe_token=probe_token(session_id),
+            probe_token=probe_token_or_none(session_id),
         )
 
     def generate_projects_index(
