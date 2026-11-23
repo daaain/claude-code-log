@@ -306,7 +306,7 @@
     }
 
     // ---- state -----------------------------------------------------
-    const state = { payload: null, filter: 'all', group: false, expanded: new Set() };
+    const state = { payload: null, unreadable: false, filter: 'all', group: false, expanded: new Set() };
     (function restore() {
         try {
             const saved = JSON.parse(window.sessionStorage.getItem(STORE_KEY) || 'null');
@@ -1236,15 +1236,33 @@
         updatedEl.title = payload.generatedAt ? new Date(payload.generatedAt).toString() : '';
         // Old data: say so (a role=status region, so only rewrite it when
         // its text changes, or a screen reader hears it on every tick).
-        const stale = payload.generatedAt && now - payload.generatedAt > STALE_MS;
-        if (staleEl.hidden === Boolean(stale)) staleEl.hidden = !stale;
-        const staleText = stale ? 'Data from ' + ago(payload.generatedAt, now) + ' — is ' : '';
-        if (stale && staleEl.dataset.text !== staleText) {
+        // Data this page can't read (its key changed) says so first.
+        const unreadable = Boolean(state.unreadable);
+        const stale = !unreadable && payload.generatedAt && now - payload.generatedAt > STALE_MS;
+        const notice = unreadable || stale;
+        if (staleEl.hidden === Boolean(notice)) staleEl.hidden = !notice;
+        const staleText = unreadable
+            ? 'unreadable'
+            : stale
+              ? 'Data from ' + ago(payload.generatedAt, now) + ' — is '
+              : '';
+        if (notice && staleEl.dataset.text !== staleText) {
             staleEl.dataset.text = staleText;
-            staleEl.replaceChildren(
-                document.createTextNode(staleText),
-                el('code', '', 'claude-code-log watch'),
-                document.createTextNode(' running?')
+            staleEl.replaceChildren.apply(
+                staleEl,
+                unreadable
+                    ? [
+                          document.createTextNode(
+                              "This page can't read its data: its key has changed since the page was written. Run "
+                          ),
+                          el('code', '', 'claude-code-log'),
+                          document.createTextNode(' to write it again.')
+                      ]
+                    : [
+                          document.createTextNode(staleText),
+                          el('code', '', 'claude-code-log watch'),
+                          document.createTextNode(' running?')
+                      ]
             );
         }
         groupEl.checked = state.group;
@@ -1424,6 +1442,7 @@
         const payload = cleanPayload(raw);
         if (!payload) return;
         state.payload = payload;
+        state.unreadable = false;
         render();
     }
     // Loads decrypt asynchronously; only the newest one's data is drawn.
@@ -1442,8 +1461,13 @@
             })
             .catch(function (err) {
                 // A page older than its data's key (the key file was
-                // replaced): the next full run rewrites this page.
+                // replaced): the next full run rewrites this page. Said on
+                // the page, not only in the console: unread data must not
+                // look like an archive with nothing recent in it.
                 console.error('recent-data.js could not be read; rerun claude-code-log', err);
+                if (seq !== received) return;
+                state.unreadable = true;
+                if (state.payload) render();
             })
             .finally(function () {
                 decrypting--;

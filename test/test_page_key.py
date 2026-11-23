@@ -7,6 +7,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import subprocess
+import sys
 import stat
 from pathlib import Path
 from typing import Iterator
@@ -44,8 +47,35 @@ def test_a_damaged_key_file_is_an_error_not_a_new_key(key_file: Path) -> None:
     """Replacing it silently would strand every page made with the old one."""
     key_file.parent.mkdir(parents=True)
     key_file.write_text("not a key")
-    with pytest.raises(ValueError, match=str(key_file)):
+    with pytest.raises(ValueError, match=re.escape(str(key_file))):
         page_key.install_key()
+
+
+def test_processes_starting_together_agree_on_one_key(key_file: Path) -> None:
+    """Render workers can all reach for the key at once. The file must never
+    be seen half made: one that exists but is still empty read as damaged."""
+    script = (
+        "import time, sys\n"
+        "from claude_code_log import page_key\n"
+        "while time.time() < float(sys.argv[1]): pass\n"
+        "print(page_key.install_key().hex())\n"
+    )
+    import time
+
+    start = str(time.time() + 1.5)
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, start],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(8)
+    ]
+    results = [proc.communicate(timeout=60) for proc in procs]
+    assert all(proc.returncode == 0 for proc in procs), [err for _, err in results]
+    assert len({out.strip() for out, _ in results}) == 1
+    assert bytes.fromhex(results[0][0].strip()) == page_key.install_key()
 
 
 def test_a_probe_token_is_per_session_and_stable(key_file: Path) -> None:

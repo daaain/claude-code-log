@@ -622,7 +622,7 @@
     let diskTimer = 0;
     let diskCancel = null;
     // The mtime of the render on screen, and that render as the frame posted
-    // it (null until the first read since following started).
+    // it (null until the first read since the page loaded).
     let diskKnown = document.lastModified;
     let diskSeen = null;
     // What diskSeen holds after an update failed part-way: equal to no
@@ -775,10 +775,11 @@
 
     function diskStart() {
         diskRefused = false;
-        // A fresh start may take the first-read shortcut (diskSeen null):
-        // unless an update failed part-way, which no restart repairs. The
-        // page then still matches no render, and the first read applies.
-        if (diskSeen !== DISK_UNKNOWN) diskSeen = null;
+        // The recorded render is kept: nothing changes the page while it
+        // isn't followed, so it still says what is on screen. Only a page
+        // never read since load (null) takes the first-read shortcut;
+        // resetting it here would let a restart take it over a render the
+        // page already holds, or over one an update failed part-way into.
         diskStill = 0;
         diskSchedule();
         diskProbe();

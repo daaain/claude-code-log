@@ -65,8 +65,9 @@ def reset() -> None:
 def install_key() -> bytes:
     """The install key: read from :func:`key_path`, made there if missing.
 
-    Made with ``O_EXCL`` so that two processes starting at once (render
-    workers) end up with the same key: the loser reads the winner's. A
+    Published with a hard link (:func:`_make`), so that two processes
+    starting at once (render workers) end up with the same key, and
+    neither ever reads it half written: the loser reads the winner's. A
     file that holds no key is an error, not a reason to make a new one:
     every page made with the old key would stop working.
     """
@@ -79,14 +80,7 @@ def install_key() -> bytes:
 
 def _read_or_make(path: Path) -> bytes:
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            with os.fdopen(fd, "w", encoding="ascii") as fh:
-                fh.write(secrets.token_bytes(KEY_BYTES).hex() + "\n")
+        _make(path)
     text = path.read_text(encoding="ascii", errors="replace").strip()
     try:
         key = bytes.fromhex(text)
@@ -98,6 +92,28 @@ def _read_or_make(path: Path) -> bytes:
             f"({KEY_BYTES * 2} hex digits); remove it to make a new one"
         )
     return key
+
+
+def _make(path: Path) -> None:
+    """Write a new key to ``path``, unless another process got there first.
+
+    Written whole to a file of its own, then linked into place: a hard link
+    fails if the name exists, so only one key is ever published, and never
+    half written (a file created in place exists, empty, before its write,
+    and a process reading it then took it for a damaged key).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(secrets.token_bytes(KEY_BYTES).hex() + "\n")
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass  # another process's key is in place: use it
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _derive(label: str) -> bytes:

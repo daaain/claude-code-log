@@ -104,3 +104,32 @@ def test_in_other_engines(playwright: Any, tmp_path: Path, engine: str) -> None:
         _check(browser.new_page(), recent, evil)
     finally:
         browser.close()
+
+
+def test_data_it_cannot_read_is_said_on_the_page(
+    page: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Data written under another key (the key file was replaced since the
+    page was) must not look like an archive with nothing recent in it."""
+    from claude_code_log import page_key
+
+    recent, _ = _home(tmp_path)
+    other = tmp_path / "other.key"
+    other.write_text(bytes(range(1, 33)).hex(), encoding="ascii")
+    monkeypatch.setenv(page_key.ENV_KEY_FILE, str(other))
+    page_key.reset()
+    try:
+        recent.with_name("recent-data.js").write_text(
+            recent_data_js(
+                {"v": 1, "generatedAt": 1, "sessions": [_session(0, TITLE)]}
+            ),
+            encoding="utf-8",
+        )
+    finally:
+        monkeypatch.undo()
+        page_key.reset()
+    page.goto(recent.as_uri())
+    stale = page.locator("#rc-stale")
+    stale.wait_for(state="visible", timeout=10_000)
+    assert "can't read its data" in stale.text_content()
+    assert TITLE not in page.locator("body").text_content()
