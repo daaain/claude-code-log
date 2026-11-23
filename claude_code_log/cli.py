@@ -2318,6 +2318,33 @@ def convert(
 
 # Registered last, once every subcommand exists, so the default command's
 # --help advertises exactly the subcommands that are really available.
+ENV_ALLOW_HOSTS = "CLAUDE_CODE_LOG_ALLOW_HOSTS"
+
+
+def _split_allow_hosts(
+    _ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Flatten repeated and comma-separated ``--allow-host`` values.
+
+    Refuses anything URL-shaped: the server compares against the `Host`
+    header, so ``https://box.ts.net/`` would silently never match.
+    """
+    hosts: list[str] = []
+    for value in values:
+        for name in value.split(","):
+            name = name.strip()
+            if not name:
+                continue
+            if "/" in name:
+                raise click.BadParameter(
+                    f"{name!r} looks like a URL; pass the bare hostname "
+                    "(e.g. box.tailnet-name.ts.net)",
+                    param=param,
+                )
+            hosts.append(name)
+    return tuple(hosts)
+
+
 @main.command(name="serve")
 @click.option(
     "--port",
@@ -2409,6 +2436,22 @@ def convert(
         "command's --jobs."
     ),
 )
+@click.option(
+    "--allow-host",
+    "allow_hosts",
+    multiple=True,
+    envvar=ENV_ALLOW_HOSTS,
+    callback=_split_allow_hosts,
+    metavar="HOSTNAME",
+    help=(
+        "Also answer requests addressed to HOSTNAME, for a reverse proxy "
+        "that forwards to loopback but keeps the browser's Host header, "
+        "e.g. `tailscale serve`: pass the machine's MagicDNS name "
+        "(box.tailnet-name.ts.net). Repeatable or comma-separated. The "
+        "server still listens on 127.0.0.1 only; anyone the proxy lets in "
+        f"can read the whole archive. Env: {ENV_ALLOW_HOSTS}."
+    ),
+)
 def serve(
     port: int,
     projects_dir: Optional[Path],
@@ -2422,6 +2465,7 @@ def serve(
     theme: Optional[str],
     show_temp_projects: bool,
     jobs: Optional[int],
+    allow_hosts: tuple[str, ...],
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
 
@@ -2480,11 +2524,17 @@ def serve(
 
     api = SearchApi(db_path, default_fields=resolved_search_fields)
     server = ArchiveServer(
-        projects_path, api_routes=api.routes(), host="127.0.0.1", port=port
+        projects_path,
+        api_routes=api.routes(),
+        host="127.0.0.1",
+        port=port,
+        extra_hosts=allow_hosts,
     )
     click.echo(f"Serving {projects_path}")
     click.echo(f"  {server.url}/index.html")
     click.echo(f"  {server.url}/search.html")
+    if allow_hosts:
+        click.echo(f"  Also answering as: {', '.join(allow_hosts)}")
     if not no_index and not fts5_available():
         click.echo(
             "  (this SQLite has no FTS5, so archive search is unavailable)", err=True
