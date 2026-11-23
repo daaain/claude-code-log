@@ -19,13 +19,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from test.host_env import is_host_setting
+from test.host_env import TEST_SETTINGS, is_host_setting
 
 PACKAGE = Path(__file__).resolve().parent.parent / "claude_code_log"
 
 
 def test_no_host_setting_is_visible() -> None:
-    assert [name for name in os.environ if is_host_setting(name)] == []
+    """Only the run's own settings, with its own values (TEST_SETTINGS)."""
+    visible = {name: os.environ[name] for name in os.environ if is_host_setting(name)}
+    assert visible == TEST_SETTINGS
 
 
 def test_settings_read_at_import_time_saw_a_clean_environment() -> None:
@@ -43,6 +45,8 @@ def test_a_poisoned_host_environment_does_not_reach_the_tests() -> None:
         "CLAUDE_CODE_LOG_DEBUG_TIMING": "1",
         "CLAUDE_CODE_LOG_A_SETTING_ADDED_LATER": "1",
         "CODEX_HOME": "/nonexistent/codex-home",
+        # The host's own key must not reach the run either.
+        "CLAUDE_CODE_LOG_KEY_FILE": "/nonexistent/page.key",
     }
     here = Path(__file__)
     result = subprocess.run(

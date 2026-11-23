@@ -321,13 +321,24 @@ class TestFollowFromDisk:
     def test_another_page_cannot_read_it_through_the_probe(
         self, page, tmp_path
     ) -> None:
-        """The framed copy posts its transcript only to a parent that names one
-        of its cards. A local page that frames it learns at most the mtime it
-        already guessed exactly — never the content."""
-        _projects, _jsonl, html = _archive(tmp_path)
+        """The framed copy posts its transcript only to a parent that names its
+        token, which is in that page and nowhere else. A local page that
+        frames it learns at most the mtime it already guessed exactly —
+        never the content. Not even with a uuid of one of its cards, which
+        an archive-search link carries (``?uuid=``, search.py), nor with
+        another session page's token."""
+        _projects, jsonl, html = _archive(tmp_path)
         page.goto(html.as_uri())
         lm = page.evaluate("document.lastModified")
+        uuid = page.evaluate(
+            "document.querySelector('#transcript .message[data-uuid]').dataset.uuid"
+        )
+        own = page.evaluate("window.__cclProbeToken")
+        assert len(own) == 32 and own not in jsonl.read_text(encoding="utf-8")
         page.goto("about:blank")
+        from claude_code_log.page_key import probe_token
+
+        other = probe_token("another-session")
 
         attacker = tmp_path / "elsewhere" / "evil.html"
         attacker.parent.mkdir()
@@ -346,7 +357,8 @@ window.frameIt = (hash) => new Promise(resolve => {
             encoding="utf-8",
         )
         page.goto(attacker.as_uri())
-        for guess in ["~", "~not-a-card", "~" + "0" * 36, lm + "~"]:
+        guesses = ["~", "~not-a-card", "~" + "0" * 36, lm + "~", "~" + uuid]
+        for guess in guesses + [lm + "~" + uuid, "~" + other]:
             page.evaluate("(h) => window.frameIt(h)", guess)
         got = page.evaluate("window.got")
         assert all(m.get("cclProbe") in ("refused", "same") for m in got), got

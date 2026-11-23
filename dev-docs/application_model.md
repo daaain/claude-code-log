@@ -1900,7 +1900,7 @@ what it holds back up — each `file://` document is an opaque origin, so
 the parent can neither read the frame nor address the message to an
 origin, but messages pass. So pressing **follow** (⏬, shown from disk on
 any page with a card) starts a 1 s poll that loads the page's own file
-into a `display:none` iframe (`?t=…#ccl-probe=<lastModified>~<uuid>`),
+into a `display:none` iframe (`?t=…#ccl-probe=<lastModified>~<token>`),
 and releasing it stops the poll; until then nothing runs but two inert
 scripts (3.7KB with their comments; the transport adds 8.8KB to
 `live_update.js`). Two scripts answer inside the frame:
@@ -1927,28 +1927,27 @@ out, in a viewport a pixel wide, and the same read took 1.3s.
 origins, so without a check any local HTML file could frame a
 transcript page at a predictable path (`session-<id>.html`) and read it —
 a channel `file://` otherwise lacks. The frame posts content only to a
-parent that names a card `data-uuid` it holds. Those uuids are random,
-and the page's own links don't carry them (card ids are positional,
-`msg-d-N`), but they are not secret: besides the session's page and
-JSONL, an archive-search result links to its message as
-`session-<id>.html?uuid=…`. So naming one shows the caller holds the
-session or a search link into it, not that it read this file; a key of
-the page's own would close that (review on #427). Any card will do,
-since an out-of-order arrival can render ahead of the first. That is why only **session pages** can be
-followed from disk: a combined page holds every session's cards, so one
-session's uuid would have read them all (raised in review on #427).
-`HtmlRenderer.generate_session` passes `follow_from_disk=True`, which
-includes the two probe scripts; `live_probe.js` sets
-`window.__cclProbeable`, and `live_update.js` starts the disk transport
-only on a page that has it. A combined page from disk is static, as it
-was before; over `serve` it follows as ever. The flag rather than a page
-name, so a page written by `generate` for any other reason (a combined
-or paginated page, a single-file conversion) never answers. Otherwise it answers `refused` (and the
-parent stops following: its history was rewritten). A guessed-exactly
-mtime earns `same`, which carries only that mtime. `document.referrer`
-would have been the natural check, but it is empty inside the frame in
-Firefox and WebKit. An `http(s)` page cannot frame a `file://` one at
-all.
+parent that names the page's **probe token**, in
+`<meta name='ccl-probe-token'>`: `page_key.probe_token(session_id)`, an
+HMAC under the install key (§ 2.19), so it is the same every time
+`watch` rewrites the page, and is found in that page and nowhere else.
+The first design took any card's `data-uuid` as the token, on the
+reasoning that naming one proves the caller read the file; but uuids
+are in the JSONL and in archive-search links (`session-<id>.html?uuid=…`),
+so a search link was enough (review on #427). Only **session pages**
+carry a token and the probe scripts (`generate_session` passes
+`probe_token`), so only they can be followed from disk: a combined page,
+with every session's cards, would have let one session's uuid read them
+all under the first design, and stays static from disk (over `serve` it
+follows as ever). `live_probe.js` reads the token into
+`window.__cclProbeToken`; `live_update.js` starts the disk transport
+only on a page that has one, and `live_probe_post.js` posts only to a
+parent that names it. Otherwise it answers `refused`, and the parent
+stops following: the file was rewritten under another install key. A
+guessed-exactly mtime earns `same`, which carries only that mtime.
+`document.referrer` would have been the natural check, but it is empty
+inside the frame in Firefox and WebKit. An `http(s)` page cannot frame a
+`file://` one at all.
 
 *The one-second mtime.* `lastModified` has one-second granularity, so a
 rewrite inside the second of the last read leaves it unchanged — the
@@ -2480,7 +2479,36 @@ which escapes `<`), and the page redraws its rows in place, keeping open
 rows, filters and scroll. Keeping data out of the page also makes the
 page identical from run to run, which the parallel-vs-sequential output
 test relies on; only the data file carries the time it was written (the
-page's staleness notice reads it). Row content is built with DOM APIs and
+page's staleness notice reads it).
+
+**The data is encrypted.** A script is run, not read, so same-origin
+rules don't protect it: any page can include `recent-data.js` and
+receive what it passes to whatever `window.__cclRecent` that page
+defines. Measured on `main` before this: a page on another site got
+every recent session from a running `serve`, and a page saved in
+`~/Downloads` got them from disk by relative path
+(`../.claude/projects/recent-data.js`) in Chromium and WebKit. So the
+file passes ciphertext (`recent.recent_data_js`,
+`page_key.encrypt_recent`), and `recent.html` carries the key in
+`<meta name='ccl-recent-key'>`: `page_key.recent_key()`, derived from
+the install key (§ 2.19), so the page is still the same on every run.
+Another page can run the file but not read the key: an HTML file can't
+be run as a script, and `file://` pages can't read each other. The
+cipher is the standard library's, since Python has no AES without a
+dependency: an HKDF-SHA256 keystream (salt: a fresh 16-byte nonce per
+write, info: the chunk's 4-byte index) in chunks of 8,160 bytes, the
+longest output HKDF has, XORed in. WebCrypto derives each chunk in one
+call in every engine (PBKDF2 was the first choice, but Firefox refuses
+its outputs past 256 bytes). It takes 0.8 ms to encrypt a typical 5 KB
+payload and 88 ms at the 2.5 MB cap; decrypting the cap takes 7–19 ms.
+Confidentiality is all it gives, which is the threat: a page that could
+*write* the file could do worse. `recent.js` decrypts a string payload
+and still applies an object at once (the browser tests drive it that
+way); loads decrypt asynchronously, so only the newest is drawn, and
+the empty state waits while one is pending. A page whose key no longer
+matches (the key file was replaced) logs an error until the next full
+run rewrites it. `test_recent_secrecy_browser.py` replays the
+`~/Downloads` page in every engine installed. Row content is built with DOM APIs and
 `textContent`: titles and messages are untrusted transcript text. The one
 exception is the payload's `html` fields, which go in through a single
 helper (`renderedMarkdown` in `recent.js`) and nowhere else; they carry
@@ -2542,6 +2570,33 @@ a real archive a tick's rewrite went from 0.53s (9 sessions, 22k
 entries) to about 10ms.
 
 ---
+
+### 2.19 The install key
+
+`page_key.py` holds one random 32-byte key per install, for the two things
+the output must keep from other local pages: the recent page's data
+(§ 2.18) and a session page's probe token (§ 2.15). A page opened from
+`file://` can't fetch another file, but it can run one as a script and
+frame another page, and an HTML file the reader opens locally (a
+download, an attachment) is all an attacker needs.
+
+The key lives in `~/.claude-code-log/page.key` (64 hex digits, mode
+0600), or wherever `CLAUDE_CODE_LOG_KEY_FILE` says. It is made on first
+use with `O_EXCL`, so render workers starting at once agree on one; a
+file that holds no key is an error rather than a reason to make a new
+one, since every page made with the old key would stop working. It is
+never written into the output, and a local page can't read it: it is
+neither script nor page. What the pages carry is derived from it with
+HMAC-SHA256 under a label per use (`probe:<session id>`,
+`recent-data`), so the pages are the same on every run and what one
+page holds reveals nothing of the rest. The tests fix the key
+(`test/test_data/page-key.txt`, set in `conftest.py`), so snapshots and
+the equivalence checks see the same pages in every worker.
+
+Deleting the key file makes a new key on the next run. Pages written
+since then carry the new key; a session page still open from before
+gets `refused` and stops following, and `recent.html` can't read its
+data until the next full run rewrites it.
 
 ## 3. Data lifecycle
 
