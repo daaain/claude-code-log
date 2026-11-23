@@ -1945,6 +1945,16 @@ only on a page that has one, and `live_probe_post.js` posts only to a
 parent that names it. Otherwise it answers `refused`, and the parent
 stops following: the file was rewritten under another install key. A
 guessed-exactly mtime earns `same`, which carries only that mtime.
+A `page` answer also names its theme (whether `#transcript` sits in the
+minimal theme's `.mn-stage`): an update replaces only `#transcript` and
+`#title`, not the styles or the shell, so a render in the other theme stops following as `refused` does,
+and the button asks for a reload (review on #427). A frame that loads
+and posts nothing (a page written without the probe, because `watch`
+couldn't read the key; a file missing mid-rewrite) counts as unanswered
+a second after its `load`, or at the 30 s give-up. Three in a row mark
+the follow *lost*: `.live-lost` on the button, `active` false (so the
+minimal theme stops drawing agents as running), probes every 5 s. Any
+answer clears it.
 `document.referrer` would have been the natural check, but it is empty
 inside the frame in Firefox and WebKit. An `http(s)` page cannot frame a
 `file://` one at all.

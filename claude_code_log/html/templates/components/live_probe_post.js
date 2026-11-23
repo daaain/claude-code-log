@@ -25,6 +25,9 @@
                 cclProbe: 'page',
                 lm: document.lastModified,
                 html: title.outerHTML + transcript.outerHTML,
+                // An update replaces only the transcript and the title, so
+                // a render in the other theme can't be applied to this page.
+                theme: transcript.closest('.mn-stage') ? 'minimal' : 'classic',
                 // What decoration never rewrites, to tell whether this
                 // render is the one already on screen (live_update.js).
                 fingerprint: [

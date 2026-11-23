@@ -1980,6 +1980,13 @@ img.artifact-favicon {
     color: #333;
 }
 
+/* Following from disk, and the file has stopped answering
+   (live_update.js): still trying, but not current. */
+.follow-updates.floating-btn.live-lost {
+    outline: 2px dashed currentColor;
+    outline-offset: -4px;
+}
+
 /* Unseen-message count, as a corner badge so the button keeps the round
    50px footprint the rest of the stack has. */
 .follow-updates[data-unseen]:not([data-unseen="0"])::after {

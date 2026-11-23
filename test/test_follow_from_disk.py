@@ -432,6 +432,75 @@ window.frameIt = (hash) => new Promise(resolve => {
         # Guessing the mtime exactly earns `same`, which carries only that mtime.
         assert {"cclProbe": "same", "lm": lm} in got
 
+    @pytest.mark.parametrize(
+        "was,now", [("classic", "minimal"), ("minimal", "classic")]
+    )
+    def test_a_rewrite_in_another_theme_asks_for_a_reload(
+        self, page, tmp_path, was, now
+    ) -> None:
+        """An update replaces the transcript and the title, not the styles,
+        the body's class or the shell around them, which differ by theme. So
+        a page that `watch` rewrote in the other theme is not patched into
+        this one: following stops and the button says to reload."""
+        projects, jsonl, html = _archive(tmp_path, was)
+        errors = _open(page, html)
+        follow = page.locator("#followUpdates")
+        follow.click()
+        page.wait_for_function("window.__frames >= 2", timeout=10000)
+
+        _append(projects, jsonl, "OTHER-THEME", now)
+        page.wait_for_function(
+            "document.getElementById('followUpdates').getAttribute('aria-pressed') === 'false'",
+            timeout=15000,
+        )
+        assert "reload" in (follow.get_attribute("title") or "")
+        assert not page.evaluate(_has_text("OTHER-THEME")), "patched in another theme"
+        assert errors == []
+
+    def test_a_page_that_stops_answering_says_so_and_recovers(
+        self, page, tmp_path, monkeypatch
+    ) -> None:
+        """A `watch` that can't read the install key rewrites the session page
+        without the probe (page_key.probe_token_or_none), and that page never
+        answers: no `refused`, nothing. The button shows the follow as lost,
+        the page stops counting as live, and the probes go on, so the follow
+        picks up again once the page answers."""
+        from claude_code_log import page_key
+
+        projects, jsonl, html = _archive(tmp_path)
+        errors = _open(page, html)
+        follow = page.locator("#followUpdates")
+        follow.click()
+        page.wait_for_function("window.__frames >= 2", timeout=10000)
+        assert page.evaluate("window.claudeLogLiveUpdate.active")
+
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("a file where the key's folder would go")
+        good_key = os.environ[page_key.ENV_KEY_FILE]
+        monkeypatch.setenv(page_key.ENV_KEY_FILE, str(blocker / "page.key"))
+        page_key.reset()
+        try:
+            _append(projects, jsonl, "NO-PROBE")
+            assert "ccl-probe-token" not in html.read_text(encoding="utf-8")
+            page.wait_for_function(
+                "document.getElementById('followUpdates').classList.contains('live-lost')",
+                timeout=20000,
+            )
+            assert "reload" in (follow.get_attribute("title") or "")
+            assert follow.get_attribute("aria-pressed") == "true", "still trying"
+            assert not page.evaluate("window.claudeLogLiveUpdate.active")
+        finally:
+            monkeypatch.setenv(page_key.ENV_KEY_FILE, good_key)
+            page_key.reset()
+
+        _append(projects, jsonl, "PROBE-BACK")
+        page.wait_for_function(_has_text("PROBE-BACK"), timeout=20000)
+        assert not page.evaluate(
+            "document.getElementById('followUpdates').classList.contains('live-lost')"
+        )
+        assert page.evaluate("window.claudeLogLiveUpdate.active")
+        assert errors == []
+
     def test_the_combined_page_answers_no_probe(self, page, tmp_path) -> None:
         """A card's uuid is no secret from someone holding one session (its
         page or its JSONL), and the combined page holds every session's

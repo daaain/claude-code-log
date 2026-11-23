@@ -107,6 +107,13 @@ comes from the key described in
 which holds every session, does not offer it from disk; under `serve`
 it follows like any other page.
 
+Some rewrites can't be followed in place, and the button says so in
+its tooltip. A page that `watch` rewrote in the other theme, or under a
+new install key, stops following and asks you to reload it. A page that
+stops answering altogether (rewritten by a `watch` that couldn't read
+the key, say) gets a dashed outline on the button: following keeps
+trying every five seconds and picks up again once the page answers.
+
 In Safari (WebKit) every check reads the whole page, because WebKit
 cannot tell whether a local file changed without reading it. Once
 following notices this, it checks every five seconds instead of every
