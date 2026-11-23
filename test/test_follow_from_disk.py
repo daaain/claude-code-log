@@ -263,6 +263,46 @@ class TestFollowFromDisk:
         page.wait_for_function(_has_text("FAILED-ONCE"), timeout=10000)
         assert page.evaluate("window.__failed") >= 2
 
+    def test_an_update_that_fails_part_way_is_not_trusted(self, page, tmp_path) -> None:
+        """A patch that throws after editing one card leaves the page half
+        way. Neither the render recorded before it nor the card hashes the
+        patch compares against describe the page any more: a later render
+        that brings the file back to before must be applied in full, not
+        found "unchanged" against either."""
+        projects, jsonl, html = _archive(tmp_path)
+        _open(page, html)
+        page.locator("#followUpdates").click()
+        # One good update first, so there is a patch baseline to go stale.
+        _append(projects, jsonl, "BASELINE")
+        page.wait_for_function(_has_text("BASELINE"), timeout=10000)
+        before = html.read_text(encoding="utf-8")
+        # The next update edits two cards, and fails at the second, every time.
+        page.evaluate(
+            """() => {
+                const importNode = Document.prototype.importNode;
+                window.__imports = 0;
+                Document.prototype.importNode = function (...args) {
+                    // Every second import: each retry edits one card, then fails.
+                    if (++window.__imports % 2 === 0) throw new Error('part-way');
+                    return importNode.apply(this, args);
+                };
+            }"""
+        )
+        edited = before.replace("seed answer 3 ", "EDITED-3 ").replace(
+            "seed answer 5 ", "EDITED-5 "
+        )
+        assert edited != before
+        html.write_text(edited, encoding="utf-8")
+        page.wait_for_function(_has_text("EDITED-"), timeout=10000)
+        page.wait_for_function("window.__imports >= 2", timeout=10000)
+        # Back as it was, a moment later (a fresh mtime).
+        time.sleep(1.1)
+        html.write_text(before, encoding="utf-8")
+        page.wait_for_function(
+            "() => !document.getElementById('transcript').textContent.includes('EDITED-')",
+            timeout=10000,
+        )
+
     def test_a_same_second_rewrite_before_following_is_seen(
         self, page, tmp_path
     ) -> None:

@@ -515,8 +515,18 @@
         // page, and are kept whichever route the update took — the swap is a
         // valid starting point for the next patch.
         const scan = scanTree(next, true);
-        let added = tryPatch(next, scan);
-        if (added === null) added = swapIn(next, current);
+        let added;
+        try {
+            added = tryPatch(next, scan);
+            if (added === null) added = swapIn(next, current);
+        } catch (err) {
+            // A patch that throws part-way has edited some cards and not
+            // others: the hashes no longer describe the page, and a render
+            // that brings an edited card back would be found "unchanged".
+            // Without them the next update swaps whole.
+            cardHashes = null;
+            throw err;
+        }
         cardHashes = scan.hashes;
 
         // The title carries the message/token counts, and the session nav
@@ -621,6 +631,9 @@
     // it (null until the first read since following started).
     let diskKnown = document.lastModified;
     let diskSeen = null;
+    // What diskSeen holds after an update failed part-way: equal to no
+    // render, and not null (which would take the first-read shortcut).
+    const DISK_UNKNOWN = {};
     // When the render on screen was read: the clock as the probe whose
     // render it is went out (the frame reads the file after that). Unknown
     // (0) for the page as loaded, and only a render moves it on: a `same`
@@ -702,7 +715,17 @@
             return;
         }
         diskStill = 0;
-        await applyUpdate(answer.html);
+        try {
+            await applyUpdate(answer.html);
+        } catch (err) {
+            // The page may be half way between two renders, so no render
+            // describes it: not the last one (a file that went back to it
+            // would be taken as on screen), nor its mtime. Read whole and
+            // apply until an update succeeds.
+            diskSeen = DISK_UNKNOWN;
+            diskReadAt = 0;
+            throw err;
+        }
         adopt();
     }
 
