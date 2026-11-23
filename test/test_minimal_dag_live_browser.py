@@ -252,15 +252,10 @@ def _lane(page: Page, lane: str) -> dict[str, Any]:
 
 
 def _wait(page: Page, expression: str, arg: Any = None) -> None:
-    """Wait for ``expression``, then for the update to settle: new cards fade
-    in from a few px below (``live-new-in``) and the rail is redrawn once
-    they land."""
+    """Wait for ``expression``, then two frames for the update to settle.
+    New cards don't move as they arrive (the minimal theme tints them,
+    layout.css `mn-live-new`), so the rail measures them where they stay."""
     page.wait_for_function(expression, arg=arg, timeout=WAIT_MS)
-    page.wait_for_function(
-        """() => !document.getAnimations()
-            .some(a => a.animationName === 'live-new-in' && a.playState !== 'finished')""",
-        timeout=WAIT_MS,
-    )
     page.evaluate(
         "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
     )

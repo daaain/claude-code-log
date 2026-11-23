@@ -79,23 +79,31 @@
         btn.textContent = open ? '− less' : '+ more';
         btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
-    // Measuring a clamp forces a layout. At parse time that would be a
-    // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
-    // thrown away when the DAG engine turns the grid on; in the first
-    // frame after DOMContentLoaded it reuses the layout the page needs
-    // anyway. (Not the first frame: during a long parse the stage is
-    // not rendered yet — theme_init.js — and nothing would measure.)
-    function decorateFirstFrame() {
+    // Measuring a clamp forces a layout, so it waits for the next frame,
+    // which reuses the layout the page needs anyway. At parse time
+    // measuring would be a whole extra layout of a large page (≈ 0.6s on
+    // a 5MB one, P8), thrown away when the DAG engine turns the grid on
+    // at DOMContentLoaded. (Not the first frame: during a long parse the
+    // stage is not rendered yet — theme_init.js — and nothing would
+    // measure.) A live update is the same: the rehydrate hooks run before
+    // the engine places the new rows (a microtask later), and a swap
+    // measured then cost 0.9s of a 1.6s swap of a 2,465-card session in
+    // WebKit. The frame decorates the whole page; it holds a few headers.
+    let summariesQueued = false;
+    function decorateNextFrame() {
+        if (summariesQueued) return;
+        summariesQueued = true;
         requestAnimationFrame(function () {
+            summariesQueued = false;
             decorateSessionSummaries(document);
         });
     }
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+        document.addEventListener('DOMContentLoaded', decorateNextFrame);
     } else {
-        decorateFirstFrame();
+        decorateNextFrame();
     }
-    if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
+    if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateNextFrame);
     window.addEventListener('resize', function () {
         decorateSessionSummaries(document);
     });

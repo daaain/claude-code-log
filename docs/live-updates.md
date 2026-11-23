@@ -38,7 +38,8 @@ claude-code-log serve --watch
 
 Open a session page and it grows as messages arrive — roughly a second
 behind the CLI, without a reload. Your scroll position, folded sections
-and open disclosures all survive, and new messages fade in.
+and open disclosures all survive, and new messages fade in (in the
+minimal theme, they arrive with a brief tint instead).
 
 A **follow** button (⏬) joins the buttons down the right-hand edge once
 the page is being served. Click it to keep the page pinned to the newest
