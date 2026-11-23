@@ -259,6 +259,13 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         if self._revision is not None:
             self.send_header(REVISION_HEADER, self._revision)
+        # Every answer depends on where the request came from
+        # (`_is_from_another_site`), so a cache must not hand one page's
+        # copy to another: without this, a file our own page cached (fresh
+        # by heuristic, from `Last-Modified`) answered a page on another
+        # loopback port, which shares our cache partition, and the refusal
+        # was never asked. 304s carry it too.
+        self.send_header("Vary", "Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest")
         super().end_headers()
 
     def _split_query(self) -> tuple[str, dict[str, str]]:

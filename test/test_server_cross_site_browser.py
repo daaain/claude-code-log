@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import functools
 import http.server
+import os
 import threading
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -103,4 +105,30 @@ def test_another_sites_page_cannot_include_the_data(
 
     assert len(requested) == 1
     assert 200 not in statuses
+    assert page.evaluate("window.received") == []
+
+
+def test_a_cached_copy_does_not_reach_another_site(
+    page: Page, archive: ArchiveServer, attacker_root: tuple[Path, int]
+) -> None:
+    """The refusal is the server's, so a copy the browser cached from our
+    own page must not answer another page's request instead. A page on
+    another loopback port shares our cache partition (a site ignores the
+    port), and a file modified long ago is fresh for a while by heuristic
+    (a tenth of its age, with `Last-Modified` and no `Cache-Control`).
+    Responses vary on the Fetch Metadata headers, so the other page's
+    request isn't the one that was cached."""
+    old = time.time() - 30 * 86400
+    data = Path(archive.directory) / "recent-data.js"
+    os.utime(data, (old, old))
+    # Our own page loads it, and the browser caches it.
+    page.goto(f"{archive.url}/recent.html")
+    page.wait_for_function("window.received.length > 0")
+
+    root, port = attacker_root
+    (root / "evil.html").write_text(
+        ATTACKER_PAGE.replace("{src}", f"{archive.url}/recent-data.js")
+    )
+    page.goto(f"http://127.0.0.1:{port}/evil.html")
+    page.wait_for_load_state("load")
     assert page.evaluate("window.received") == []

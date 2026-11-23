@@ -269,6 +269,21 @@ class TestCrossSiteRequests:
         status, _, _ = _get(f"{server.url}/index.html")
         assert status == 200
 
+    def test_answers_vary_on_where_the_request_came_from(
+        self, server: ArchiveServer
+    ) -> None:
+        """A cache must not hand our own page's copy to another page: a
+        page on another loopback port shares our cache partition
+        (test_server_cross_site_browser.py replays it). 304s too."""
+        vary = "Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest"
+        status, _, headers = _get(f"{server.url}/index.html")
+        assert status == 200 and headers.get("Vary") == vary
+        status, _, again = _get(
+            f"{server.url}/index.html",
+            headers={"If-Modified-Since": headers["Last-Modified"]},
+        )
+        assert status == 304 and again.get("Vary") == vary
+
 
 class TestExtraHosts:
     """Names besides loopback the server answers to, for a reverse proxy.

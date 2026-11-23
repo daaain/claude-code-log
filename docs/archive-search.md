@@ -216,10 +216,18 @@ Then open `https://box.tailnet-name.ts.net/recent.html` (or `index.html`,
 
 `--allow-host` is needed because the proxy passes the browser's `Host`
 along, and without it every request is refused with a 421. Use your
-machine's MagicDNS name, as `tailscale status --self` prints it (without
-the trailing dot). It is repeatable, takes a comma-separated list, and can
-come from `CLAUDE_CODE_LOG_ALLOW_HOSTS` instead. Only the names you list are
-let through; the bind is still `127.0.0.1`.
+machine's full MagicDNS name, the host in the `https://` address that
+`tailscale serve` prints, or:
+
+```bash
+tailscale status --json | python3 -c "import json, sys; print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))"
+```
+
+The table `tailscale status` prints shows only the short machine name, and
+that alone never matches: names are compared whole. `--allow-host` is
+repeatable, takes a comma-separated list, and can come from
+`CLAUDE_CODE_LOG_ALLOW_HOSTS` instead. Only the names you list are let
+through; the bind is still `127.0.0.1`.
 
 Anyone the proxy lets in can read the whole archive, every project's
 sessions included, with no further login. On a tailnet that is everyone
