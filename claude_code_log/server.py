@@ -19,6 +19,10 @@ Design notes, in case the shape looks arbitrary:
   which is a DNS-rebinding hole — and the read side already exposes every
   transcript in the archive, so this matters before any write endpoint
   exists, not after.
+* **So is where a request came from.** Another site's page can't read our
+  responses, but it can *run* one: `recent-data.js` included by a
+  `<script>` tag hands it every recent session. Requests other sites'
+  pages make (`Sec-Fetch-Site`) are refused; see `_is_from_another_site`.
 * **The search core is HTTP-free.** Everything interesting lives in
   `search.py` as plain functions; this module is the adapter.
 * **File responses carry `X-Content-Revision`.** The live page asks "did
@@ -40,7 +44,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Optional
+from typing import Any, BinaryIO, Callable, Iterable, Optional
 
 from .cache import get_library_version
 from .utils import retry_on_sharing_violation
@@ -56,6 +60,10 @@ API_PREFIX = "/api/"
 # advertising an ETag would make browsers stop getting 304s on the
 # multi-MB pages that make 304s worth having.
 REVISION_HEADER = "X-Content-Revision"
+
+# `Host` names that address us as loopback (port stripped). The empty
+# string is an HTTP/1.0 request with no `Host` at all.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", ""})
 
 # How long a file's mtime must have been in the past before a cached
 # digest for it can be trusted. A write landing after we hashed can only
@@ -95,16 +103,45 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     # ---- security -------------------------------------------------------
 
     def _host_is_allowed(self) -> bool:
-        """Reject requests that don't address us as loopback.
+        """Reject requests that don't address us by a name we were given.
 
         A page on the open web can point a hostname at 127.0.0.1 (DNS
         rebinding) and then read our responses same-origin. Checking `Host`
-        blocks that; there is no legitimate request with another value here.
+        blocks that. The only legitimate values are loopback, plus any
+        names `serve --allow-host` opted into for a reverse proxy.
         """
         host = self.headers.get("Host", "")
         # Strip the port: loopback on any port is us.
         hostname = host.rsplit(":", 1)[0] if ":" in host else host
         return hostname.lower() in self.allowed_hosts
+
+    def _is_from_another_site(self) -> bool:
+        """Whether another site's page made the browser send this request.
+
+        The Host check doesn't cover a page that simply names us:
+        `<script src="http://127.0.0.1:8010/recent-data.js">` runs our
+        file in *its* page, and `recent-data.js` hands every recent session
+        to whatever `window.__cclRecent` that page defined. Same-origin
+        rules only stop a page reading a response; a script is executed.
+
+        Browsers label each request's source in `Sec-Fetch-Site`. Ours
+        say `same-origin`, a typed URL or bookmark says `none`. Anything
+        else is refused, `same-site` included — to a browser, every app
+        forwarded to 127.0.0.1 shares our site — except a top-level
+        navigation: following a link into the archive gives the linking
+        page nothing it can read.
+
+        No header means a non-browser client (curl) or a browser too old
+        to send one (Safari before 16.4); those are let through, as before.
+        """
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is None or site in ("same-origin", "none"):
+            return False
+        top_level_navigation = (
+            self.headers.get("Sec-Fetch-Mode") == "navigate"
+            and self.headers.get("Sec-Fetch-Dest") == "document"
+        )
+        return not top_level_navigation
 
     # ---- plumbing -------------------------------------------------------
 
@@ -222,6 +259,13 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         if self._revision is not None:
             self.send_header(REVISION_HEADER, self._revision)
+        # Every answer depends on where the request came from
+        # (`_is_from_another_site`), so a cache must not hand one page's
+        # copy to another: without this, a file our own page cached (fresh
+        # by heuristic, from `Last-Modified`) answered a page on another
+        # loopback port, which shares our cache partition, and the refusal
+        # was never asked. 304s carry it too.
+        self.send_header("Vary", "Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest")
         super().end_headers()
 
     def _split_query(self) -> tuple[str, dict[str, str]]:
@@ -236,6 +280,9 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (http.server's naming)
         if not self._host_is_allowed():
             self._send_json({"error": "invalid Host header"}, status=421)
+            return
+        if self._is_from_another_site():
+            self._send_json({"error": "requests from other sites are refused"}, 403)
             return
 
         path, params = self._split_query()
@@ -263,6 +310,10 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self) -> None:  # noqa: N802
         if not self._host_is_allowed():
             self.send_response(421)
+            self.end_headers()
+            return
+        if self._is_from_another_site():
+            self.send_response(403)
             self.end_headers()
             return
         super().do_HEAD()
@@ -297,7 +348,14 @@ class ArchiveServer:
         api_routes: Optional[dict[str, Callable[[dict[str, str]], Any]]] = None,
         host: str = "127.0.0.1",
         port: int = 8010,
+        extra_hosts: Iterable[str] = (),
     ) -> None:
+        """``extra_hosts``: names to accept in `Host` besides loopback.
+
+        For a reverse proxy that forwards to loopback but keeps the
+        browser's `Host` — `tailscale serve` does exactly that. Matched
+        whole and case-insensitively, any port; the bind is unchanged.
+        """
         self.directory = directory
         self.host = host
         routes: dict[str, Callable[[dict[str, str]], Any]] = {
@@ -307,7 +365,7 @@ class ArchiveServer:
             },
         }
         routes.update(api_routes or {})
-        allowed = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", ""})
+        allowed = LOOPBACK_HOSTS | {name.lower() for name in extra_hosts}
         self._httpd = http.server.ThreadingHTTPServer(
             (host, port), build_handler(directory, routes, allowed)
         )

@@ -190,6 +190,56 @@ The server binds to `127.0.0.1` only, and rejects requests that don't
 address it as loopback — a page on the open web can otherwise point a
 hostname at your machine and read the archive through your browser.
 
+It also refuses requests that other sites' pages make, using the
+`Sec-Fetch-Site` header browsers send. Without that, any page you visit
+could include `recent-data.js` with a `<script>` tag and receive your
+recent sessions. Following a link into the archive from elsewhere still
+works. A browser too old to send the header (Safari before 16.4) gets no
+such protection, and neither does a program that can reach the port
+directly, since it can send whatever headers it likes.
+
+## From your other devices, over Tailscale
+
+To read the archive, or keep [the recent sessions page](recent-sessions.md)
+open, on a phone or another computer, put
+[`tailscale serve`](https://tailscale.com/kb/1312/serve) in front of the
+server. It gives your machine an HTTPS address on your tailnet and forwards
+to loopback, so the server itself stays where it is:
+
+```bash
+claude-code-log serve --watch --allow-host box.tailnet-name.ts.net
+tailscale serve --bg http://127.0.0.1:8010
+```
+
+Then open `https://box.tailnet-name.ts.net/recent.html` (or `index.html`,
+`search.html`) from any device on your tailnet.
+
+`--allow-host` is needed because the proxy passes the browser's `Host`
+along, and without it every request is refused with a 421. Use your
+machine's full MagicDNS name, the host in the `https://` address that
+`tailscale serve` prints, or:
+
+```bash
+tailscale status --json | python3 -c "import json, sys; print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))"
+```
+
+The table `tailscale status` prints shows only the short machine name, and
+that alone never matches: names are compared whole. `--allow-host` is
+repeatable, takes a comma-separated list, and can come from
+`CLAUDE_CODE_LOG_ALLOW_HOSTS` instead. Only the names you list are let
+through; the bind is still `127.0.0.1`.
+
+Anyone the proxy lets in can read the whole archive, every project's
+sessions included, with no further login. On a tailnet that is everyone
+your [access controls](https://tailscale.com/kb/1018/acls) allow to reach
+this machine's port 443, so check them before you share the tailnet with
+other people's devices. `tailscale serve --https=443 off` stops the proxy.
+
+If you run agents in [foldyard](https://github.com/twistco/foldyard)
+boxes, any server on loopback, with or without `--allow-host`, can be
+reached from a box whose VM firewall is off. See
+[With foldyard](recent-sessions.md#with-foldyard).
+
 ## Searching from a terminal or an agent
 
 The cache works for scripts too, but there's one trap first.

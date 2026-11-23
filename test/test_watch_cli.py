@@ -344,3 +344,87 @@ class TestServeWatch:
         assert result.exit_code == 0, result.output
         assert not started
         assert "watching for changes" not in result.output
+
+
+class TestServeAllowHost:
+    """`serve --allow-host` lets a reverse proxy (`tailscale serve`) through.
+
+    The server still binds loopback only; the flag widens the `Host` check,
+    nothing else.
+    """
+
+    def _invoke(
+        self,
+        tmp_path: Path,
+        args: list[str],
+        monkeypatch,
+        env: dict[str, str] | None = None,
+    ):
+        import claude_code_log.server as server_mod
+
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        seen: dict[str, object] = {}
+        real_init = server_mod.ArchiveServer.__init__
+
+        def spy_init(server, *a, **kw):
+            seen.update(kw)
+            real_init(server, *a, **kw)
+
+        monkeypatch.setattr(server_mod.ArchiveServer, "__init__", spy_init)
+        monkeypatch.setattr(
+            server_mod.ArchiveServer,
+            "serve_forever",
+            lambda server: server_mod.ArchiveServer.start(server),
+        )
+        result = CliRunner().invoke(
+            main,
+            ["serve", "--projects-dir", str(projects), "--port", "0"]
+            + ["--no-convert", "--no-index"]
+            + args,
+            env=env,
+        )
+        return result, seen
+
+    def test_hosts_reach_the_server(self, tmp_path: Path, monkeypatch) -> None:
+        result, seen = self._invoke(
+            tmp_path,
+            ["--allow-host", "box.example.ts.net", "--allow-host", "other.lan"],
+            monkeypatch,
+        )
+        assert result.exit_code == 0, result.output
+        assert set(seen["extra_hosts"]) == {"box.example.ts.net", "other.lan"}
+        assert seen["host"] == "127.0.0.1"
+        assert "box.example.ts.net" in result.output
+
+    def test_a_comma_list_is_split(self, tmp_path: Path, monkeypatch) -> None:
+        result, seen = self._invoke(
+            tmp_path, ["--allow-host", "a.ts.net, b.ts.net"], monkeypatch
+        )
+        assert result.exit_code == 0, result.output
+        assert set(seen["extra_hosts"]) == {"a.ts.net", "b.ts.net"}
+
+    def test_the_environment_variable_works(self, tmp_path: Path, monkeypatch) -> None:
+        result, seen = self._invoke(
+            tmp_path,
+            [],
+            monkeypatch,
+            env={"CLAUDE_CODE_LOG_ALLOW_HOSTS": "box.example.ts.net,other.lan"},
+        )
+        assert result.exit_code == 0, result.output
+        assert set(seen["extra_hosts"]) == {"box.example.ts.net", "other.lan"}
+
+    def test_by_default_only_loopback(self, tmp_path: Path, monkeypatch) -> None:
+        result, seen = self._invoke(tmp_path, [], monkeypatch)
+        assert result.exit_code == 0, result.output
+        assert not seen.get("extra_hosts")
+
+    @pytest.mark.parametrize(
+        "value", ["https://box.example.ts.net", "box.example.ts.net/recent.html"]
+    )
+    def test_a_url_is_refused_with_a_hint(
+        self, tmp_path: Path, monkeypatch, value: str
+    ) -> None:
+        result, _ = self._invoke(tmp_path, ["--allow-host", value], monkeypatch)
+        assert result.exit_code == 2
+        assert "hostname" in result.output
