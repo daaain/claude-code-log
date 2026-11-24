@@ -15,6 +15,7 @@ Synthetic fixtures only (no private data — see the #295 spec).
 import json
 from pathlib import Path
 
+import pytest
 from pydantic import TypeAdapter
 
 from claude_code_log.converter import (
@@ -201,13 +202,12 @@ def test_last_timestamp_reflects_chronologically_last_entry(tmp_path):
     )
 
 
-def _parallel_skill_project(tmp_path: Path) -> Path:
+def _parallel_skill_project(tmp_path: Path, steps: int) -> Path:
     """A `Skill` and a `Bash` call in one turn, then the session goes on.
 
     The skill's result (with the body hung under it) is a sibling of the
-    `Bash` call, which the rest of the session descends from. The walk keeps
-    both on one line as segments ordered by their *first* timestamps, so the
-    skill's segment, begun just after the `Bash` call, follows everything.
+    `Bash` call, which the rest of the session (``steps`` replies, ten
+    seconds in) descends from.
     """
 
     def call(uuid: str, parent: str, tool: str, use_id: str, ts: str):
@@ -217,46 +217,63 @@ def _parallel_skill_project(tmp_path: Path) -> Path:
         ]
         return entry
 
-    def result(uuid: str, parent: str, use_id: str, ts: str):
+    def result(uuid: str, parent: str, use_id: str, ts: str, text: str):
         entry = _user(uuid, parent, "", ts)
         entry["message"]["content"] = [
-            {"type": "tool_result", "tool_use_id": use_id, "content": "ok"}
+            {"type": "tool_result", "tool_use_id": use_id, "content": text}
         ]
         return entry
 
-    body = _user("body", "r1", "Base directory for this skill", _TS + "01.372Z")
+    body = _user("body", "r1", "SKILL_BODY_MARKER", _TS + "01.372Z")
     body["isMeta"] = True
+    body["sourceToolUseID"] = "toolu_skill"
     entries = [
         _user("u1", None, "start", _TS + "00.000Z"),
         call("skill", "u1", "Skill", "toolu_skill", _TS + "01.327Z"),
         call("bash", "skill", "Bash", "toolu_bash", _TS + "01.370Z"),
-        result("r1", "skill", "toolu_skill", _TS + "01.375Z"),
+        result("r1", "skill", "toolu_skill", _TS + "01.375Z", "Launching skill: x"),
         body,
-        result("r2", "bash", "toolu_bash", _TS + "01.836Z"),
+        result("r2", "bash", "toolu_bash", _TS + "01.836Z", "BASH_RESULT_MARKER"),
     ]
-    # Long enough that the walk doesn't take the rest for a dead end.
     parent = "r2"
-    for n in range(30):
-        entries.append(_assistant(f"a{n}", parent, f"step {n}", f"{_TS}{n + 10}.000Z"))
+    for n in range(steps):
+        entries.append(
+            _assistant(f"a{n}", parent, f"STEP_{n}_MARKER", f"{_TS}{n + 10}.000Z")
+        )
         parent = f"a{n}"
     return _write_project(tmp_path, entries)
 
 
 def test_last_timestamp_is_the_latest_when_the_last_entry_is_older(tmp_path):
-    """A parallel `Skill` call leaves its body last in load order, tens of
-    minutes out of time order in a real session; the session's last update
-    is still its latest entry, in the cache and in the page's session nav."""
+    """A session's last update is its latest entry, whichever comes last in
+    load order: in the cache and in the page's session nav."""
     messages, _tree = load_directory_transcripts(
-        _parallel_skill_project(tmp_path), None, silent=True
+        _parallel_skill_project(tmp_path, steps=30), None, silent=True
     )
+    # As the skill's result and body loaded before #432 was fixed: last, tens
+    # of minutes out of time order in a real session.
+    late = [m for m in messages if m.uuid in ("r1", "body")]
+    out_of_order = [m for m in messages if m not in late] + late
 
-    assert messages[-1].uuid == "body", "the shape no longer loads out of order"
-
-    # The load order is the DAG's to choose, so no order may matter.
-    for ordered in (messages, list(reversed(messages))):
+    for ordered in (messages, out_of_order, list(reversed(messages))):
         assert compute_session_data(ordered)[_SID].last_timestamp == _TS + "39.000Z"
         sessions, _, _ = _collect_session_info(ordered, {})
         assert sessions[_SID]["last_timestamp"] == _TS + "39.000Z"
+
+
+@pytest.mark.parametrize("steps", [1, 30])
+def test_what_follows_a_parallel_skill_call_is_on_the_page(tmp_path, steps):
+    """The rest of a session was left out while it was short (#432): the page
+    has the other call's result, every reply and the skill's body."""
+    d = _parallel_skill_project(tmp_path, steps=steps)
+
+    html = convert_jsonl_to_html(d, use_cache=False).read_text(encoding="utf-8")
+
+    assert "BASH_RESULT_MARKER" in html
+    assert "SKILL_BODY_MARKER" in html
+    assert html.index("SKILL_BODY_MARKER") < html.index("BASH_RESULT_MARKER")
+    for n in range(steps):
+        assert f"STEP_{n}_MARKER" in html
 
 
 def test_timestamp_tie_places_queue_ops_after_same_timestamp_entry(tmp_path):

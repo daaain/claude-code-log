@@ -250,7 +250,7 @@ rung is treated as a real fork.
 | # | Rung | Detection | Action |
 |---|------|-----------|--------|
 | 1 | [Structural side-branch collapse](#1-structural-side-branch-collapse) | ≥1 structural child (Passthrough/Attachment with structural subtree), ≤1 non-structural child | Stitch structural children in chronologically; continue via the non-structural child (or end) |
-| 2 | [Stitch V1 — structural tool_result](#2-tool-result-stitching-variant-1-structural-tool_result) | Every user child's subtree is structural; exactly one assistant child | Splice user children ahead of the assistant continuation |
+| 2 | [Stitch V1 — structural tool_result](#2-tool-result-stitching-variant-1-structural-tool_result) | Every user child's subtree is structural, or a `tool_result`'s with only injected (`isMeta`) entries; exactly one assistant child | Splice user children ahead of the assistant continuation |
 | 3 | [Stitch V2 — dead-end continuation](#3-tool-result-stitching-variant-2-dead-end-continuation) | Every assistant child's subtree dead-ends; exactly one user child continues | Splice dead-end children ahead of the continuing user child |
 | 4 | [Live passthrough chain (V3)](#4-live-passthrough-chain-variant-3) | Exactly one passthrough child has a live subtree; all other children structural | Stitch the structural siblings in; continue through the live passthrough |
 | 5 | [Assistant continuation](#5-assistant-continuation-tool-flow-_is_continuation_fork) | Assistant parent with tool_use(s); children = assistant continuation(s) + tool_result(s) addressed to the parent's own tool ids | End chain; re-enqueue each child as a trunk *segment*; timestamp merge re-links them |
@@ -373,6 +373,17 @@ graph LR
 
 Detection: *every* user child has a structural subtree
 (`_is_structural_subtree`), and there is exactly one assistant child.
+
+A result may also have entries Claude Code **injected** hung under it
+(`isMeta` users: a skill's body, the note that goes with an image a `Read`
+returned). They belong to the result, so a user child that is a
+`tool_result` still qualifies when they are the only conversation below it
+(`_injected_under_result`). That whole subtree, attachments included, is
+spliced in after its result rather than skipped: A (`Skill`) → U (result) → U (body) → A (`Bash`) → …. Before
+this, V2 took the injected entry for the continuation while the assistant
+side was under 20 entries deep, so a session's live end was left out; past
+that, rung 5 placed the result and body after everything that followed
+(issue #432).
 
 ### 3. Tool-result stitching, variant 2: dead-end continuation
 

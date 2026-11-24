@@ -1415,6 +1415,96 @@ class TestToolResultStitching:
         assert branch_count == 0
 
 
+class TestInjectedEntriesUnderAParallelToolResult:
+    """A tool_result whose only conversational descendants are entries Claude
+    Code injected (``isMeta``: a skill's body, what came with an image a Read
+    returned) is not the continuation: its assistant sibling is.
+
+    Shape: a → call1 → call2 → res2 → …   [the session goes on]
+                    → res1 → body → att   [injected, ends here]
+    """
+
+    @staticmethod
+    def _tree(steps: int, *, injected: bool = True, on_branch: bool = False):
+        def result(uuid: str, parent: str, use_id: str, ts: str) -> dict:
+            entry = _make_entry("user", uuid, parent, ts)
+            entry["message"]["content"] = [
+                {"type": "tool_result", "tool_use_id": use_id, "content": "ok"}
+            ]
+            return entry
+
+        def call(uuid: str, parent: str, use_id: str, ts: str) -> dict:
+            entry = _make_entry("assistant", uuid, parent, ts)
+            entry["message"]["content"] = [
+                {"type": "tool_use", "id": use_id, "name": "Skill", "input": {}}
+            ]
+            return entry
+
+        day = "2025-07-01T10:"
+        body = _make_entry("user", "body", "res1", day + "01:00.372Z")
+        if injected:
+            body["isMeta"] = True
+        data = [
+            _make_entry("user", "a", None, day + "00:00.000Z"),
+            call("call1", "a", "t1", day + "01:00.327Z"),
+            call("call2", "call1", "t2", day + "01:00.370Z"),
+            result("res1", "call1", "t1", day + "01:00.375Z"),
+            body,
+            _make_attachment("att", "body", day + "01:00.372Z", "command_permissions"),
+            result("res2", "call2", "t2", day + "01:00.836Z"),
+        ]
+        parent = "res2"
+        for n in range(steps):
+            data.append(
+                _make_entry("assistant", f"s{n}", parent, f"{day}02:{n:02d}.000Z")
+            )
+            parent = f"s{n}"
+        if on_branch:
+            # The same turn, down the later of two prompts at a rewind.
+            data[0]["parentUuid"] = "root"
+            data.insert(
+                0, _make_entry("user", "root", None, day[:-3] + "09:00:00.000Z")
+            )
+            data.append(
+                _make_entry("user", "other", "root", day[:-3] + "09:30:00.000Z")
+            )
+        return build_dag_from_entries([create_transcript_entry(d) for d in data])
+
+    @pytest.mark.parametrize("steps", [0, 1, 5, 18, 19, 20, 21, 40])
+    def test_nothing_is_dropped_or_moved_however_far_the_session_goes_on(
+        self, steps: int
+    ) -> None:
+        """Short, the rest of the session was taken for a dead end and left
+        out; long, the result and body came after all of it."""
+        tree = self._tree(steps)
+        assert tree.sessions["s1"].uuids == [
+            "a",
+            "call1",
+            "res1",
+            "body",
+            "att",
+            "call2",
+            "res2",
+            *[f"s{n}" for n in range(steps)],
+        ]
+        assert not any(line.is_branch for line in tree.sessions.values())
+
+    def test_on_a_branch_the_injected_entries_stay_on_it(self) -> None:
+        tree = self._tree(3, on_branch=True)
+        line = next(dl for dl in tree.sessions.values() if "call1" in dl.uuids)
+        assert line.is_branch
+        assert line.uuids[-9:] == [
+            "call1", "res1", "body", "att", "call2", "res2", "s0", "s1", "s2",
+        ]  # fmt: skip
+        assert tree.nodes["body"].session_id == line.session_id
+
+    def test_a_typed_prompt_under_the_result_is_still_a_continuation(self) -> None:
+        """Only injected entries are the result's own; a prompt the user typed
+        there continues the conversation (variant 2, unchanged)."""
+        uuids = self._tree(0, injected=False).sessions["s1"].uuids
+        assert uuids == ["a", "call1", "call2", "res1", "body", "att"]
+
+
 def _with_agent_id(entry: dict, agent_id: str) -> dict:
     """Attach an agentId to a user entry (marks it as a subagent anchor)."""
     entry["agentId"] = agent_id

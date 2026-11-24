@@ -423,6 +423,51 @@ def _is_structural_subtree(
     return True
 
 
+def _injected_under_result(
+    uuid: str,
+    session_uuids: set[str],
+    nodes: dict[str, MessageNode],
+) -> Optional[list[str]]:
+    """The subtree under a tool_result that holds only injected entries.
+
+    Some tools' results come with user entries of their own hung under them
+    (``isMeta``): a skill's body, the note that goes with an image a Read
+    returned. They belong to the result and don't continue the
+    conversation. Returns the subtree below ``uuid``, its attachments
+    included, in parent-to-child order when it holds no other conversation;
+    an empty list when it is structural, whose entries a stitch skips; None
+    when the conversation continues from it.
+    """
+    if _is_structural_subtree(uuid, session_uuids, nodes):
+        return []
+    entry = nodes[uuid].entry
+    if not (
+        isinstance(entry, UserTranscriptEntry)
+        and any(isinstance(item, ToolResultContent) for item in entry.message.content)
+    ):
+        return None
+
+    subtree: list[str] = []
+    queue: list[str] = [uuid]
+    seen: set[str] = {uuid}
+    while queue:
+        children = [
+            c
+            for c in nodes[queue.pop(0)].children_uuids
+            if c in session_uuids and c not in seen
+        ]
+        for child in sorted(children, key=lambda c: nodes[c].timestamp):
+            seen.add(child)
+            queue.append(child)
+            subtree.append(child)
+            child_entry = nodes[child].entry
+            if isinstance(child_entry, AssistantTranscriptEntry):
+                return None
+            if isinstance(child_entry, UserTranscriptEntry) and not child_entry.isMeta:
+                return None
+    return subtree
+
+
 # System subtypes that produce parentless entries by design (fresh chains
 # after `/compact`, orphan `/memory` or `/config` invocations at session
 # start). Multi-root sessions built from only these are expected, not
@@ -530,9 +575,11 @@ def _stitch_tool_results(
     records both the next tool_use and the tool_result as children of the
     current tool_use entry, creating a false fork.  Two variants:
 
-    Variant 1 — User child's subtree is structural (no conversation):
-        A(tool_use) → U(tool_result)          [structural side-branch]
+    Variant 1 — User child's subtree is structural (no conversation), or
+    holds only what Claude Code injected with the result (``isMeta``):
+        A(tool_use) → U(tool_result)          [side-branch]
                          → attachment(hook)
+                         → U(skill body)      [injected: kept, after its result]
                     → A(next tool_use) → ...  [main chain continues]
 
     Variant 2 — User child continues, Assistant subtree dead-ends:
@@ -556,18 +603,26 @@ def _stitch_tool_results(
         return None  # Not the tool_result pattern
 
     # Variant 1: user children carry only structural content (attachments,
-    # hook summaries), the assistant sibling is the real continuation.
-    # The earlier "no immediate same-session child" check missed cases
-    # where the tool_result has a hook_success attachment leaf.
-    user_all_structural = all(
-        _is_structural_subtree(uc, session_uuids, nodes) for uc in user_children
-    )
-
-    if user_all_structural:
+    # hook summaries) or injected entries, the assistant sibling is the real
+    # continuation. The earlier "no immediate same-session child" check
+    # missed cases where the tool_result has a hook_success attachment leaf.
+    #
+    # It comes before variant 2, which would take an injected entry for the
+    # continuation while the assistant side is still short enough to pass
+    # for a dead end, and so leave out the session's live end (#432).
+    user_children.sort(key=lambda c: nodes[c].timestamp)
+    side_branches = [
+        (uc, _injected_under_result(uc, session_uuids, nodes)) for uc in user_children
+    ]
+    if all(injected is not None for _, injected in side_branches):
         if len(assistant_children) != 1:
             return None
-        user_children.sort(key=lambda c: nodes[c].timestamp)
-        return user_children + assistant_children
+        side_chain: list[str] = []
+        for uc, injected in side_branches:
+            side_chain.append(uc)
+            # Listed: the caller skips a stitched child's descendants.
+            side_chain.extend(injected or [])
+        return side_chain + assistant_children
 
     # Variant 2: assistant subtrees are dead ends,
     # exactly one user child continues
