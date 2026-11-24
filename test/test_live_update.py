@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import expect
 
 from claude_code_log.converter import process_projects_hierarchy
 from claude_code_log.watch import WatchEngine
@@ -793,6 +795,60 @@ class TestLiveUpdate:
 
 # The cards a live update brought, by `data-uuid` (both themes render it).
 _CARD = "document.querySelector('#transcript .message[data-uuid=\"{}\"]')"
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    ("was", "now"), [("classic", "minimal"), ("minimal", "classic")]
+)
+def test_a_render_in_another_theme_asks_for_a_reload(page, tmp_path, was, now) -> None:
+    """A server restarted in the other theme rewrites the page under a tab
+    that is still open. An update replaces the transcript and the title, not
+    the styles, the body's class or the shell around them, so that render is
+    not patched into this page: it says to reload, stops counting as live,
+    and picks up again if the archive goes back to its theme."""
+    from claude_code_log.server import ArchiveServer
+
+    projects = tmp_path / "projects"
+    project = projects / "-tmp-live"
+    project.mkdir(parents=True)
+    jsonl = project / f"{SESSION_ID}.jsonl"
+    jsonl.write_text(_entry("seed", "seed message"), encoding="utf-8")
+    process_projects_hierarchy(projects, silent=True, theme=was)
+    server = ArchiveServer(projects, port=0)
+    server.start()
+    try:
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{server.url}/{project.name}/session-{SESSION_ID}.html")
+        # The baseline is known, so the next stamp is a change.
+        page.evaluate("window.claudeLogLiveUpdate.poll()")
+        staged = "!!document.getElementById('transcript').closest('.mn-stage')"
+        assert page.evaluate(staged) == (was == "minimal")
+        assert page.evaluate("window.claudeLogLiveUpdate.active")
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("live-1", "OTHER-THEME-MARKER"))
+        process_projects_hierarchy(projects, silent=True, theme=now)
+
+        follow = page.locator("#followUpdates")
+        expect(follow).to_have_class(re.compile(r"\blive-lost\b"))
+        assert "reload" in (follow.get_attribute("title") or "")
+        # Said aloud as well: focus may be in the transcript, not on the button.
+        expect(page.locator("[role=status].live-status")).to_contain_text("reload")
+        marker = "document.body.innerText.includes('OTHER-THEME-MARKER')"
+        assert not page.evaluate(marker), "patched in another theme"
+        assert page.evaluate(staged) == (was == "minimal")
+        assert not page.evaluate("window.claudeLogLiveUpdate.active")
+
+        process_projects_hierarchy(projects, silent=True, theme=was)
+        _wait_for(page, f"() => {marker}")
+        expect(follow).not_to_have_class(re.compile(r"\blive-lost\b"))
+        assert "reload" not in (follow.get_attribute("title") or "")
+        assert page.evaluate("window.claudeLogLiveUpdate.active")
+        assert errors == []
+    finally:
+        server.stop()
 
 
 @pytest.mark.browser

@@ -1947,8 +1947,12 @@ stops following: the file was rewritten under another install key. A
 guessed-exactly mtime earns `same`, which carries only that mtime.
 A `page` answer also names its theme (whether `#transcript` sits in the
 minimal theme's `.mn-stage`): an update replaces only `#transcript` and
-`#title`, not the styles or the shell, so a render in the other theme stops following as `refused` does,
-and the button asks for a reload (review on #427). A frame that loads
+`#title`, not the styles or the shell, so a render in the other theme
+stops following as `refused` does, and the button asks for a reload
+(review on #427). A served page checks the fetched render the same way
+in `applyUpdate`: in the other theme it applies nothing, `active` is
+false and the button shows `.live-lost`, but the polls go on, so it
+picks up again if the archive goes back to its theme. A frame that loads
 and posts nothing (a page written without the probe, because `watch`
 couldn't read the key; a file missing mid-rewrite) counts as unanswered
 a second after its `load`, or at the 30 s give-up. An answering page
