@@ -50,6 +50,12 @@
     // The framed copy answers only a parent that names its token
     // (live_probe_post.js), which this page holds as the file it came from.
     const diskToken = fromDisk ? window.__cclProbeToken : '';
+    // Which theme a transcript was rendered in, told as live_probe_post.js
+    // tells it: the minimal theme stages the transcript. An update carries
+    // the transcript and the title, not the styles, the body's class or the
+    // shell, so a render in the other theme can't be applied to this page.
+    const themeOf = transcript => (transcript.closest('.mn-stage') ? 'minimal' : 'classic');
+    const pageTheme = themeOf(container());
 
     // The page's identity as of the last poll. `Last-Modified` alone is
     // not enough: HTTP dates have **one-second granularity**, so two
@@ -71,6 +77,9 @@
     let lastStamp = null;
     let stopped = false;
     let following = false;
+    // The page as served now is in the other theme. The polls go on, since
+    // the archive may go back to this one.
+    let otherTheme = false;
     // The disk transport's state, beside the http one's: see `diskProbe`.
     let diskRefused = false;
     // Probes in a row that got no answer, and whether that has gone on long
@@ -455,11 +464,14 @@
                     ? 'Following this file as it is rewritten — click to stop'
                     : 'Follow this file while `claude-code-log watch` rewrites it';
         } else {
-            followBtn.title = following
-                ? 'Following new messages — click to stop'
-                : unseen
-                  ? `${unseen} new message${unseen === 1 ? '' : 's'} — click to follow`
-                  : 'Follow new messages as they arrive';
+            followBtn.classList.toggle('live-lost', otherTheme);
+            followBtn.title = otherTheme
+                ? 'This page is now in the other theme — reload it to see new messages'
+                : following
+                  ? 'Following new messages — click to stop'
+                  : unseen
+                    ? `${unseen} new message${unseen === 1 ? '' : 's'} — click to follow`
+                    : 'Follow new messages as they arrive';
         }
         document.body.classList.toggle('live-following', following);
     }
@@ -483,11 +495,11 @@
         if (following) scrollToEnd();
     }
 
-    // What the follow says aloud when it changes by itself — lost, back, or
-    // beyond following — since focus is usually in the transcript, not on
-    // the button whose tooltip says it.
+    // What is said aloud when the page stops or resumes being kept current
+    // by itself (lost, back, the other theme), since focus is usually in
+    // the transcript, not on the button whose tooltip says it.
     let liveStatus = null;
-    if (fromDisk && followBtn) {
+    if (followBtn) {
         liveStatus = document.createElement('div');
         liveStatus.className = 'live-status';
         liveStatus.setAttribute('role', 'status');
@@ -522,6 +534,19 @@
         });
     }
 
+    function otherThemeChanged(other) {
+        if (otherTheme === other) return;
+        otherTheme = other;
+        renderFollowBtn();
+        say(
+            other
+                ? 'Updates stopped: this page is now in the other theme — reload it to see new messages.'
+                : 'Updates are back.'
+        );
+        // `active` changed with it.
+        document.dispatchEvent(new Event('claudelog:live'));
+    }
+
     function swapIn(next, current) {
         const before = captureState(current);
         current.replaceWith(next);
@@ -537,6 +562,12 @@
         const next = doc.getElementById('transcript');
         const current = container();
         if (!next || !current) return;
+        // Over http this is the whole page. From disk it is the transcript
+        // alone, out of its stage, and `diskAnswer` has checked its theme.
+        if (overHttp) {
+            otherThemeChanged(themeOf(next) !== pageTheme);
+            if (otherTheme) return;
+        }
 
         // Hashes come from the parsed bytes, before anything is put on the
         // page, and are kept whichever route the update took — the swap is a
@@ -705,9 +736,6 @@
             title ? title.textContent : ''
         ].join('\n');
     }
-
-    // As live_probe_post.js tells it: the minimal theme stages the transcript.
-    const pageTheme = container().closest('.mn-stage') ? 'minimal' : 'classic';
 
     async function diskAnswer(answer, sentAt) {
         if (answer.cclProbe === 'same') {
@@ -889,10 +917,11 @@
 
     window.claudeLogLiveUpdate = {
         // Whether this page is being kept current right now: a served page
-        // always is; one from disk only while it is followed. The minimal
-        // theme draws an unreturned sub-agent as running only then.
+        // is, unless it is now in the other theme; one from disk only while
+        // it is followed and answers. The minimal theme draws an unreturned
+        // sub-agent as running only then.
         get active() {
-            return !stopped && (overHttp || (following && !diskLost));
+            return !stopped && (overHttp ? !otherTheme : following && !diskLost);
         },
         poll: overHttp ? poll : diskProbe,
         stop() {

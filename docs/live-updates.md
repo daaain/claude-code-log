@@ -161,7 +161,9 @@ tick — including a combined page that `--combined no` would otherwise
 leave alone, so its session pages never link back into a page of the
 other theme. Upgrading claude-code-log does the same: the first tick
 rewrites a combined page an older version wrote. Later ticks are cheap
-again.
+again. A served page that was already open when `serve` restarted in the
+other theme isn't updated with the new theme's messages: its ⏬ button
+gets a dashed outline and its tooltip asks you to reload the page.
 
 ## Cost
 

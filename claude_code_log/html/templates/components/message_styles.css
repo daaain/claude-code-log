@@ -1980,14 +1980,14 @@ img.artifact-favicon {
     color: #333;
 }
 
-/* Following from disk, and the file has stopped answering
-   (live_update.js): still trying, but not current. */
+/* Not being kept current (live_update.js): a followed file has stopped
+   answering, or a served page is now in the other theme. */
 .follow-updates.floating-btn.live-lost {
     outline: 2px dashed currentColor;
     outline-offset: -4px;
 }
 
-/* What following from disk announces (live_update.js): read out, not shown. */
+/* What live updates announce (live_update.js): read out, not shown. */
 .live-status {
     position: absolute;
     width: 1px;
