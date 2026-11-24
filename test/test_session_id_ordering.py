@@ -25,10 +25,12 @@ from claude_code_log.converter import (
     load_directory_transcripts,
 )
 from claude_code_log.models import QueueOperationTranscriptEntry, TranscriptEntry
+from claude_code_log.renderer import _collect_session_info
 
 _ENTRY = TypeAdapter(TranscriptEntry)
 
 _SID = "sess-order-1"
+_TS = "2026-07-11T07:00:"
 
 
 def _user(uuid, parent, text, ts):
@@ -197,6 +199,64 @@ def test_last_timestamp_reflects_chronologically_last_entry(tmp_path):
         "session end-time should reflect the chronologically last entry "
         "(a2 @ 07:00:04), not the out-of-order 'remove' (07:00:02)"
     )
+
+
+def _parallel_skill_project(tmp_path: Path) -> Path:
+    """A `Skill` and a `Bash` call in one turn, then the session goes on.
+
+    The skill's result (with the body hung under it) is a sibling of the
+    `Bash` call, which the rest of the session descends from. The walk keeps
+    both on one line as segments ordered by their *first* timestamps, so the
+    skill's segment, begun just after the `Bash` call, follows everything.
+    """
+
+    def call(uuid: str, parent: str, tool: str, use_id: str, ts: str):
+        entry = _assistant(uuid, parent, "", ts)
+        entry["message"]["content"] = [
+            {"type": "tool_use", "id": use_id, "name": tool, "input": {}}
+        ]
+        return entry
+
+    def result(uuid: str, parent: str, use_id: str, ts: str):
+        entry = _user(uuid, parent, "", ts)
+        entry["message"]["content"] = [
+            {"type": "tool_result", "tool_use_id": use_id, "content": "ok"}
+        ]
+        return entry
+
+    body = _user("body", "r1", "Base directory for this skill", _TS + "01.372Z")
+    body["isMeta"] = True
+    entries = [
+        _user("u1", None, "start", _TS + "00.000Z"),
+        call("skill", "u1", "Skill", "toolu_skill", _TS + "01.327Z"),
+        call("bash", "skill", "Bash", "toolu_bash", _TS + "01.370Z"),
+        result("r1", "skill", "toolu_skill", _TS + "01.375Z"),
+        body,
+        result("r2", "bash", "toolu_bash", _TS + "01.836Z"),
+    ]
+    # Long enough that the walk doesn't take the rest for a dead end.
+    parent = "r2"
+    for n in range(30):
+        entries.append(_assistant(f"a{n}", parent, f"step {n}", f"{_TS}{n + 10}.000Z"))
+        parent = f"a{n}"
+    return _write_project(tmp_path, entries)
+
+
+def test_last_timestamp_is_the_latest_when_the_last_entry_is_older(tmp_path):
+    """A parallel `Skill` call leaves its body last in load order, tens of
+    minutes out of time order in a real session; the session's last update
+    is still its latest entry, in the cache and in the page's session nav."""
+    messages, _tree = load_directory_transcripts(
+        _parallel_skill_project(tmp_path), None, silent=True
+    )
+
+    assert messages[-1].uuid == "body", "the shape no longer loads out of order"
+
+    # The load order is the DAG's to choose, so no order may matter.
+    for ordered in (messages, list(reversed(messages))):
+        assert compute_session_data(ordered)[_SID].last_timestamp == _TS + "39.000Z"
+        sessions, _, _ = _collect_session_info(ordered, {})
+        assert sessions[_SID]["last_timestamp"] == _TS + "39.000Z"
 
 
 def test_timestamp_tie_places_queue_ops_after_same_timestamp_entry(tmp_path):
