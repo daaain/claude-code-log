@@ -6,11 +6,13 @@ on:
   pull_request:
     branches: [main]
 
-# Three jobs. `test` runs the Python suites over the OS × Python matrix.
+# Four jobs. `test` runs the Python suites over the OS × Python matrix.
 # `browser` runs the Playwright suite in parallel with it, on one Python
 # per OS: those tests exercise the pages' JavaScript in Chromium, and the
 # Python version underneath rarely changes what they see, while the OS
-# (paths, temp dirs, timing) does. `coverage` combines the two data files
+# (paths, temp dirs, timing) does. `engines` runs the few of those tests
+# that lean on behaviour differing by engine, in Firefox and WebKit.
+# `coverage` combines the two data files
 # and reports once both are in. The critical path is the slower of the
 # first two jobs plus the short third, instead of unit + TUI + browser in
 # sequence on the slowest matrix cell (issue #359).
@@ -182,6 +184,35 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
+
+  engines:
+    # The browser tests marked `engines`, in the engines `browser` doesn't
+    # install: following a page from disk, decrypting recent-data.js, and
+    # how quickly WebKit takes a large live update. They measure no
+    # coverage; the Chromium runs of the same code do.
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: "3.12"
+      # A missing engine fails its tests here, instead of skipping them.
+      REQUIRE_BROWSER_ENGINES: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        # --with-deps: WebKit needs system libraries the runner lacks.
+        run: uv sync --all-extras --dev && uv run playwright install --with-deps firefox webkit
+
+      - name: Run the cross-engine tests
+        # One at a time: one of them times WebKit.
+        run: uv run pytest -m engines -n0
 
   coverage:
     # Combines the primary `test` cell's data with the primary `browser`

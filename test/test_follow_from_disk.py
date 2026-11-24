@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from claude_code_log.converter import process_projects_hierarchy
+from test.conftest import launch_engine
 from test.test_live_update import SESSION_ID, _entry, _reply
 
 # Counts the frames the page creates. Init scripts run in every frame, so
@@ -613,17 +614,14 @@ document.body.appendChild(f);
 
 
 @pytest.mark.browser
+@pytest.mark.engines
 @pytest.mark.parametrize("engine", ["firefox", "webkit"])
 def test_following_from_disk_in_other_engines(playwright, tmp_path, engine) -> None:
     """The browser suite runs Chromium; the disk transport leans on behaviour
     that differs by engine (Firefox fires DOMContentLoaded after
     ``window.stop()``; WebKit reports the current time as a file's
     lastModified), so it is checked in each where they are installed."""
-    try:
-        browser = getattr(playwright, engine).launch()
-    except Exception as exc:  # not installed: CI installs Chromium only
-        pytest.skip(f"{engine} not available: {exc}")
-    try:
+    with launch_engine(playwright, engine) as browser:
         page = browser.new_page()
         projects, jsonl, html = _archive(tmp_path)
         errors = _open(page, html)
@@ -631,8 +629,6 @@ def test_following_from_disk_in_other_engines(playwright, tmp_path, engine) -> N
         _append(projects, jsonl, "ENGINE-MARKER")
         page.wait_for_function(_has_text("ENGINE-MARKER"), timeout=15000)
         assert errors == []
-    finally:
-        browser.close()
 
 
 @pytest.mark.browser

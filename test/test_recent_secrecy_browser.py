@@ -8,7 +8,7 @@ encrypted: a page in ``~/Downloads`` got every recent session, in Chromium
 and WebKit, knowing nothing but the archive's usual place. Now it gets
 ciphertext, and only ``recent.html``, which holds the key, can read it.
 
-Run in each engine where it is installed (CI installs Chromium only):
+Run in each engine where it is installed (CI's `engines` job has them):
 decryption is WebCrypto's HKDF, whose limits differ by engine (Firefox
 refuses PBKDF2 outputs past 256 bytes, the first design's keystream).
 """
@@ -22,6 +22,7 @@ import pytest
 
 from claude_code_log.html.renderer import generate_recent_html
 from claude_code_log.recent import recent_data_js
+from test.conftest import launch_engine
 
 pytestmark = pytest.mark.browser
 
@@ -93,17 +94,12 @@ def test_a_large_payload_decrypts(page: Any, tmp_path: Path) -> None:
     _check(page, recent, evil)
 
 
+@pytest.mark.engines
 @pytest.mark.parametrize("engine", ["firefox", "webkit"])
 def test_in_other_engines(playwright: Any, tmp_path: Path, engine: str) -> None:
-    try:
-        browser = getattr(playwright, engine).launch()
-    except Exception as exc:  # not installed: CI installs Chromium only
-        pytest.skip(f"{engine} not available: {exc}")
-    try:
+    with launch_engine(playwright, engine) as browser:
         recent, evil = _home(tmp_path, sessions=60)
         _check(browser.new_page(), recent, evil)
-    finally:
-        browser.close()
 
 
 def test_data_it_cannot_read_is_said_on_the_page(
