@@ -2551,7 +2551,8 @@ def compute_session_data(
         cache = result[session_id]
         cache.message_count += 1
         current_timestamp = getattr(message, "timestamp", "")
-        if current_timestamp:
+        # The latest, not the last: the order is the DAG's, not the clock's.
+        if current_timestamp > cache.last_timestamp:
             cache.last_timestamp = current_timestamp
 
         # Teammates: first non-None teamName per session wins.

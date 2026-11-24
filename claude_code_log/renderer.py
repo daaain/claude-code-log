@@ -4338,9 +4338,10 @@ def _collect_session_info(
 
         sessions[session_id]["message_count"] += 1
 
-        # Update last timestamp for this session
+        # The session's latest timestamp, not its last entry's: the order is
+        # the DAG's, not the clock's.
         current_timestamp = getattr(message, "timestamp", "")
-        if current_timestamp:
+        if current_timestamp > sessions[session_id]["last_timestamp"]:
             sessions[session_id]["last_timestamp"] = current_timestamp
 
         # Extract and accumulate token usage for assistant messages
