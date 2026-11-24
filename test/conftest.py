@@ -1,7 +1,10 @@
 """Pytest configuration and shared fixtures."""
 
+import os
+import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator, Iterator, Optional
 
 import pytest
 
@@ -154,9 +157,10 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     # import, rename it to *_browser.py / test_tui_* so this hook catches it.
     name = collection_path.name
     if name.endswith("_browser.py"):
-        marker = "browser"
+        # What a test in such a module may carry: some run in other engines.
+        marker_sets = ({"browser"}, {"browser", "engines"})
     elif name == "test_tui.py" or name.startswith("test_tui_"):
-        marker = "tui"
+        marker_sets = ({"tui"},)
     else:
         return None
 
@@ -167,13 +171,16 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     except Exception:
         return None  # malformed expression: let pytest handle/report it
 
-    def has_marker(tag: str, /, **_kwargs: "str | int | bool | None") -> bool:
-        # Signature matches pytest's ExpressionMatcher protocol.
-        return tag == marker
+    def selects(markers: set[str]) -> bool:
+        def has_marker(tag: str, /, **_kwargs: "str | int | bool | None") -> bool:
+            # Signature matches pytest's ExpressionMatcher protocol.
+            return tag in markers
 
-    # If a test bearing only this marker could never be selected, the whole
-    # module is dead weight for this run -> skip importing it.
-    if not expr.evaluate(has_marker):
+        return expr.evaluate(has_marker)
+
+    # If no test bearing these markers could be selected, the whole module
+    # is dead weight for this run -> skip importing it.
+    if not any(selects(markers) for markers in marker_sets):
         return True
     return None
 
@@ -330,6 +337,7 @@ def _browser_user_data_dir(worker_id):
     (It was introduced to keep vis-timeline cached from its CDN; the library
     is a local sidecar now, issue #278.)
     Each xdist worker gets its own subdirectory to avoid Chromium lock conflicts.
+    What pages stored in an earlier run is cleared (`clear_stored_page_data`).
     """
     # Use a fixed cache directory that persists across runs
     cache_base = Path(__file__).parent.parent / ".playwright_cache"
@@ -337,7 +345,50 @@ def _browser_user_data_dir(worker_id):
     # worker_id is "master" for non-xdist runs, or "gw0", "gw1", etc. for xdist
     worker_dir = cache_base / worker_id
     worker_dir.mkdir(parents=True, exist_ok=True)
+    clear_stored_page_data(worker_dir)
     return worker_dir
+
+
+#: What a Chromium profile keeps of the pages it opened, as against its
+#: HTTP cache.
+_STORED_PAGE_DATA = ("Local Storage", "Session Storage", "IndexedDB")
+
+
+def clear_stored_page_data(user_data_dir: Path) -> None:
+    """Delete the page storage an earlier run left in a browser profile.
+
+    The profile outlives the run, and every ``file://`` page shares one
+    ``localStorage``, so a choice stored by a test that was interrupted (a
+    theme, a branch mode, a fold depth) is read by the next run's tests on
+    the same worker. Seven minimal-theme tests failed that way, on one
+    worker of sixteen, until the profile was deleted.
+    """
+    for name in _STORED_PAGE_DATA:
+        shutil.rmtree(user_data_dir / "Default" / name, ignore_errors=True)
+
+
+#: Set where the engines must be there (CI's `engines` job), so that one
+#: that isn't fails the test instead of skipping it.
+REQUIRE_ENGINES_ENV = "REQUIRE_BROWSER_ENGINES"
+
+
+@contextmanager
+def launch_engine(playwright: Any, engine: str) -> Iterator[Any]:
+    """A browser of the ``engine`` named, for a test marked ``engines``.
+
+    Skips the test where the engine isn't installed, unless
+    ``REQUIRE_BROWSER_ENGINES`` is set.
+    """
+    try:
+        browser = getattr(playwright, engine).launch()
+    except Exception as exc:
+        if os.environ.get(REQUIRE_ENGINES_ENV):
+            raise
+        pytest.skip(f"{engine} not available: {exc}")
+    try:
+        yield browser
+    finally:
+        browser.close()
 
 
 @pytest.fixture(scope="session")

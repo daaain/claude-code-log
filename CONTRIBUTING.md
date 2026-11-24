@@ -203,6 +203,18 @@ Browser tests require Chromium:
 uv run playwright install chromium
 ```
 
+A few of them (marked `engines`) also run in Firefox and WebKit, and skip
+where those aren't installed:
+
+```bash
+uv run playwright install firefox webkit
+uv run pytest -m engines -n0
+```
+
+A browser test launches either through `launch_engine`
+(`test/conftest.py`). `REQUIRE_BROWSER_ENGINES=1` makes a missing engine
+fail its tests instead of skipping them, as in CI.
+
 ### Why Test Categories?
 
 The test suite is categorized because different async frameworks conflict:
@@ -227,14 +239,15 @@ HTML coverage reports are generated in `htmlcov/index.html`.
 
 ### What CI runs
 
-`.github/workflows/ci.yml` has three jobs. `test` runs the unit and TUI
+`.github/workflows/ci.yml` has four jobs. `test` runs the unit and TUI
 suites plus ruff and pyright over the OS × Python matrix; its primary cell
 (ubuntu, Python 3.12) also runs the benchmark suite, the JavaScript lint
 and the JS, CSS, JSON and YAML formatting check, and measures coverage.
 `browser` runs the Playwright suite at the same time, on one Python per
 OS: those tests exercise the pages' JavaScript in Chromium, so the OS axis
-stays and the Python axis does not. `coverage` waits for both, combines
-the primary cells' `.coverage` data files, and publishes the reports and
+stays and the Python axis does not. `engines` runs the tests marked
+`engines` in Firefox and WebKit, on ubuntu. `coverage` waits for `test`
+and `browser`, combines the primary cells' `.coverage` data files, and publishes the reports and
 the PR comment. The browser suite is the longest step, so running it
 beside the matrix instead of after it on every cell is what keeps a CI
 run short (issue #359).

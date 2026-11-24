@@ -79,6 +79,7 @@ timeout_method = "thread"
 markers = [
     "tui: TUI tests using Textual framework (requires isolated event loop)",
     "browser: Browser integration tests using Playwright (requires Chromium)",
+    "engines: Browser tests that also run in Firefox and WebKit, where installed",
     "snapshot: Snapshot tests that must run serially (syrupy file ordering)",
     "integration: Integration tests with realistic JSONL data",
     "slow: Slower tests that measure performance (may take several seconds)",

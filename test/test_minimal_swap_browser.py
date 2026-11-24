@@ -16,8 +16,8 @@ and the cost grows with the square of the count: measured in Safari 27 on a
 ``dag-on`` on the stage), the same writes cost one full restyle.
 
 Chromium shows no slowdown, so the order of the writes is what is checked
-there; the time is checked in WebKit, where it is installed (CI installs
-Chromium only), on the sample project: its 1,436 cards took 49 s to swap in
+there; the time is checked in WebKit, where it is installed (CI's `engines`
+job has it), on the sample project: its 1,436 cards took 49 s to swap in
 Playwright's WebKit 27.2 before, 1.3 s after. Card count alone doesn't
 bring it on: 1,600 plain question/answer cards swapped in 0.7 s before.
 
@@ -38,6 +38,7 @@ import pytest
 
 from claude_code_log.converter import load_directory_transcripts, load_transcript
 from claude_code_log.html.renderer import HtmlRenderer
+from test.conftest import launch_engine
 from test.test_follow_from_disk import _append, _archive, _has_text
 from test.test_live_update import _entry, _reply
 
@@ -274,12 +275,9 @@ def test_a_new_card_is_marked_by_paint_alone(page: Any, tmp_path: Path) -> None:
     assert all(a["props"] == ["boxShadow"] for a in animated), animated
 
 
+@pytest.mark.engines
 def test_a_large_swap_is_quick_in_webkit(playwright: Any, tmp_path: Path) -> None:
-    try:
-        browser = playwright.webkit.launch()
-    except Exception as exc:  # not installed: CI installs Chromium only
-        pytest.skip(f"webkit not available: {exc}")
-    try:
+    with launch_engine(playwright, "webkit") as browser:
         page = browser.new_page()
         entries, tree = load_directory_transcripts(SAMPLE, silent=True)
         _open(page, _render(entries, tree, tmp_path / "sample.html"))
@@ -291,5 +289,3 @@ def test_a_large_swap_is_quick_in_webkit(playwright: Any, tmp_path: Path) -> Non
         # 1.3 s with the writes made while the grid is off, 49 s without
         # (an M-series Mac): far enough apart for a slow machine.
         assert elapsed < 10, (elapsed, draw)
-    finally:
-        browser.close()
