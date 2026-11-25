@@ -240,7 +240,7 @@
                     <span class='timestamp'{% if message.meta and message.meta.timestamp %} data-timestamp='{{ message.meta.timestamp }}'{% if message.pair_duration %} data-duration='{{ message.pair_duration }}'{% endif %}{% endif %}>{{ formatted_timestamp }}</span>{% if minimal %}<span class='mn-time'>{{ mn_gutter_time(formatted_timestamp) }}</span>{% endif %}
                 </div>
                 {% if message.token_usage %}
-                <span class='token-usage'>{{ message.token_usage }}</span>{% if minimal %}<span class='mn-tok' title='{{ message.token_usage }}'>{{ mn_compact_tokens(message.token_usage) }}</span>{% endif %}
+                <span class='token-usage'>{{ message.token_usage }}</span>{% if minimal %}<span class='mn-tok' title='{{ mn_token_tooltip(message.token_usage) }}'>{{ mn_compact_tokens(message.token_usage) }}</span>{% endif %}
                 {% endif %}
             </div>
         </div>
